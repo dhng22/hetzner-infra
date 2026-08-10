@@ -34,13 +34,20 @@ write_files:
     owner: root:root
     content: |
       # --- identity -----------------------------------------------------------
-      # CLUSTER_NAME is NOT an environment. It is the Hetzner label namespace
-      # the autoscaler uses to decide which servers it may create and delete,
-      # plus the prefix for worker hostnames. If you run anything else in this
-      # Hetzner project, this label is the only thing stopping the autoscaler
-      # from touching it. Name it after your app.
-      CLUSTER_NAME=aichat
-      BASE_DOMAIN=example.com
+      # APP_NAME does three jobs: the Hetzner label namespace the autoscaler is
+      # allowed to touch, the worker hostname prefix, and the third-level
+      # domain. If you run anything else in this Hetzner project, that label is
+      # the only thing stopping the autoscaler from deleting it.
+      APP_NAME=aichat
+      ROOT_DOMAIN=mydomain.com
+
+      # Cloudflare's free Universal SSL certificate covers *.mydomain.com and
+      # nothing deeper, so every hostname stays at the third level and extra
+      # services are separated by a dash rather than another dot:
+      #   aichat.mydomain.com           production
+      #   staging-aichat.mydomain.com   staging
+      #   grafana-aichat.mydomain.com   dashboards
+      #   dokploy-aichat.mydomain.com   Dokploy UI
 
       # --- Hetzner ------------------------------------------------------------
       HCLOUD_TOKEN=REPLACE_ME
@@ -56,8 +63,8 @@ write_files:
 
       # --- Cloudflare: ONE tunnel, two public hostnames -----------------------
       # In Zero Trust, add both hostnames to the same tunnel:
-      #   aichat.example.com          -> http://api-prod:8080
-      #   staging-aichat.example.com  -> http://api-staging:8080
+      #   ${APP_NAME}.${ROOT_DOMAIN}          -> http://api-prod:8080
+      #   staging-${APP_NAME}.${ROOT_DOMAIN}  -> http://api-staging:8080
       CF_TUNNEL_TOKEN=REPLACE_ME
 
       # --- MongoDB Atlas: separate databases per environment -----------------
@@ -79,9 +86,14 @@ write_files:
       # docker service update, and the autoscaler owns the replica count.
       APP_IMAGE_PROD=ghcr.io/you/your-ktor-app:sha-abc1234
       APP_IMAGE_STAGING=ghcr.io/you/your-ktor-app:sha-abc1234
-      # Two is the floor for production: with one replica a crash is an outage
-      # and a rolling update has nowhere to shift traffic.
-      APP_REPLICAS_PROD=2
+      APP_PORT=8080
+      APP_METRICS_PATH=/metrics
+
+      # --- CI access ----------------------------------------------------------
+      # Public half of the key pair whose PRIVATE half you put in the GitHub
+      # secret MASTER_SSH_KEY. Written to the deploy user's authorized_keys by
+      # this script — nothing to do by hand afterwards.
+      CI_SSH_PUBLIC_KEY=ssh-ed25519 AAAA...REPLACE_ME ci@github
 
       # --- Autoscaler ---------------------------------------------------------
       APP_SERVICE=app_api-prod
@@ -93,10 +105,19 @@ write_files:
       SCALE_UP_P95_RATIO=0.8         # act at 80% of SLO, before users feel it
       SCALE_DOWN_P95_RATIO=0.4
 
-      SCALE_UP_CPU=70                # % of ONE replica's CPU limit
+      # Secondary signal: CPU of ONE replica against its own limit. Needed
+      # because p95 is undefined when traffic is near zero — CPU is what tells
+      # the scaler it is safe to come back down.
+      SCALE_UP_CPU=70
       SCALE_DOWN_CPU=30
-      SCALE_UP_MEM=80                # node memory; placement guard only
 
+      # Placement guard, not a trigger: if a worker is this loaded on CPU or
+      # memory, another replica physically will not fit, so ask for a node.
+      NODE_PRESSURE_PCT=80
+
+      # Two is the production floor: with one replica a crash is an outage and
+      # a rolling update has nowhere to shift traffic. This is also the count
+      # used on first deploy — the autoscaler owns it from then on.
       MIN_REPLICAS=2
       MAX_REPLICAS=12
       REPLICAS_PER_WORKER=2          # CPX21 = 3 vCPU; 2 x 1.0 leaves headroom
@@ -174,7 +195,7 @@ write_files:
          /opt/infra/config/worker-cloud-init.yaml
 
       # --- build the autoscaler image ----------------------------------------
-      docker build -t "${CLUSTER_NAME}/autoscaler:latest" /opt/infra/autoscaler
+      docker build -t "${APP_NAME}/autoscaler:latest" /opt/infra/autoscaler
 
       # --- monitoring first: the autoscalers need somewhere to read from -----
       docker stack deploy -c /opt/infra/stacks/monitoring.yml monitoring
@@ -189,20 +210,22 @@ write_files:
       id -u deploy >/dev/null 2>&1 || useradd -m -s /bin/bash deploy
       usermod -aG docker deploy
       mkdir -p /home/deploy/.ssh && chmod 700 /home/deploy/.ssh
-      touch /home/deploy/.ssh/authorized_keys
+      printf '%s\n' "$CI_SSH_PUBLIC_KEY" > /home/deploy/.ssh/authorized_keys
+      chmod 600 /home/deploy/.ssh/authorized_keys
       chown -R deploy:deploy /home/deploy/.ssh
-      echo "NOTE: add your CI public key to /home/deploy/.ssh/authorized_keys"
 
       echo "=== bootstrap finished $(date -Is) ==="
       echo
       echo "Workers do not exist yet — the autoscaler creates the first one on"
       echo "its first loop. Watch:  docker service logs -f monitoring_autoscaler"
       echo
-      echo "Cloudflare public hostnames (ONE tunnel, two CNAMEs):"
-      echo "  aichat.${BASE_DOMAIN}          -> http://api-prod:8080"
-      echo "  staging-aichat.${BASE_DOMAIN}  -> http://api-staging:8080"
-      echo "  grafana.${BASE_DOMAIN}  -> http://${PRIVATE_IP}:3000 or via Dokploy"
-      echo "  dokploy.${BASE_DOMAIN}  -> http://${PRIVATE_IP}:3000"
+      echo "Cloudflare tunnel public hostnames (ONE tunnel, four hostnames):"
+      echo "  ${APP_NAME}.${ROOT_DOMAIN}          -> http://api-prod:${APP_PORT}"
+      echo "  staging-${APP_NAME}.${ROOT_DOMAIN}  -> http://api-staging:${APP_PORT}"
+      echo "  grafana-${APP_NAME}.${ROOT_DOMAIN}  -> http://grafana:3000"
+      echo "  dokploy-${APP_NAME}.${ROOT_DOMAIN}  -> http://${PRIVATE_IP}:3000"
+      echo
+      echo "Put the last two behind Cloudflare Access. They are your cluster."
 
 runcmd:
   - [ bash, -lc, "mkdir -p /opt/infra" ]

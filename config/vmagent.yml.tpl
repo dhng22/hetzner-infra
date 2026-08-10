@@ -1,7 +1,7 @@
 global:
   scrape_interval: 15s
   external_labels:
-    cluster: "${CLUSTER_NAME}"
+    cluster: "${APP_NAME}"
 
 scrape_configs:
 

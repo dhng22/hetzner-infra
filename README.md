@@ -1,138 +1,138 @@
 # Self-managing Swarm on Hetzner
 
-Master node created once by hand. After that: worker nodes appear and disappear
-on their own, monitoring picks them up with no configuration, and you go back to
-writing Ktor code.
+One master node created by hand. After that, workers and replicas scale
+themselves against a latency SLO, CI deploys itself, and monitoring picks up
+anything new without configuration.
+
+## Architecture
 
 ```
-        ┌─────────────────────────────────────────────┐
-        │  MASTER (manual, CPX31)                     │
-        │  Dokploy · Redis ×2 · VictoriaMetrics        │
-        │  Loki · Grafana · vmagent · autoscaler       │
-        │  NO app tasks. NO cloudflared.               │
-        └──────────────────────┬──────────────────────┘
-                               │ creates + scrapes
-   ┌───────────────────────────┴───────────────────────────┐
-   │ WORKERS — one shared pool, 1..MAX, CPX21              │
-   │ prod_api (N replicas) · staging_api (1 capped replica)│
-   │ cloudflared ×2 tunnels · node-exporter · cadvisor     │
-   └───────────────────────────┬───────────────────────────┘
-                               ▲
-              prod tunnel + staging tunnel
-         (Cloudflare LB across every connector)
+                     Cloudflare — ONE tunnel, four hostnames
+                                     │
+   ┌─────────────────────────────────┴──────────────────────────────┐
+   │  WORKER POOL — autoscaled 1..MAX, CPX21                        │
+   │    cloudflared (global: one connector per worker)              │
+   │    api-prod    (N replicas, autoscaled)                        │
+   │    api-staging (1 replica, capped at 0.5 CPU)                  │
+   │    node-exporter + cadvisor (global)                           │
+   └─────────────────────────────────┬──────────────────────────────┘
+            creates, drains          │        metrics, logs
+   ┌─────────────────────────────────┴──────────────────────────────┐
+   │  MASTER — manual, CPX31, OUTSIDE the request path              │
+   │    Dokploy · autoscaler                                        │
+   │    VictoriaMetrics · Loki · Grafana · vmagent                  │
+   │    redis-prod · redis-staging                                  │
+   └────────────────────────────────────────────────────────────────┘
+                                     │
+                          MongoDB Atlas (prod + staging DBs)
 ```
 
-Ingress never touches the master. `cloudflared` runs `mode: global` on the
-workers of its own environment, and Cloudflare load-balances across every
-connector — so connectors scale with your workers and a dead master costs you
-monitoring and scaling, not uptime.
+Networks: `edge` (cloudflared + both api services), `data-prod`,
+`data-staging` (each api to its own Redis), `monitoring`.
 
-## What changed versus your current setup
+## Hostnames
 
-| Before | Now | Why |
+Cloudflare's free Universal SSL covers `*.root` and nothing deeper, so every
+name stays at the third level and extra services take a dash:
+
+| Hostname | Tunnel target |
+|---|---|
+| `<app>.<root>` | `http://api-prod:8080` |
+| `staging-<app>.<root>` | `http://api-staging:8080` |
+| `grafana-<app>.<root>` | `http://grafana:3000` |
+| `dokploy-<app>.<root>` | `http://<master-private-ip>:3000` |
+
+Put the last two behind Cloudflare Access. They control your cluster.
+
+## Scaling policy
+
+Load is absorbed cheapest-first:
+
+1. **Replicas** — seconds. Driven by p95 latency against `SLO_P95_MS`, with
+   CPU-per-replica as the secondary signal.
+2. **Nodes** — ~2 minutes. Only when the replicas we want will not fit.
+
+Coming down, the order reverses: shed replicas first, remove the node later.
+
+| Setting | Default | Why |
 |---|---|---|
-| No monitoring | vmagent + Swarm service discovery | New nodes are scraped automatically; you never edit a scrape config again |
-| Manual worker creation | Autoscaler + Hetzner API | Scales 1→MAX on sustained load, never below the floor |
-| One environment | Two stacks, two tunnels, shared worker pool | Staging is one capped replica Swarm places wherever there is room |
-| Swarm ports reachable publicly | Private network + ufw | Port 2377 exposed to the internet is a full cluster takeover |
-| Single Redis / Mongo | Separate instance and Atlas database per env | Staging cannot corrupt production state |
+| `SLO_P95_MS` | 500 | **The** number. Everything derives from it. Set it from your real latency distribution. |
+| `SCALE_UP_P95_RATIO` | 0.8 | Act at 80% of SLO, before users feel it |
+| `SCALE_UP_CPU` | 70 | % of one replica's own limit — not node CPU |
+| `NODE_PRESSURE_PCT` | 80 | Placement guard: another replica will not fit |
+| `SUSTAIN_UP_SECONDS` | 90 | Up fast |
+| `SUSTAIN_DOWN_SECONDS` | 900 | Down slow. Never symmetric. |
+| `SCALE_UP_FACTOR` | 0.5 | +50% of current, min +1. One at a time cannot track a spike. |
+| `COOLDOWN_UP_SECONDS` | 300 | Must exceed boot + pull + JVM warmup, or you overshoot |
+| `MAX_WORKERS` | 6 | A **budget** cap, not a capacity plan |
 
-Your existing `cloudflared` arrangement — `mode: global` on workers, Cloudflare
-pointing at the Swarm service DNS name — is kept as-is. It is the correct
-design and the reason the master can stay out of the data path.
+Why CPU is still there when the policy is latency-led: `histogram_quantile`
+over an empty bucket returns nothing. At low traffic the latency signal
+disappears entirely, and CPU-per-replica is what tells the scaler it is safe
+to come back down.
 
-## One-time manual setup
+## Deploys
 
-1. **Hetzner private network** — create `prod-net` with range `10.0.0.0/16`. Everything below depends on this existing first.
-2. **Hetzner API token** — Console → Security → API tokens → **Read & Write**.
-3. **Two Cloudflare Tunnels** — one for prod, one for staging. Copy both connector tokens. Don't add public hostnames yet.
-3b. **GHCR token** — a GitHub PAT with `read:packages`, so the swarm can pull your images.
-4. **Put this bundle where the master can fetch it.** Either push `stacks/`, `config/`, `autoscaler/` to a git repo and uncomment the `git clone` line in `master-cloud-init.yaml`, or paste them in and run `/opt/infra/bootstrap.sh` manually.
-5. **Edit the VARIABLES block** at the top of `master-cloud-init.yaml`. Every `REPLACE_ME` must go.
-6. **Create the master**: CPX31, Ubuntu 24.04, attached to `prod-net`, cloud-config = the edited file.
-7. **Watch it**: `ssh root@<ip> tail -f /var/log/infra-bootstrap.log`
-8. **Add tunnel hostnames** once the first worker of each env has joined:
-   - prod tunnel: `app.<domain>` → `http://api:8080`
-   - staging tunnel: `staging.<domain>` → `http://api:8080`
-   - `dokploy.<domain>` and `grafana.<domain>` → `http://<master-private-ip>:3000` / `:3000`
+Push to `main` → GitHub Actions builds `sha-<short>`, pushes to GHCR, rolls
+**staging**. A `v*` tag or a manual dispatch promotes that same immutable
+image to **production**. Nothing is rebuilt in between.
 
-   Both stacks use the service name `api`, but each lives on its own overlay
-   network with its own tunnel, so there is no collision.
-9. **Set `DRY_RUN=false`** only after watching the autoscalers log a few loops with it `true`. It ships as `true`.
-
-## Wiring your Ktor app for metrics
-
-The alerts and the latency-based scaling both read Micrometer's
-`http_server_requests_seconds` histogram. Add:
-
-```kotlin
-// build.gradle.kts
-implementation("io.ktor:ktor-server-metrics-micrometer:$ktorVersion")
-implementation("io.micrometer:micrometer-registry-prometheus:1.13.6")
-```
-
-```kotlin
-val registry = PrometheusMeterRegistry(PrometheusConfig.DEFAULT)
-
-install(MicrometerMetrics) {
-    this.registry = registry
-    distributionStatisticConfig = DistributionStatisticConfig.Builder()
-        .percentilesHistogram(true)   // required — vmalert uses histogram_quantile
-        .build()
-    meterBinders = listOf(
-        JvmMemoryMetrics(), JvmGcMetrics(), ProcessorMetrics(),
-    )
-}
-
-routing {
-    get("/metrics") { call.respond(registry.scrape()) }
-    get("/health")  { call.respondText("ok") }
-}
-```
-
-`/health` is what the Swarm healthcheck hits — without it, rolling updates
-can't tell a booting JVM from a broken one and `start-first` gives you no
-protection.
-
-Log as JSON to stdout; the Loki Docker driver ships it with no agent.
-
-## Operating it
+Zero downtime comes from `order: start-first`, a health check with
+`start_period: 60s`, and `monitor: 90s` — the last one matters because Swarm's
+default is 5 seconds, shorter than JVM startup, so it would call a task
+successful before your app finished booting. `failure_action: rollback`
+reverts automatically and `docker service update` exits non-zero, so a bad
+deploy turns CI red.
 
 ```bash
-# is the production autoscaler thinking straight?
-docker service logs -f monitoring_autoscaler
-
-# deploy a new production image (immutable tag, registry auth)
+# manual deploy
 docker service update --with-registry-auth \
-  --image ghcr.io/you/your-ktor-app:sha-def5678 prod_api
+  --image ghcr.io/you/app:sha-abc1234 app_api-prod
 
 # roll back
-docker service rollback prod_api
-
-# raise the floor without redeploying
-docker service update --env-add MIN_WORKERS=3 monitoring_autoscaler
-
-# emergency stop on all scaling
-docker service update --env-add DRY_RUN=true monitoring_autoscaler
+docker service rollback app_api-prod
 ```
+
+## One-time setup
+
+1. Hetzner private network `10.0.0.0/16`, and a Read & Write API token.
+2. **One** Cloudflare Tunnel. Copy the connector token. Add hostnames later.
+3. GitHub PAT with `read:packages`.
+4. An SSH keypair for CI: private half into the GitHub secret
+   `MASTER_SSH_KEY`, public half into `CI_SSH_PUBLIC_KEY` in the cloud-init.
+   The bootstrap script installs it — nothing to do by hand.
+5. Two Atlas databases.
+6. Push `stacks/`, `config/`, `autoscaler/` to a private repo; uncomment the
+   clone line in the cloud-init.
+7. Fill every `REPLACE_ME`. **Set `SLO_P95_MS` from your real p95.**
+8. Create a CPX31, Ubuntu 24.04, on the private network, cloud-config pasted.
+
+```bash
+ssh root@<ip> tail -f /var/log/infra-bootstrap.log
+docker service ls
+docker service logs -f monitoring_autoscaler
+```
+
+No workers exist until the autoscaler's first loop — that moment is your proof
+the Hetzner token and the worker cloud-init both work. Add the tunnel
+hostnames once one has joined.
 
 ## Things that will bite you
 
-- **The master is a single point of failure.** Dokploy, Redis, the metric store and the autoscaler all live there. The autoscaler is stateless on purpose, so rebuilding the master from this same cloud-init restores the cluster — but Redis AOF and VictoriaMetrics data are gone unless you enable Hetzner backups on the master. Turn them on. It's 20% of the server cost.
-- **Redis has no HA.** Single instance, AOF `everysec`, so a hard crash loses up to a second of writes. Fine for cache and sessions; not fine as a source of truth. If it becomes one, move to Atlas or a managed Redis.
-- **Staging shares the scaling average.** Its container is capped at 0.5 CPU, so one idle replica is noise. A real load test in staging is not — set `DRY_RUN=true` on the autoscaler before you run one, or accept that production may briefly add a worker and bill you for the hour.
-- **Staging has no dedicated node.** If the worker holding it gets drained during a scale-down, the replica reschedules onto another worker — a few seconds of staging downtime. That is the trade for not paying for a dedicated box.
-- **The autoscaler's queries depend on the `node_role="worker"` relabel in `vmagent.yml.tpl`.** Drop that rule and it goes blind, returns nothing, and sits at the floor forever. `AutoscalerStalled` will not catch this; it only checks the loop is running. Watch `autoscaler_cluster_cpu_percent` instead.
-- **Never deploy `:latest`.** Swarm compares the image reference string; an unchanged tag means your deploy quietly does nothing. Tag with the commit SHA.
-- **Always pass `--with-registry-auth`.** Without it, a worker created after the deploy has no GHCR credential and its tasks fail to pull.
-- **Image size is scale-up latency.** Every new worker cold-pulls. Use a layered Gradle build so only a thin app layer changes between deploys.
-- **Scale-down drains for at most 180s**, then removes the node regardless. If you have long-running requests, raise that deadline in `autoscaler.py` or you'll cut connections.
-- **Cost ceiling is real.** `MAX_WORKERS=6` of CPX21 is roughly €50/month if pinned there all month. The `AutoscalerAtMax` alert fires after 15 minutes at the ceiling — treat it as a bug report about your app, not a signal to raise the ceiling.
-- **Hourly billing rounds up.** Rapid up/down cycling costs real money, which is why `COOLDOWN_DOWN_SECONDS` defaults to 15 minutes. Don't lower it much.
-
-## Adding a second app later
-
-That's the point of the setup. Add a service to `stacks/app.yml` (or deploy it
-through Dokploy), give it the three `prometheus.*` deploy labels, add a tunnel
-hostname. Monitoring, scaling and log shipping all apply to it with no further
-work.
+- **`SLO_P95_MS` is the whole policy.** If your real p95 already exceeds it,
+  the scaler runs to the ceiling on day one and `ReplicaCeiling` fires. Set it
+  before first boot.
+- **`APP_CPU_LIMIT` must match `stacks/app.yml`.** It is the denominator for
+  CPU-per-replica. Change the limit in one place only and the signal silently
+  misreports.
+- **`REPLICAS_PER_WORKER=2` assumes CPX21 and a 1.0 CPU limit.** Change the
+  worker type without changing this and you will either waste nodes or queue
+  unplaceable tasks.
+- **Staging shares the pool.** Capped at 0.5 CPU, so idle staging is noise. A
+  real load test is not — it will move production. Cap it or expect a worker.
+- **The master is a single point of failure for control, not traffic.** Enable
+  Hetzner backups; Redis AOF and metrics history live only there.
+- **Redis has no HA.** `everysec` AOF loses up to a second on a hard crash.
+  Fine for cache and sessions, not as a source of truth.
+- **Scale-down drains for at most 180s** before removing the node anyway. Long
+  requests need that raised in `autoscaler.py`.

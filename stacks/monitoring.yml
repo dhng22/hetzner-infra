@@ -14,7 +14,7 @@ x-manager-only: &manager-only
 
 x-autoscaler-env: &autoscaler-env
   VM_URL: "http://victoriametrics:8428"
-  CLUSTER_NAME: "${CLUSTER_NAME}"
+  APP_NAME: "${APP_NAME}"
   HCLOUD_LOCATION: "${HCLOUD_LOCATION}"
   HCLOUD_NETWORK_NAME: "${HCLOUD_NETWORK_NAME}"
   HCLOUD_SSH_KEY_NAME: "${HCLOUD_SSH_KEY_NAME}"
@@ -26,7 +26,7 @@ x-autoscaler-env: &autoscaler-env
   SCALE_DOWN_P95_RATIO: "${SCALE_DOWN_P95_RATIO}"
   SCALE_UP_CPU: "${SCALE_UP_CPU}"
   SCALE_DOWN_CPU: "${SCALE_DOWN_CPU}"
-  SCALE_UP_MEM: "${SCALE_UP_MEM}"
+  NODE_PRESSURE_PCT: "${NODE_PRESSURE_PCT}"
   MIN_REPLICAS: "${MIN_REPLICAS}"
   MAX_REPLICAS: "${MAX_REPLICAS}"
   REPLICAS_PER_WORKER: "${REPLICAS_PER_WORKER}"
@@ -41,7 +41,7 @@ x-autoscaler-env: &autoscaler-env
   WORKER_USERDATA_PATH: "/etc/infra/worker-cloud-init.yaml"
 
 x-autoscaler-base: &autoscaler-base
-  image: ${CLUSTER_NAME}/autoscaler:latest
+  image: ${APP_NAME}/autoscaler:latest
   secrets: [HCLOUD_TOKEN]
   volumes:
     - /var/run/docker.sock:/var/run/docker.sock
@@ -138,7 +138,7 @@ services:
       GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER}"
       GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/GRAFANA_ADMIN_PASSWORD
       GF_USERS_ALLOW_SIGN_UP: "false"
-      GF_SERVER_ROOT_URL: "https://grafana.${BASE_DOMAIN}"
+      GF_SERVER_ROOT_URL: "https://grafana-${APP_NAME}.${ROOT_DOMAIN}"
     secrets: [GRAFANA_ADMIN_PASSWORD]
     volumes:
       - grafanadata:/var/lib/grafana

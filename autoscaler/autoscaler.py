@@ -76,7 +76,7 @@ def _secret(name):
     return _env(name)
 
 
-CLUSTER = _env("CLUSTER_NAME", "prod")
+CLUSTER = _env("APP_NAME", "app")
 APP_ENV = _env("APP_ENV", "prod")  # which app the latency signal reads from
 VM_URL = _env("VM_URL", "http://victoriametrics:8428")
 
@@ -97,7 +97,9 @@ SCALE_UP_P95_RATIO = _env("SCALE_UP_P95_RATIO", "0.8", float)   # act at 80% of 
 SCALE_DOWN_P95_RATIO = _env("SCALE_DOWN_P95_RATIO", "0.4", float)
 SCALE_UP_CPU = _env("SCALE_UP_CPU", "70", float)   # % of a replica's CPU limit
 SCALE_DOWN_CPU = _env("SCALE_DOWN_CPU", "30", float)
-SCALE_UP_MEM = _env("SCALE_UP_MEM", "80", float)   # node memory, placement guard
+# Placement guard, not a trigger. If a worker is this loaded on either CPU or
+# memory, another replica will not fit on it, so a node is required.
+NODE_PRESSURE_PCT = _env("NODE_PRESSURE_PCT", "80", float)
 
 # Up fast, down slow. Never make these symmetric.
 SUSTAIN_UP = _env("SUSTAIN_UP_SECONDS", "90", int)
@@ -457,7 +459,7 @@ def reap_orphans():
 # ---------------------------------------------------------------------------
 
 def read_signals():
-    """Returns (p95_ms, cpu_per_replica_pct, node_mem_pct). Any may be None."""
+    """Returns (p95_ms, cpu_per_replica_pct, node_pressure_pct). Any may be None."""
     p95 = vm_query(P95_EXPR)
     cpu_rep = vm_query(CPU_REPLICA_EXPR)
     node_mem = vm_query(MEM_EXPR)
@@ -472,7 +474,11 @@ def read_signals():
     if node_cpu is not None:
         M_CPU.set(node_cpu)
     M_SLO.set(SLO_P95_MS)
-    return p95, cpu_rep, node_mem
+
+    # Whichever resource runs out first is the one that blocks placement.
+    pressures = [v for v in (node_cpu, node_mem) if v is not None]
+    node_pressure = max(pressures) if pressures else None
+    return p95, cpu_rep, node_pressure
 
 
 def desired_replicas(current, p95, cpu_rep):
@@ -517,16 +523,18 @@ def desired_replicas(current, p95, cpu_rep):
     return current
 
 
-def workers_needed(replicas, node_mem):
+def workers_needed(replicas, node_pressure):
     """
-    How many workers must exist to hold this many replicas. Memory pressure
+    How many workers must exist to hold this many replicas. Resource pressure
     forces an extra node even when the replica arithmetic says otherwise —
-    Swarm will refuse to place a task it cannot fit.
+    Swarm will refuse to place a task that does not fit, and a queued task
+    serves no traffic.
     """
     needed = -(-replicas // REPLICAS_PER_WORKER)  # ceil
-    if node_mem is not None and node_mem > SCALE_UP_MEM:
+    if node_pressure is not None and node_pressure > NODE_PRESSURE_PCT:
         needed += 1
-        log.info("node memory at %.0f%%: requesting an extra worker", node_mem)
+        log.info("worker resource pressure at %.0f%%: requesting an extra worker",
+                 node_pressure)
     return needed
 
 
@@ -552,7 +560,7 @@ def loop():
     M_MAX.set(MAX_WORKERS)
     M_MIN.set(floor)
 
-    p95, cpu_rep, node_mem = read_signals()
+    p95, cpu_rep, node_pressure = read_signals()
 
     if service is None:
         log.warning("service unavailable; holding at %d workers", current_workers)
@@ -567,7 +575,7 @@ def loop():
     M_REPLICAS_WANT.set(want_replicas)
 
     # --- tier 2: how many workers must exist to hold them? ----------------
-    want_workers = workers_needed(want_replicas, node_mem)
+    want_workers = workers_needed(want_replicas, node_pressure)
     want_workers = max(floor, min(MAX_WORKERS, want_workers))
     M_DESIRED.set(want_workers)
 

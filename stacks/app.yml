@@ -13,8 +13,10 @@ version: "3.8"
 #
 # CLOUDFLARE — one tunnel, two public hostnames, both pointing at service DNS
 # names on the edge network:
-#   aichat.example.com          ->  http://api-prod:8080
-#   staging-aichat.example.com  ->  http://api-staging:8080
+#   <app>.<root>          ->  http://api-prod:<APP_PORT>
+#   staging-<app>.<root>  ->  http://api-staging:<APP_PORT>
+# Cloudflare's free Universal SSL covers one subdomain level only, which is why
+# staging and the admin UIs use a dash rather than a fourth level.
 #
 # Service names are distinct on purpose. If both were called `api`, DNS on the
 # shared edge network would be ambiguous and cloudflared would round-robin
@@ -73,7 +75,7 @@ services:
     # a shutdown hook in your app; the default 10s will cut live requests.
     stop_grace_period: 30s
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:${APP_PORT}/health"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -81,11 +83,11 @@ services:
     deploy:
       # The autoscaler owns this number at runtime. The value here is only the
       # count used on first deploy.
-      replicas: ${APP_REPLICAS_PROD}
+      replicas: ${MIN_REPLICAS}
       labels:
         prometheus.scrape: "true"
-        prometheus.port: "8080"
-        prometheus.path: "/metrics"
+        prometheus.port: "${APP_PORT}"
+        prometheus.path: "${APP_METRICS_PATH}"
         app.env: "prod"
       placement:
         <<: *worker-placement
@@ -132,7 +134,7 @@ services:
     logging: *loki-logging
     stop_grace_period: 30s
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:${APP_PORT}/health"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -141,8 +143,8 @@ services:
       replicas: 1
       labels:
         prometheus.scrape: "true"
-        prometheus.port: "8080"
-        prometheus.path: "/metrics"
+        prometheus.port: "${APP_PORT}"
+        prometheus.path: "${APP_METRICS_PATH}"
         app.env: "staging"
       placement: *worker-placement
       update_config: *update-policy
