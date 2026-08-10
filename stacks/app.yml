@@ -1,0 +1,233 @@
+version: "3.8"
+
+# =============================================================================
+# APP STACK — both environments, ONE tunnel
+# =============================================================================
+#   docker stack deploy --with-registry-auth -c stacks/app.yml app
+#
+# NETWORKS
+#   edge          cloudflared + both api services. Shared, so one connector
+#                 can route to either environment by service name.
+#   data-prod     api-prod  <-> redis-prod    (staging cannot reach it)
+#   data-staging  api-staging <-> redis-staging
+#
+# CLOUDFLARE — one tunnel, two public hostnames, both pointing at service DNS
+# names on the edge network:
+#   aichat.example.com          ->  http://api-prod:8080
+#   staging-aichat.example.com  ->  http://api-staging:8080
+#
+# Service names are distinct on purpose. If both were called `api`, DNS on the
+# shared edge network would be ambiguous and cloudflared would round-robin
+# between your environments.
+# =============================================================================
+
+x-worker-placement: &worker-placement
+  constraints:
+    - node.role == worker
+
+x-loki-logging: &loki-logging
+  driver: loki
+  options:
+    loki-url: "http://${MASTER_PRIVATE_IP}:3100/loki/api/v1/push"
+    loki-retries: "3"
+    loki-batch-size: "400"
+    mode: "non-blocking"
+    max-buffer-size: "4m"
+
+# Rolling-update policy shared by both environments.
+#   order: start-first    new task is healthy BEFORE the old one stops
+#   monitor: 90s          how long a task must stay healthy to count as good.
+#                         The default is 5s — shorter than JVM startup, so
+#                         Swarm would declare success before your app booted.
+#   failure_action        automatic rollback, no human in the loop
+x-update-policy: &update-policy
+  parallelism: 1
+  order: start-first
+  delay: 15s
+  monitor: 90s
+  max_failure_ratio: 0
+  failure_action: rollback
+
+x-rollback-policy: &rollback-policy
+  parallelism: 1
+  order: start-first
+  delay: 5s
+
+services:
+
+  # ==========================================================================
+  # PRODUCTION
+  # ==========================================================================
+  api-prod:
+    image: ${APP_IMAGE_PROD}
+    environment:
+      KTOR_ENV: production
+      REDIS_HOST: redis-prod
+      REDIS_PORT: "6379"
+      MONGO_URI_FILE: /run/secrets/MONGO_URI_prod
+      REDIS_PASSWORD_FILE: /run/secrets/REDIS_PASSWORD_prod
+    secrets: [MONGO_URI_prod, REDIS_PASSWORD_prod]
+    networks: [edge, data-prod, monitoring]
+    logging: *loki-logging
+    # Ktor needs time to finish in-flight requests when drained. Pair this with
+    # a shutdown hook in your app; the default 10s will cut live requests.
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s        # JVM cold start + JIT warmup
+    deploy:
+      # The autoscaler owns this number at runtime. The value here is only the
+      # count used on first deploy.
+      replicas: ${APP_REPLICAS_PROD}
+      labels:
+        prometheus.scrape: "true"
+        prometheus.port: "8080"
+        prometheus.path: "/metrics"
+        app.env: "prod"
+      placement:
+        <<: *worker-placement
+        preferences:
+          - spread: node.id   # never stack all replicas on one worker
+      update_config: *update-policy
+      rollback_config: *rollback-policy
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        limits:      { cpus: "1.0", memory: 768M }
+        reservations: { cpus: "0.5", memory: 384M }
+
+  redis-prod:
+    image: redis:7.4-alpine
+    command: >
+      sh -c 'exec redis-server
+      --requirepass "$$(cat /run/secrets/REDIS_PASSWORD_prod)"
+      --appendonly yes --appendfsync everysec
+      --maxmemory 512mb --maxmemory-policy allkeys-lru'
+    secrets: [REDIS_PASSWORD_prod]
+    volumes: [redis-prod-data:/data]
+    networks: [data-prod]
+    logging: *loki-logging
+    deploy:
+      replicas: 1
+      placement: { constraints: [node.role == manager] }
+      labels: { app.env: "prod" }
+
+  # ==========================================================================
+  # STAGING — one capped replica, wherever there is room
+  # ==========================================================================
+  api-staging:
+    image: ${APP_IMAGE_STAGING}
+    environment:
+      KTOR_ENV: staging
+      REDIS_HOST: redis-staging
+      REDIS_PORT: "6379"
+      MONGO_URI_FILE: /run/secrets/MONGO_URI_staging
+      REDIS_PASSWORD_FILE: /run/secrets/REDIS_PASSWORD_staging
+    secrets: [MONGO_URI_staging, REDIS_PASSWORD_staging]
+    networks: [edge, data-staging, monitoring]
+    logging: *loki-logging
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    deploy:
+      replicas: 1
+      labels:
+        prometheus.scrape: "true"
+        prometheus.port: "8080"
+        prometheus.path: "/metrics"
+        app.env: "staging"
+      placement: *worker-placement
+      update_config: *update-policy
+      rollback_config: *rollback-policy
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        # Hard cap. This is what keeps staging from distorting the cluster.
+        limits:      { cpus: "0.5", memory: 512M }
+        reservations: { cpus: "0.1", memory: 128M }
+
+  redis-staging:
+    image: redis:7.4-alpine
+    command: >
+      sh -c 'exec redis-server
+      --requirepass "$$(cat /run/secrets/REDIS_PASSWORD_staging)"
+      --appendonly yes --appendfsync everysec
+      --maxmemory 128mb --maxmemory-policy allkeys-lru'
+    secrets: [REDIS_PASSWORD_staging]
+    volumes: [redis-staging-data:/data]
+    networks: [data-staging]
+    logging: *loki-logging
+    deploy:
+      replicas: 1
+      placement: { constraints: [node.role == manager] }
+      labels: { app.env: "staging" }
+
+  # ==========================================================================
+  # INGRESS — ONE tunnel, one connector per worker
+  # ==========================================================================
+  cloudflared:
+    image: cloudflare/cloudflared:2024.10.1
+    command: tunnel --no-autoupdate --metrics 0.0.0.0:2000 run
+    environment:
+      TUNNEL_TOKEN_FILE: /run/secrets/CF_TUNNEL_TOKEN
+    secrets: [CF_TUNNEL_TOKEN]
+    networks: [edge, monitoring]
+    logging: *loki-logging
+    stop_grace_period: 45s     # cloudflared drains edge connections on SIGTERM
+    deploy:
+      mode: global
+      placement: *worker-placement
+      labels:
+        prometheus.scrape: "true"
+        prometheus.port: "2000"
+        prometheus.path: "/metrics"
+      restart_policy:
+        condition: any
+        delay: 10s
+
+  redis-exporter-prod:
+    image: oliver006/redis_exporter:v1.66.0
+    environment:
+      REDIS_ADDR: "redis://redis-prod:6379"
+      REDIS_PASSWORD_FILE: /run/secrets/REDIS_PASSWORD_prod
+    secrets: [REDIS_PASSWORD_prod]
+    networks: [data-prod, monitoring]
+    deploy:
+      replicas: 1
+      placement: { constraints: [node.role == manager] }
+      labels:
+        prometheus.scrape: "true"
+        prometheus.port: "9121"
+        prometheus.path: "/metrics"
+        app.env: "prod"
+
+networks:
+  edge:
+    driver: overlay
+    attachable: true
+  data-prod:
+    driver: overlay
+  data-staging:
+    driver: overlay
+  monitoring:
+    external: true
+
+volumes:
+  redis-prod-data:
+  redis-staging-data:
+
+secrets:
+  MONGO_URI_prod:         { external: true }
+  MONGO_URI_staging:      { external: true }
+  REDIS_PASSWORD_prod:    { external: true }
+  REDIS_PASSWORD_staging: { external: true }
+  CF_TUNNEL_TOKEN:        { external: true }

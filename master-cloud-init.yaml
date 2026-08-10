@@ -1,0 +1,214 @@
+#cloud-config
+# =============================================================================
+# MASTER NODE CLOUD-INIT  —  paste this into Hetzner "Cloud config" on create
+# =============================================================================
+# EDIT ONLY THE BLOCK MARKED "VARIABLES". Everything below it is generic.
+#
+# Server: CPX31 (4 vCPU / 8 GB). The master runs Dokploy, both Redis
+# instances, VictoriaMetrics, Loki, Grafana and the autoscaler. It runs
+# NO application tasks and NO cloudflared — ingress lives entirely on the
+# workers, so losing this box costs you monitoring and scaling, not uptime.
+#
+# Attach the server to a Hetzner private network BEFORE creating it.
+# =============================================================================
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - curl
+  - jq
+  - git
+  - ufw
+  - unzip
+  - gettext-base
+  - ca-certificates
+  - gnupg
+
+write_files:
+  # ---------------------------------------------------------------------------
+  # VARIABLES  — the only section you need to touch
+  # ---------------------------------------------------------------------------
+  - path: /etc/infra/infra.env
+    permissions: "0600"
+    owner: root:root
+    content: |
+      # --- identity -----------------------------------------------------------
+      # CLUSTER_NAME is NOT an environment. It is the Hetzner label namespace
+      # the autoscaler uses to decide which servers it may create and delete,
+      # plus the prefix for worker hostnames. If you run anything else in this
+      # Hetzner project, this label is the only thing stopping the autoscaler
+      # from touching it. Name it after your app.
+      CLUSTER_NAME=aichat
+      BASE_DOMAIN=example.com
+
+      # --- Hetzner ------------------------------------------------------------
+      HCLOUD_TOKEN=REPLACE_ME
+      HCLOUD_LOCATION=hel1
+      HCLOUD_NETWORK_NAME=prod-net
+      HCLOUD_SSH_KEY_NAME=my-laptop
+      WORKER_IMAGE=ubuntu-24.04
+      WORKER_TYPE=cpx21              # shared worker pool
+
+      # --- container registry (GitHub Actions builds, GHCR hosts) -------------
+      GHCR_USER=your-github-username
+      GHCR_TOKEN=REPLACE_ME          # PAT with read:packages
+
+      # --- Cloudflare: ONE tunnel, two public hostnames -----------------------
+      # In Zero Trust, add both hostnames to the same tunnel:
+      #   aichat.example.com          -> http://api-prod:8080
+      #   staging-aichat.example.com  -> http://api-staging:8080
+      CF_TUNNEL_TOKEN=REPLACE_ME
+
+      # --- MongoDB Atlas: separate databases per environment -----------------
+      MONGO_URI_PROD=mongodb+srv://user:pass@cluster.mongodb.net/appdb?retryWrites=true&w=majority
+      MONGO_URI_STAGING=mongodb+srv://user:pass@cluster.mongodb.net/appdb_staging?retryWrites=true&w=majority
+
+      # --- Redis --------------------------------------------------------------
+      REDIS_PASSWORD_PROD=REPLACE_ME_LONG_RANDOM
+      REDIS_PASSWORD_STAGING=REPLACE_ME_LONG_RANDOM
+
+      # --- Grafana ------------------------------------------------------------
+      GRAFANA_ADMIN_USER=admin
+      GRAFANA_ADMIN_PASSWORD=REPLACE_ME_LONG_RANDOM
+
+      # --- Application images -------------------------------------------------
+      # Pin production to an immutable tag. NEVER :latest — Swarm compares the
+      # reference string and silently no-ops the deploy if it is unchanged.
+      # Only the FIRST deploy uses these. After that, CI sets the image with
+      # docker service update, and the autoscaler owns the replica count.
+      APP_IMAGE_PROD=ghcr.io/you/your-ktor-app:sha-abc1234
+      APP_IMAGE_STAGING=ghcr.io/you/your-ktor-app:sha-abc1234
+      # Two is the floor for production: with one replica a crash is an outage
+      # and a rolling update has nowhere to shift traffic.
+      APP_REPLICAS_PROD=2
+
+      # --- Autoscaler ---------------------------------------------------------
+      APP_SERVICE=app_api-prod
+      APP_CPU_LIMIT=1.0              # MUST match the limit in stacks/app.yml
+
+      # THE number. Everything else is derived from it. Set it to the p95 your
+      # users should never see exceeded, then leave it alone.
+      SLO_P95_MS=500
+      SCALE_UP_P95_RATIO=0.8         # act at 80% of SLO, before users feel it
+      SCALE_DOWN_P95_RATIO=0.4
+
+      SCALE_UP_CPU=70                # % of ONE replica's CPU limit
+      SCALE_DOWN_CPU=30
+      SCALE_UP_MEM=80                # node memory; placement guard only
+
+      MIN_REPLICAS=2
+      MAX_REPLICAS=12
+      REPLICAS_PER_WORKER=2          # CPX21 = 3 vCPU; 2 x 1.0 leaves headroom
+      MIN_WORKERS=1
+      MAX_WORKERS=6                  # a BUDGET cap, not a capacity plan
+
+      # Up fast, down slow. Never make these symmetric.
+      SUSTAIN_UP_SECONDS=90
+      SUSTAIN_DOWN_SECONDS=900
+      SCALE_UP_FACTOR=0.5            # +50% of current, minimum +1
+      REPLICA_COOLDOWN_SECONDS=60
+      # Must exceed node boot + image pull + JVM warmup or you will overshoot.
+      COOLDOWN_UP_SECONDS=300
+      COOLDOWN_DOWN_SECONDS=900
+
+      SCHEDULE_FLOOR=08:00-20:00=2   # UTC; "HH:MM-HH:MM=N" comma separated
+      DRY_RUN=false
+
+  # ---------------------------------------------------------------------------
+  - path: /opt/infra/bootstrap.sh
+    permissions: "0755"
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      set -a; source /etc/infra/infra.env; set +a
+      exec > >(tee -a /var/log/infra-bootstrap.log) 2>&1
+      echo "=== bootstrap started $(date -Is) ==="
+
+      PRIVATE_IP="$(ip -4 -o addr show | awk '$4 ~ /^10\./ {print $4}' | cut -d/ -f1 | head -n1)"
+      if [ -z "$PRIVATE_IP" ]; then
+        echo "FATAL: no private network IP. Attach the server to a private network." >&2
+        exit 1
+      fi
+      echo "MASTER_PRIVATE_IP=$PRIVATE_IP" >> /etc/infra/infra.env
+      export MASTER_PRIVATE_IP="$PRIVATE_IP"
+      echo "private ip: $PRIVATE_IP"
+
+      # --- firewall: swarm ports must never face the internet -----------------
+      ufw --force reset
+      ufw default deny incoming
+      ufw default allow outgoing
+      ufw allow 22/tcp
+      ufw allow from 10.0.0.0/8
+      ufw --force enable
+
+      # --- docker -------------------------------------------------------------
+      curl -fsSL https://get.docker.com | sh
+      systemctl enable --now docker
+
+      # --- registry login, so the manager can resolve image digests ----------
+      echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+
+      # --- swarm, on the private interface ------------------------------------
+      docker swarm init --advertise-addr "$PRIVATE_IP" --listen-addr "$PRIVATE_IP:2377" || true
+      MASTER_ID="$(docker info -f '{{.Swarm.NodeID}}')"
+      docker node update --label-add role=master "$MASTER_ID"
+
+      docker plugin install grafana/loki-docker-driver:3.1.1 \
+        --alias loki --grant-all-permissions || true
+
+      # --- secrets, one set per environment -----------------------------------
+      mk_secret() { printf '%s' "$2" | docker secret create "$1" - 2>/dev/null || true; }
+      mk_secret MONGO_URI_prod            "$MONGO_URI_PROD"
+      mk_secret MONGO_URI_staging         "$MONGO_URI_STAGING"
+      mk_secret REDIS_PASSWORD_prod       "$REDIS_PASSWORD_PROD"
+      mk_secret REDIS_PASSWORD_staging    "$REDIS_PASSWORD_STAGING"
+      mk_secret CF_TUNNEL_TOKEN           "$CF_TUNNEL_TOKEN"
+      mk_secret HCLOUD_TOKEN              "$HCLOUD_TOKEN"
+      mk_secret GRAFANA_ADMIN_PASSWORD    "$GRAFANA_ADMIN_PASSWORD"
+
+      # --- render templates ---------------------------------------------------
+      envsubst < /opt/infra/config/vmagent.yml.tpl > /opt/infra/config/vmagent.yml
+      cp /opt/infra/config/worker-cloud-init.yaml.tpl \
+         /opt/infra/config/worker-cloud-init.yaml
+
+      # --- build the autoscaler image ----------------------------------------
+      docker build -t "${CLUSTER_NAME}/autoscaler:latest" /opt/infra/autoscaler
+
+      # --- monitoring first: the autoscalers need somewhere to read from -----
+      docker stack deploy -c /opt/infra/stacks/monitoring.yml monitoring
+
+      # --- one stack, both environments, one tunnel --------------------------
+      # --with-registry-auth ships the GHCR credential with the service spec so
+      # a worker created an hour from now can still pull the image.
+      envsubst < /opt/infra/stacks/app.yml \
+        | docker stack deploy --with-registry-auth -c - app
+
+      # --- deploy user for CI (no root over SSH) -----------------------------
+      id -u deploy >/dev/null 2>&1 || useradd -m -s /bin/bash deploy
+      usermod -aG docker deploy
+      mkdir -p /home/deploy/.ssh && chmod 700 /home/deploy/.ssh
+      touch /home/deploy/.ssh/authorized_keys
+      chown -R deploy:deploy /home/deploy/.ssh
+      echo "NOTE: add your CI public key to /home/deploy/.ssh/authorized_keys"
+
+      echo "=== bootstrap finished $(date -Is) ==="
+      echo
+      echo "Workers do not exist yet — the autoscaler creates the first one on"
+      echo "its first loop. Watch:  docker service logs -f monitoring_autoscaler"
+      echo
+      echo "Cloudflare public hostnames (ONE tunnel, two CNAMEs):"
+      echo "  aichat.${BASE_DOMAIN}          -> http://api-prod:8080"
+      echo "  staging-aichat.${BASE_DOMAIN}  -> http://api-staging:8080"
+      echo "  grafana.${BASE_DOMAIN}  -> http://${PRIVATE_IP}:3000 or via Dokploy"
+      echo "  dokploy.${BASE_DOMAIN}  -> http://${PRIVATE_IP}:3000"
+
+runcmd:
+  - [ bash, -lc, "mkdir -p /opt/infra" ]
+  # Put the bundle on the box. Either clone your private repo here:
+  # - [ bash, -lc, "git clone https://TOKEN@github.com/you/infra.git /tmp/i && cp -r /tmp/i/* /opt/infra/" ]
+  # ...or scp stacks/ config/ autoscaler/ into /opt/infra and run bootstrap by hand.
+  - [ bash, -lc, "/opt/infra/bootstrap.sh" ]
+
+final_message: "Master ready after $UPTIME seconds. See /var/log/infra-bootstrap.log"

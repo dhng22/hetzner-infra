@@ -1,0 +1,77 @@
+global:
+  scrape_interval: 15s
+  external_labels:
+    cluster: "${CLUSTER_NAME}"
+
+scrape_configs:
+
+  # --- every node in the swarm, present and future -------------------------
+  - job_name: node
+    dockerswarm_sd_configs:
+      - host: unix:///var/run/docker.sock
+        role: nodes
+        port: 9100
+    relabel_configs:
+      - source_labels: [__meta_dockerswarm_node_address]
+        target_label: __address__
+        replacement: "$1:9100"
+      - source_labels: [__meta_dockerswarm_node_hostname]
+        target_label: instance
+      - source_labels: [__meta_dockerswarm_node_id]
+        target_label: node_id
+      - source_labels: [__meta_dockerswarm_node_role]
+        target_label: node_role
+      - source_labels: [__meta_dockerswarm_node_status]
+        regex: ready
+        action: keep
+
+  # --- container-level metrics on every node -------------------------------
+  - job_name: cadvisor
+    dockerswarm_sd_configs:
+      - host: unix:///var/run/docker.sock
+        role: nodes
+        port: 8081
+    relabel_configs:
+      - source_labels: [__meta_dockerswarm_node_address]
+        target_label: __address__
+        replacement: "$1:8081"
+      - source_labels: [__meta_dockerswarm_node_hostname]
+        target_label: instance
+      - source_labels: [__meta_dockerswarm_node_status]
+        regex: ready
+        action: keep
+
+  # --- any service that opts in via deploy labels --------------------------
+  # Add these three labels to any future service and it is scraped
+  # automatically. No edit to this file is ever needed again.
+  - job_name: swarm-services
+    dockerswarm_sd_configs:
+      - host: unix:///var/run/docker.sock
+        role: tasks
+    relabel_configs:
+      - source_labels: [__meta_dockerswarm_service_label_prometheus_scrape]
+        regex: "true"
+        action: keep
+      - source_labels: [__meta_dockerswarm_task_desired_state]
+        regex: running
+        action: keep
+      - source_labels: [__address__, __meta_dockerswarm_service_label_prometheus_port]
+        regex: "([^:]+)(?::\\d+)?;(\\d+)"
+        target_label: __address__
+        replacement: "$1:$2"
+      - source_labels: [__meta_dockerswarm_service_label_prometheus_path]
+        target_label: __metrics_path__
+        regex: "(.+)"
+      - source_labels: [__meta_dockerswarm_service_name]
+        target_label: service
+      - source_labels: [__meta_dockerswarm_node_hostname]
+        target_label: instance
+      - source_labels: [__meta_dockerswarm_service_label_app_env]
+        target_label: env
+      - source_labels: [__meta_dockerswarm_task_id]
+        target_label: task_id
+
+  # --- self -----------------------------------------------------------------
+  - job_name: victoriametrics
+    static_configs:
+      - targets: ["victoriametrics:8428", "vmagent:8429", "loki:3100"]

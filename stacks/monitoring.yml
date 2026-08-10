@@ -1,0 +1,209 @@
+version: "3.8"
+
+# =============================================================================
+# MONITORING STACK
+# =============================================================================
+# Everything that stores state is pinned to the manager (the master node).
+# node-exporter and cadvisor are GLOBAL — they land automatically on every
+# worker the autoscaler creates, with no extra configuration.
+# =============================================================================
+
+x-manager-only: &manager-only
+  placement:
+    constraints: [node.role == manager]
+
+x-autoscaler-env: &autoscaler-env
+  VM_URL: "http://victoriametrics:8428"
+  CLUSTER_NAME: "${CLUSTER_NAME}"
+  HCLOUD_LOCATION: "${HCLOUD_LOCATION}"
+  HCLOUD_NETWORK_NAME: "${HCLOUD_NETWORK_NAME}"
+  HCLOUD_SSH_KEY_NAME: "${HCLOUD_SSH_KEY_NAME}"
+  WORKER_IMAGE: "${WORKER_IMAGE}"
+  APP_SERVICE: "${APP_SERVICE}"
+  APP_CPU_LIMIT: "${APP_CPU_LIMIT}"
+  SLO_P95_MS: "${SLO_P95_MS}"
+  SCALE_UP_P95_RATIO: "${SCALE_UP_P95_RATIO}"
+  SCALE_DOWN_P95_RATIO: "${SCALE_DOWN_P95_RATIO}"
+  SCALE_UP_CPU: "${SCALE_UP_CPU}"
+  SCALE_DOWN_CPU: "${SCALE_DOWN_CPU}"
+  SCALE_UP_MEM: "${SCALE_UP_MEM}"
+  MIN_REPLICAS: "${MIN_REPLICAS}"
+  MAX_REPLICAS: "${MAX_REPLICAS}"
+  REPLICAS_PER_WORKER: "${REPLICAS_PER_WORKER}"
+  SCALE_UP_FACTOR: "${SCALE_UP_FACTOR}"
+  REPLICA_COOLDOWN_SECONDS: "${REPLICA_COOLDOWN_SECONDS}"
+  SUSTAIN_UP_SECONDS: "${SUSTAIN_UP_SECONDS}"
+  SUSTAIN_DOWN_SECONDS: "${SUSTAIN_DOWN_SECONDS}"
+  COOLDOWN_UP_SECONDS: "${COOLDOWN_UP_SECONDS}"
+  COOLDOWN_DOWN_SECONDS: "${COOLDOWN_DOWN_SECONDS}"
+  POST_DRAIN_GRACE_SECONDS: "45"
+  DRY_RUN: "${DRY_RUN}"
+  WORKER_USERDATA_PATH: "/etc/infra/worker-cloud-init.yaml"
+
+x-autoscaler-base: &autoscaler-base
+  image: ${CLUSTER_NAME}/autoscaler:latest
+  secrets: [HCLOUD_TOKEN]
+  volumes:
+    - /var/run/docker.sock:/var/run/docker.sock
+    - /opt/infra/config/worker-cloud-init.yaml:/etc/infra/worker-cloud-init.yaml:ro
+  networks: [monitoring]
+  deploy:
+    replicas: 1
+    placement:
+      constraints: [node.role == manager]
+    labels:
+      prometheus.scrape: "true"
+      prometheus.port: "9200"
+      prometheus.path: "/metrics"
+    restart_policy:
+      condition: any
+      delay: 30s
+
+services:
+
+  # --- metrics store --------------------------------------------------------
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.106.1
+    command:
+      - "--storageDataPath=/vmdata"
+      - "--retentionPeriod=30d"
+      - "--httpListenAddr=:8428"
+      - "--memory.allowedPercent=40"
+    volumes:
+      - vmdata:/vmdata
+    networks: [monitoring]
+    deploy:
+      replicas: 1
+      <<: *manager-only
+      resources:
+        limits: { memory: 1500M }
+
+  # --- scraper with Swarm service discovery ---------------------------------
+  # Discovers new nodes and app tasks automatically. This is why adding a
+  # worker requires zero monitoring configuration.
+  vmagent:
+    image: victoriametrics/vmagent:v1.106.1
+    command:
+      - "--promscrape.config=/etc/vmagent/vmagent.yml"
+      - "--remoteWrite.url=http://victoriametrics:8428/api/v1/write"
+      - "--promscrape.config.strictParse=false"
+    volumes:
+      - /opt/infra/config/vmagent.yml:/etc/vmagent/vmagent.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [monitoring]
+    deploy:
+      replicas: 1
+      <<: *manager-only   # dockerswarm_sd requires a manager socket
+
+  # --- alerting -------------------------------------------------------------
+  vmalert:
+    image: victoriametrics/vmalert:v1.106.1
+    command:
+      - "--datasource.url=http://victoriametrics:8428"
+      - "--remoteWrite.url=http://victoriametrics:8428"
+      - "--notifier.url=http://alertmanager:9093"
+      - "--rule=/etc/alerts/*.yml"
+    volumes:
+      - /opt/infra/config/alerts.yml:/etc/alerts/alerts.yml:ro
+    networks: [monitoring]
+    deploy: { replicas: 1, <<: *manager-only }
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    volumes:
+      - /opt/infra/config/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    networks: [monitoring]
+    deploy: { replicas: 1, <<: *manager-only }
+
+  # --- logs -----------------------------------------------------------------
+  loki:
+    image: grafana/loki:3.1.1
+    command: ["-config.file=/etc/loki/loki.yml"]
+    volumes:
+      - /opt/infra/config/loki.yml:/etc/loki/loki.yml:ro
+      - lokidata:/loki
+    ports:
+      # published on the private network so worker log drivers can reach it
+      - target: 3100
+        published: 3100
+        protocol: tcp
+        mode: host
+    networks: [monitoring]
+    deploy: { replicas: 1, <<: *manager-only }
+
+  # --- dashboards -----------------------------------------------------------
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER}"
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/GRAFANA_ADMIN_PASSWORD
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: "https://grafana.${BASE_DOMAIN}"
+    secrets: [GRAFANA_ADMIN_PASSWORD]
+    volumes:
+      - grafanadata:/var/lib/grafana
+      - /opt/infra/config/grafana-datasources.yml:/etc/grafana/provisioning/datasources/ds.yml:ro
+    networks: [monitoring]
+    deploy: { replicas: 1, <<: *manager-only }
+
+  # --- per-node exporters (global = every current AND future node) ----------
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    command:
+      - "--path.rootfs=/host"
+      - "--collector.systemd"
+    volumes:
+      - /:/host:ro,rslave
+    ports:
+      - target: 9100
+        published: 9100
+        protocol: tcp
+        mode: host
+    networks: [monitoring]
+    deploy:
+      mode: global
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    command: ["--docker_only=true", "--housekeeping_interval=15s"]
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    ports:
+      - target: 8080
+        published: 8081
+        protocol: tcp
+        mode: host
+    networks: [monitoring]
+    deploy:
+      mode: global
+
+  # --- the autoscaler -------------------------------------------------------
+  # Manages the single shared worker pool. Staging rides along on it as one
+  # capped replica, so there is nothing separate to scale.
+  autoscaler:
+    <<: *autoscaler-base
+    environment:
+      <<: *autoscaler-env
+      MIN_WORKERS: "${MIN_WORKERS}"
+      MAX_WORKERS: "${MAX_WORKERS}"
+      WORKER_TYPE: "${WORKER_TYPE}"
+      SCHEDULE_FLOOR: "${SCHEDULE_FLOOR}"
+
+networks:
+  monitoring:
+    driver: overlay
+    attachable: true
+
+volumes:
+  vmdata:
+  lokidata:
+  grafanadata:
+
+secrets:
+  HCLOUD_TOKEN:
+    external: true
+  GRAFANA_ADMIN_PASSWORD:
+    external: true
