@@ -71,37 +71,44 @@ over an empty bucket returns nothing. At low traffic the latency signal
 disappears entirely, and CPU-per-replica is what tells the scaler it is safe
 to come back down.
 
-## Deploys
+## Deploying an image
 
-Push to `main` → GitHub Actions builds `sha-<short>`, pushes to GHCR, rolls
-**staging**. A `v*` tag or a manual dispatch promotes that same immutable
-image to **production**. Nothing is rebuilt in between.
-
-Zero downtime comes from `order: start-first`, a health check with
-`start_period: 60s`, and `monitor: 90s` — the last one matters because Swarm's
-default is 5 seconds, shorter than JVM startup, so it would call a task
-successful before your app finished booting. `failure_action: rollback`
-reverts automatically and `docker service update` exits non-zero, so a bad
-deploy turns CI red.
+CI is per-app and out of scope here. What this infra guarantees is the
+contract your pipeline targets:
 
 ```bash
-# manual deploy
 docker service update --with-registry-auth \
-  --image ghcr.io/you/app:sha-abc1234 app_api-prod
+  --image ghcr.io/you/app:sha-abc1234 app_api-prod     # or app_api-staging
 
-# roll back
-docker service rollback app_api-prod
+docker service rollback app_api-prod                    # undo
 ```
+
+Set `CI_SSH_PUBLIC_KEY` in the cloud-init and you get a non-root `deploy` user
+in the docker group to run that as. Leave it blank and nothing is created.
+
+Three properties you get for free, whatever pipeline you build:
+
+- **Zero downtime** — `order: start-first` brings the new task to healthy
+  before stopping the old one.
+- **Real health gating** — `monitor: 90s` with `start_period: 60s`. Swarm's
+  default monitor is 5 seconds, shorter than JVM startup, so it would call a
+  task successful before your app finished booting.
+- **Automatic rollback** — `failure_action: rollback`, and the update command
+  exits non-zero, so a failed deploy fails your pipeline.
+
+Two rules your pipeline must follow: **never `:latest`** (Swarm compares the
+reference string and silently no-ops an unchanged tag), and **always
+`--with-registry-auth`** (or a worker created later has no GHCR credential and
+cannot pull).
 
 ## One-time setup
 
 1. Hetzner private network `10.0.0.0/16`, and a Read & Write API token.
 2. **One** Cloudflare Tunnel. Copy the connector token. Add hostnames later.
 3. GitHub PAT with `read:packages`.
-4. An SSH keypair for CI: private half into the GitHub secret
-   `MASTER_SSH_KEY`, public half into `CI_SSH_PUBLIC_KEY` in the cloud-init.
-   The bootstrap script installs it — nothing to do by hand.
-5. Two Atlas databases.
+4. Two Atlas databases.
+5. Optional: an SSH public key for `CI_SSH_PUBLIC_KEY`, if you want the
+   non-root deploy user.
 6. Push `stacks/`, `config/`, `autoscaler/` to a private repo; uncomment the
    clone line in the cloud-init.
 7. Fill every `REPLACE_ME`. **Set `SLO_P95_MS` from your real p95.**

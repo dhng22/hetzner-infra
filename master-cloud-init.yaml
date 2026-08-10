@@ -89,11 +89,14 @@ write_files:
       APP_PORT=8080
       APP_METRICS_PATH=/metrics
 
-      # --- CI access ----------------------------------------------------------
-      # Public half of the key pair whose PRIVATE half you put in the GitHub
-      # secret MASTER_SSH_KEY. Written to the deploy user's authorized_keys by
-      # this script — nothing to do by hand afterwards.
-      CI_SSH_PUBLIC_KEY=ssh-ed25519 AAAA...REPLACE_ME ci@github
+      # --- deploy access (OPTIONAL) -------------------------------------------
+      # Your app's CI is your business, but whatever you build needs a way in
+      # that is not root. Put a public key here and this script creates a
+      # `deploy` user in the docker group with that key installed. Its CI then
+      # runs one command:
+      #   docker service update --with-registry-auth --image <img> app_api-prod
+      # Leave blank to skip entirely and deploy however you prefer.
+      CI_SSH_PUBLIC_KEY=
 
       # --- Autoscaler ---------------------------------------------------------
       APP_SERVICE=app_api-prod
@@ -206,13 +209,18 @@ write_files:
       envsubst < /opt/infra/stacks/app.yml \
         | docker stack deploy --with-registry-auth -c - app
 
-      # --- deploy user for CI (no root over SSH) -----------------------------
-      id -u deploy >/dev/null 2>&1 || useradd -m -s /bin/bash deploy
-      usermod -aG docker deploy
-      mkdir -p /home/deploy/.ssh && chmod 700 /home/deploy/.ssh
-      printf '%s\n' "$CI_SSH_PUBLIC_KEY" > /home/deploy/.ssh/authorized_keys
-      chmod 600 /home/deploy/.ssh/authorized_keys
-      chown -R deploy:deploy /home/deploy/.ssh
+      # --- optional deploy user, so CI never needs root -----------------------
+      if [ -n "${CI_SSH_PUBLIC_KEY:-}" ]; then
+        id -u deploy >/dev/null 2>&1 || useradd -m -s /bin/bash deploy
+        usermod -aG docker deploy
+        mkdir -p /home/deploy/.ssh && chmod 700 /home/deploy/.ssh
+        printf '%s\n' "$CI_SSH_PUBLIC_KEY" > /home/deploy/.ssh/authorized_keys
+        chmod 600 /home/deploy/.ssh/authorized_keys
+        chown -R deploy:deploy /home/deploy/.ssh
+        echo "deploy user ready"
+      else
+        echo "CI_SSH_PUBLIC_KEY empty — skipping deploy user"
+      fi
 
       echo "=== bootstrap finished $(date -Is) ==="
       echo

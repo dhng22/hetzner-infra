@@ -51,7 +51,7 @@ groups:
 
       - alert: ReplicaCeiling
         expr: autoscaler_desired_replicas >= autoscaler_current_replicas
-              and autoscaler_current_replicas >= 12
+          and autoscaler_current_replicas >= 12
         for: 15m
         labels: { severity: warning }
         annotations:
