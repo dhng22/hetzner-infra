@@ -62,13 +62,14 @@ services:
   # ==========================================================================
   api-prod:
     image: ${APP_IMAGE_PROD}
+    # Only topology lives here. Everything the app reads with System.getenv —
+    # including MONGO_URI and REDIS_PASSWORD — comes from config/app-prod.env,
+    # layered on as an override by bin/app-env. That file is what the admin UI
+    # edits, and it is the single source for both the app and redis-prod.
     environment:
       KTOR_ENV: production
       REDIS_HOST: redis-prod
       REDIS_PORT: "6379"
-      MONGO_URI_FILE: /run/secrets/MONGO_URI_prod
-      REDIS_PASSWORD_FILE: /run/secrets/REDIS_PASSWORD_prod
-    secrets: [MONGO_URI_prod, REDIS_PASSWORD_prod]
     networks: [edge, data-prod, monitoring]
     logging: *loki-logging
     # Ktor needs time to finish in-flight requests when drained. Pair this with
@@ -103,13 +104,15 @@ services:
         reservations: { cpus: "0.5", memory: 384M }
 
   redis-prod:
+    # REDIS_PASSWORD is injected from config/app-prod.env by bin/app-env, the
+    # same file the app reads it from. One value, one place — changing it in
+    # the admin UI moves the server and its clients together.
     image: redis:7.4-alpine
     command: >
       sh -c 'exec redis-server
-      --requirepass "$$(cat /run/secrets/REDIS_PASSWORD_prod)"
+      --requirepass "$$REDIS_PASSWORD"
       --appendonly yes --appendfsync everysec
       --maxmemory 512mb --maxmemory-policy allkeys-lru'
-    secrets: [REDIS_PASSWORD_prod]
     volumes: [redis-prod-data:/data]
     networks: [data-prod]
     logging: *loki-logging
@@ -127,9 +130,6 @@ services:
       KTOR_ENV: staging
       REDIS_HOST: redis-staging
       REDIS_PORT: "6379"
-      MONGO_URI_FILE: /run/secrets/MONGO_URI_staging
-      REDIS_PASSWORD_FILE: /run/secrets/REDIS_PASSWORD_staging
-    secrets: [MONGO_URI_staging, REDIS_PASSWORD_staging]
     networks: [edge, data-staging, monitoring]
     logging: *loki-logging
     stop_grace_period: 30s
@@ -161,10 +161,9 @@ services:
     image: redis:7.4-alpine
     command: >
       sh -c 'exec redis-server
-      --requirepass "$$(cat /run/secrets/REDIS_PASSWORD_staging)"
+      --requirepass "$$REDIS_PASSWORD"
       --appendonly yes --appendfsync everysec
       --maxmemory 128mb --maxmemory-policy allkeys-lru'
-    secrets: [REDIS_PASSWORD_staging]
     volumes: [redis-staging-data:/data]
     networks: [data-staging]
     logging: *loki-logging
@@ -198,10 +197,9 @@ services:
 
   redis-exporter-prod:
     image: oliver006/redis_exporter:v1.66.0
+    # REDIS_PASSWORD also injected from config/app-prod.env.
     environment:
       REDIS_ADDR: "redis://redis-prod:6379"
-      REDIS_PASSWORD_FILE: /run/secrets/REDIS_PASSWORD_prod
-    secrets: [REDIS_PASSWORD_prod]
     networks: [data-prod, monitoring]
     deploy:
       replicas: 1
@@ -228,8 +226,8 @@ volumes:
   redis-staging-data:
 
 secrets:
-  MONGO_URI_prod:         { external: true }
-  MONGO_URI_staging:      { external: true }
-  REDIS_PASSWORD_prod:    { external: true }
-  REDIS_PASSWORD_staging: { external: true }
-  CF_TUNNEL_TOKEN:        { external: true }
+  # Only the tunnel token remains a docker secret here. Application
+  # credentials (MONGO_URI, REDIS_PASSWORD) are plain env vars in
+  # config/app-<env>.env so the admin UI can edit them — see the tradeoff note
+  # in the README.
+  CF_TUNNEL_TOKEN: { external: true }

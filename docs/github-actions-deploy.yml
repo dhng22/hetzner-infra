@@ -1,0 +1,124 @@
+# =============================================================================
+# Reference pipeline for this cluster. Copy into your APP repo as
+# .github/workflows/deploy.yml — it does not belong in the infra repo.
+#
+# The contract it targets:
+#   POST https://admin-<app>.<root>/hooks/deploy/app/<prod|staging>
+#        X-Deploy-Token: <token from the panel's Deployments tab>
+#        {"image": "<immutable reference>"}
+#
+# The endpoint waits for Swarm to converge and answers 502 if the update rolled
+# back, so a bad image fails this workflow instead of quietly reverting. That
+# only works if you let curl's failure propagate — see the notes below.
+# =============================================================================
+
+name: Build & Deploy
+
+on:
+  push:
+    branches: [main, staging]
+
+# Two pushes in quick succession would otherwise race to update the same
+# service, and the loser silently wins. Queue them per branch instead.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      # The single immutable reference the deploy job will ship.
+      image: ${{ steps.tag.outputs.image }}
+      environment: ${{ steps.tag.outputs.environment }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags
+        id: tag
+        run: |
+          set -euo pipefail
+          IMAGE=$(echo "${REGISTRY}/${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')
+          BRANCH=${GITHUB_REF#refs/heads/}
+          SHA=${GITHUB_SHA::7}
+          if [ "$BRANCH" = "main" ]; then ENVIRONMENT=prod; else ENVIRONMENT=staging; fi
+
+          # Push the moving tag for humans, deploy the immutable one. The panel
+          # rejects *-latest on purpose: it gets repointed every build, so
+          # deploying it can no-op and still report success.
+          {
+            echo "tags=${IMAGE}:${ENVIRONMENT}-latest,${IMAGE}:${ENVIRONMENT}-${SHA}"
+            echo "image=${IMAGE}:${ENVIRONMENT}-${SHA}"
+            echo "environment=${ENVIRONMENT}"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.tag.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    # Name it so the run log says which environment moved.
+    environment: ${{ needs.build.outputs.environment }}
+
+    steps:
+      - name: Deploy to the cluster
+        env:
+          IMAGE: ${{ needs.build.outputs.image }}
+          ENVIRONMENT: ${{ needs.build.outputs.environment }}
+          PANEL_URL: ${{ secrets.PANEL_URL }}          # https://admin-<app>.<root>
+          TOKEN: ${{ secrets.DEPLOY_TOKEN_PROD }}      # see note on per-env tokens
+          TOKEN_STAGING: ${{ secrets.DEPLOY_TOKEN_STAGING }}
+        run: |
+          set -euo pipefail
+          if [ "$ENVIRONMENT" = "staging" ]; then TOKEN="$TOKEN_STAGING"; fi
+
+          echo "Deploying $IMAGE to $ENVIRONMENT"
+
+          # NO `|| true`, NO `|| echo`. The endpoint blocks until Swarm has
+          # converged and returns 502 when it rolled the update back; swallowing
+          # that turns every failed deploy into a green tick.
+          #
+          # --max-time must exceed the real convergence budget: start_period 60s
+          # + monitor 90s per task, times the replica count, one at a time.
+          # 10 seconds would time out mid-deploy on every single run.
+          # `|| true` here is safe and deliberate: we discard curl's exit code
+          # only because the explicit HTTP_CODE check below is stricter. Without
+          # it, `set -e` would abort on a connection failure before printing
+          # anything useful.
+          HTTP_CODE=$(curl -sS -o response.json -w '%{http_code}' \
+            --max-time 900 \
+            -X POST "${PANEL_URL}/hooks/deploy/app/${ENVIRONMENT}" \
+            -H "X-Deploy-Token: ${TOKEN}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"image\": \"${IMAGE}\"}" || true)
+          HTTP_CODE=${HTTP_CODE:-000}
+
+          echo "--- panel response (HTTP $HTTP_CODE) ---"
+          cat response.json; echo
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Deploy failed with HTTP $HTTP_CODE — the service was not updated, or Swarm rolled it back."
+            exit 1
+          fi
+          echo "Deployed $IMAGE"

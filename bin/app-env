@@ -1,0 +1,283 @@
+#!/usr/bin/env bash
+# =============================================================================
+# app-env — manage plain application env vars (the ones you read with
+#           System.getenv) for api-prod and api-staging, and redeploy safely.
+# =============================================================================
+#   app-env list [prod|staging]
+#   app-env set KEY=VALUE [prod|staging]
+#   app-env unset KEY [prod|staging]
+#   app-env deploy                     # re-apply current files, change nothing
+#
+# Values live in config/app-<env>.env, one KEY=VALUE per line. That file is the
+# single place to look. Nothing here is secret — secrets are docker secrets,
+# read through the *_FILE convention the app already uses.
+#
+# WHY THIS EXISTS RATHER THAN `env_file:` IN THE STACK
+# ----------------------------------------------------
+# `env_file:` support in `docker stack deploy` has broken before (moby#42252,
+# docker/cli#4952 — regressed in Docker 25.0.4). This box installs Docker from
+# get.docker.com, i.e. whatever is current, so depending on it is a bet on a
+# directive with a history of silently changing behaviour. Instead we generate
+# an override compose file that uses plain `environment:`, which is core Swarm
+# and cannot quietly stop working.
+#
+# WHY DEPLOYING IS NOT JUST `docker stack deploy`
+# -----------------------------------------------
+# `docker stack deploy` is declarative over the WHOLE stack, so it happily
+# overwrites live state that something else owns (docker/cli#2235):
+#
+#   replicas — the stack file says ${MIN_REPLICAS}. A plain redeploy at peak
+#              would cut api-prod from N replicas to 2. The autoscaler recovers
+#              in +50% steps on a 60s cooldown, so ~5 minutes at reduced
+#              capacity. That is an outage caused by editing a log level.
+#   image    — the stack file says ${APP_IMAGE_PROD}, the tag pinned at
+#              bootstrap. CI has moved on via `docker service update`. A plain
+#              redeploy would roll production back to the first-boot image.
+#
+# So both are read from the LIVE service and pinned for the duration of the
+# deploy. First deploy, when no service exists yet, falls back to infra.env.
+# =============================================================================
+
+set -euo pipefail
+
+INFRA_DIR="${INFRA_DIR:-/opt/infra}"
+INFRA_ENV="${INFRA_ENV:-/etc/infra/infra.env}"
+STACK_NAME="${STACK_NAME:-app}"
+
+# Topology, owned by stacks/app.yml. Overriding these from an env file would
+# fight the stack, so refuse.
+RESERVED="KTOR_ENV REDIS_HOST REDIS_PORT"
+
+# Which services receive which keys from config/app-<env>.env.
+#   '*' = every key in the file (the application itself)
+#   a CSV list = only those keys
+# redis-prod needs REDIS_PASSWORD because it is what the server enforces with
+# --requirepass; injecting the whole file would hand the database its own
+# MONGO_URI for no reason.
+MAP_PROD="api-prod:* redis-prod:REDIS_PASSWORD redis-exporter-prod:REDIS_PASSWORD"
+MAP_STAGING="api-staging:* redis-staging:REDIS_PASSWORD"
+
+# Optional external access to Redis. Setting REDIS_EXTERNAL_PORT in an
+# environment file publishes that Redis on the master at that port; removing the
+# key unpublishes it. Kept out of stacks/app.yml because compose has no
+# conditionals — the override is generated instead.
+#
+# The port is published in host mode on the master, and ufw denies everything
+# inbound except 22 and 10.0.0.0/8. So this reaches your laptop only if you also
+# open the port, which means deciding to expose a database to the internet.
+PORT_MAP_PROD="redis-prod:6379:REDIS_EXTERNAL_PORT"
+PORT_MAP_STAGING="redis-staging:6379:REDIS_EXTERNAL_PORT"
+
+die() { echo "error: $*" >&2; exit 1; }
+
+[ -f "$INFRA_ENV" ] || die "$INFRA_ENV not found (run this on the master)"
+set -a; . "$INFRA_ENV"; set +a
+
+env_file_for() {
+  case "$1" in
+    prod|staging) echo "$INFRA_DIR/config/app-$1.env" ;;
+    *) die "environment must be 'prod' or 'staging', got '$1'" ;;
+  esac
+}
+
+# --- override generation ----------------------------------------------------
+# python3 is stock on Ubuntu 24.04. It is here purely to emit correctly quoted
+# YAML: hand-rolled quoting breaks the first time a value contains a colon,
+# a '#', or a trailing space, and the failure mode is a mangled config rather
+# than an error.
+# Args: <out> <n-env-triples> then that many <service> <env-file> <keys|*>
+#       triples, then repeating <service> <target-port> <env-file> <port-key>
+#       quads for optional published ports.
+render_override() {
+  local out="$1" ntriples="$2"; shift 2
+  python3 - "$out" "$ntriples" "$@" <<'PY'
+import json, sys
+
+out, ntriples = sys.argv[1], int(sys.argv[2])
+rest = sys.argv[3:]
+env_args, port_args = rest[:ntriples * 3], rest[ntriples * 3:]
+if len(env_args) % 3 or len(port_args) % 4:
+    sys.exit("render_override: bad argument grouping")
+
+# Keys that configure the deployment rather than the application. They must not
+# be injected into the app container as if they were config it should read.
+INFRA_KEYS = {"REDIS_EXTERNAL_PORT"}
+
+
+def read_env(path):
+    values = {}
+    try:
+        fh = open(path)
+    except FileNotFoundError:
+        return values
+    with fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            if k.strip():
+                values[k.strip()] = v.strip()
+    return values
+
+cache = {}
+
+
+def load(path):
+    if path not in cache:
+        cache[path] = read_env(path)
+    return cache[path]
+
+
+sections = {}  # service -> {"environment": {...}, "ports": [...]}
+
+for i in range(0, len(env_args), 3):
+    service, path, keyspec = env_args[i], env_args[i + 1], env_args[i + 2]
+    values = load(path)
+    if keyspec == "*":
+        values = {k: v for k, v in values.items() if k not in INFRA_KEYS}
+    else:
+        wanted = [k.strip() for k in keyspec.split(",") if k.strip()]
+        values = {k: values[k] for k in wanted if k in values}
+    if values:
+        sections.setdefault(service, {}).setdefault("environment", {}).update(values)
+
+for i in range(0, len(port_args), 4):
+    service, target, path, port_key = port_args[i:i + 4]
+    raw = load(path).get(port_key, "").strip()
+    if not raw:
+        continue
+    if not raw.isdigit() or not (1 <= int(raw) <= 65535):
+        sys.exit(f"{port_key} in {path} must be a port number, got {raw!r}")
+    sections.setdefault(service, {})["ports"] = [(int(target), int(raw))]
+
+blocks = []
+for service, spec in sections.items():
+    lines = ["  %s:" % service]
+    if spec.get("environment"):
+        lines.append("    environment:")
+        # json.dumps emits a double-quoted scalar whose escaping YAML reads
+        # identically, so any value survives verbatim.
+        lines += ["        %s: %s" % (k, json.dumps(v))
+                  for k, v in spec["environment"].items()]
+    for target, published in spec.get("ports", []):
+        lines += ["    ports:",
+                  "      - target: %d" % target,
+                  "        published: %d" % published,
+                  "        protocol: tcp",
+                  "        mode: host"]
+    blocks.append("\n".join(lines))
+
+out_body = "\n".join(blocks) if blocks else "  {}"
+open(out, "w").write('version: "3.8"\nservices:\n%s\n' % out_body)
+PY
+}
+
+# --- live state -------------------------------------------------------------
+live_replicas() {
+  docker service inspect "${STACK_NAME}_api-prod" \
+    --format '{{.Spec.Mode.Replicated.Replicas}}' 2>/dev/null || true
+}
+
+live_image() {
+  docker service inspect "${STACK_NAME}_$1" \
+    --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' 2>/dev/null || true
+}
+
+deploy() {
+  local tmp; tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' RETURN
+
+  # Pin whatever is live now, so this deploy cannot roll it back.
+  local reps img_prod img_staging
+  reps="$(live_replicas)"
+  img_prod="$(live_image api-prod)"
+  img_staging="$(live_image api-staging)"
+
+  if [ -n "$reps" ] && [ "$reps" != "0" ]; then
+    echo "preserving live replica count: $reps"
+    export MIN_REPLICAS="$reps"
+  else
+    echo "no live api-prod; using MIN_REPLICAS=${MIN_REPLICAS} from infra.env"
+  fi
+  if [ -n "$img_prod" ]; then
+    echo "preserving deployed prod image: $img_prod"
+    export APP_IMAGE_PROD="$img_prod"
+  fi
+  if [ -n "$img_staging" ]; then
+    echo "preserving deployed staging image: $img_staging"
+    export APP_IMAGE_STAGING="$img_staging"
+  fi
+
+  envsubst < "$INFRA_DIR/stacks/app.yml" > "$tmp/app.yml"
+
+  # Both environments every time: stack deploy reconciles the whole stack, so
+  # omitting one would strip its variables.
+  local triples=() quads=() entry service keys rest target key n=0
+  for entry in $MAP_PROD;    do service="${entry%%:*}"; keys="${entry#*:}"
+    triples+=("$service" "$(env_file_for prod)"    "$keys"); n=$((n + 1)); done
+  for entry in $MAP_STAGING; do service="${entry%%:*}"; keys="${entry#*:}"
+    triples+=("$service" "$(env_file_for staging)" "$keys"); n=$((n + 1)); done
+
+  for entry in $PORT_MAP_PROD; do
+    service="${entry%%:*}"; rest="${entry#*:}"; target="${rest%%:*}"; key="${rest#*:}"
+    quads+=("$service" "$target" "$(env_file_for prod)" "$key")
+  done
+  for entry in $PORT_MAP_STAGING; do
+    service="${entry%%:*}"; rest="${entry#*:}"; target="${rest%%:*}"; key="${rest#*:}"
+    quads+=("$service" "$target" "$(env_file_for staging)" "$key")
+  done
+
+  render_override "$tmp/override.yml" "$n" "${triples[@]}" "${quads[@]}"
+
+  docker stack deploy --with-registry-auth \
+    -c "$tmp/app.yml" -c "$tmp/override.yml" "$STACK_NAME"
+}
+
+# --- commands ---------------------------------------------------------------
+cmd="${1:-}"; shift || true
+
+case "$cmd" in
+  list)
+    f="$(env_file_for "${1:-prod}")"
+    echo "# $f"
+    [ -f "$f" ] && grep -vE '^\s*(#|$)' "$f" || echo "# (empty)"
+    ;;
+
+  set)
+    pair="${1:-}"; env_name="${2:-prod}"
+    case "$pair" in *=*) ;; *) die "usage: app-env set KEY=VALUE [prod|staging]" ;; esac
+    key="${pair%%=*}"; val="${pair#*=}"
+    case "$key" in
+      ""|*[!A-Za-z0-9_]*) die "'$key' is not a valid env var name" ;;
+    esac
+    for r in $RESERVED; do
+      [ "$key" = "$r" ] && die "$key is owned by stacks/app.yml — edit it there"
+    done
+    f="$(env_file_for "$env_name")"
+    mkdir -p "$(dirname "$f")"; touch "$f"
+    # Rewrite in place, preserving order and comments.
+    grep -vE "^${key}=" "$f" > "$f.tmp" 2>/dev/null || true
+    printf '%s=%s\n' "$key" "$val" >> "$f.tmp"
+    mv "$f.tmp" "$f"
+    echo "set $key in $env_name"
+    deploy
+    ;;
+
+  unset)
+    key="${1:-}"; env_name="${2:-prod}"
+    [ -n "$key" ] || die "usage: app-env unset KEY [prod|staging]"
+    f="$(env_file_for "$env_name")"
+    [ -f "$f" ] || die "$f does not exist"
+    grep -qE "^${key}=" "$f" || die "$key is not set in $env_name"
+    grep -vE "^${key}=" "$f" > "$f.tmp"; mv "$f.tmp" "$f"
+    echo "unset $key in $env_name"
+    deploy
+    ;;
+
+  deploy) deploy ;;
+
+  *)
+    sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
+    exit 1
+    ;;
+esac

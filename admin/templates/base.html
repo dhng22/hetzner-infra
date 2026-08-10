@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>{% block title %}{{ cluster_name }} control{% endblock %}</title>
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='fonts.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">{% endblock %}
+</head>
+<body>
+{% block shell %}
+<div class="shell">
+
+  <nav class="rail" aria-label="Sections">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">{{ cluster_name[:2]|upper }}</div>
+      <div>
+        <div class="brand-name">{{ cluster_name }}</div>
+        <div class="brand-sub">swarm control</div>
+      </div>
+    </div>
+
+    <div class="nav-label">Cluster</div>
+    {% for item in nav %}
+      <a class="nav-item" href="{{ section_href(item) }}" data-nav="{{ item.key }}"
+         {% if section == item.key %}aria-current="page"{% endif %}>
+        <span class="dot" aria-hidden="true"></span>{{ item.label }}
+      </a>
+    {% endfor %}
+
+    <div class="rail-foot">
+      <button class="btn btn-sm" type="button" data-theme-toggle style="width:100%">
+        Switch theme
+      </button>
+    </div>
+  </nav>
+
+  <div>
+    <header class="topbar">
+      <div class="crumb">{% block crumb %}{{ cluster_name }}{% endblock %}</div>
+      <div class="topbar-right">
+        {% block topbar_extra %}{% endblock %}
+        <span class="pill mute plain mono">{{ user or 'preview' }}</span>
+        {% if not preview %}
+        <form method="post" action="{{ url_for('logout') }}">
+          <button class="btn btn-sm" type="submit">Sign out</button>
+        </form>
+        {% endif %}
+      </div>
+    </header>
+
+    <main>
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          {% for category, message in messages %}
+            <div class="banner {{ category }}"><div>{{ message }}</div></div>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
+      {% block main %}{% endblock %}
+    </main>
+  </div>
+</div>
+{% endblock %}
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

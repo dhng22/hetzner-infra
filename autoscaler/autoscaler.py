@@ -147,6 +147,10 @@ M_MEM = Gauge("autoscaler_cluster_mem_percent", "Mean worker memory utilisation"
 M_P95 = Gauge("autoscaler_app_p95_ms", "Production p95 latency in milliseconds")
 M_REPLICAS = Gauge("autoscaler_current_replicas", "Replicas of the scaled service")
 M_REPLICAS_WANT = Gauge("autoscaler_desired_replicas", "Replicas the autoscaler wants")
+# Exported so alerts compare against the running config instead of a literal.
+# ReplicaCeiling used to hardcode 12; raising MAX_REPLICAS left it firing at the
+# old number with nothing to indicate the threshold had gone stale.
+M_REPLICAS_MAX = Gauge("autoscaler_max_replicas", "Configured replica ceiling")
 M_CPU_REPLICA = Gauge("autoscaler_cpu_per_replica_percent", "Mean CPU per replica, % of limit")
 M_SLO = Gauge("autoscaler_slo_p95_ms", "Configured p95 SLO")
 M_LOOP = Gauge("autoscaler_last_loop_timestamp_seconds", "Unix time of last completed loop")
@@ -559,6 +563,7 @@ def loop():
     M_CURRENT.set(current_workers)
     M_MAX.set(MAX_WORKERS)
     M_MIN.set(floor)
+    M_REPLICAS_MAX.set(MAX_REPLICAS)
 
     p95, cpu_rep, node_pressure = read_signals()
 

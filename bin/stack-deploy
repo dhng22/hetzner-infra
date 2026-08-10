@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# =============================================================================
+# stack-deploy — redeploy a stack that holds no live state worth preserving.
+# =============================================================================
+#   stack-deploy monitoring
+#   stack-deploy admin
+#
+# The `app` stack is deliberately NOT handled here. Its replica count is owned
+# by the autoscaler and its image by CI, so it must go through bin/app-env,
+# which reads both from the running service and pins them for the deploy.
+# Routing it here would silently reset production to MIN_REPLICAS and the
+# bootstrap image (docker/cli#2235).
+#
+# `docker stack deploy` interpolates ${VAR} from the environment itself, so
+# sourcing infra.env is all the rendering these two need.
+# =============================================================================
+
+set -euo pipefail
+
+INFRA_DIR="${INFRA_DIR:-/opt/infra}"
+INFRA_ENV="${INFRA_ENV:-/etc/infra/infra.env}"
+
+die() { echo "error: $*" >&2; exit 1; }
+
+stack="${1:-}"
+case "$stack" in
+  monitoring|admin) ;;
+  app) die "the app stack must go through 'app-env deploy' — see the comment in this file" ;;
+  "")  die "usage: stack-deploy <monitoring|admin>" ;;
+  *)   die "unknown stack '$stack'" ;;
+esac
+
+[ -f "$INFRA_ENV" ] || die "$INFRA_ENV not found (run this on the master)"
+set -a; . "$INFRA_ENV"; set +a
+
+echo "deploying $stack"
+docker stack deploy --with-registry-auth -c "$INFRA_DIR/stacks/$stack.yml" "$stack"

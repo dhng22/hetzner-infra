@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Sign in · {{ cluster_name }}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='fonts.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="brand" style="padding:0">
+      <div class="brand-mark" aria-hidden="true">{{ cluster_name[:2]|upper }}</div>
+      <div>
+        <div class="brand-name">{{ cluster_name }}</div>
+        <div class="brand-sub">swarm control</div>
+      </div>
+    </div>
+
+    <h1>Sign in</h1>
+    <p>This panel can redeploy production and read every application credential.</p>
+
+    {% if not configured %}
+      <div class="banner bad">
+        <div>No admin password is configured. Set <code>ADMIN_PASSWORD</code> in
+        <code>master-cloud-init.yaml</code> and redeploy the admin stack.</div>
+      </div>
+    {% endif %}
+
+    {% if error %}<div class="banner bad"><div>{{ error }}</div></div>{% endif %}
+
+    <form method="post" class="stack">
+      <div class="field">
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" autocomplete="username" required autofocus>
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+      </div>
+      <button class="btn btn-primary" type="submit" style="width:100%; justify-content:center">
+        Sign in
+      </button>
+    </form>
+  </div>
+</div>
+</body>
+</html>

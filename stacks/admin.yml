@@ -1,0 +1,92 @@
+version: "3.8"
+
+# =============================================================================
+# ADMIN PANEL
+# =============================================================================
+# A root-equivalent console: it holds the docker socket, can redeploy
+# production, and can read every application credential. Treat it accordingly.
+#
+#   - Pinned to the manager. It needs the manager socket to see services and
+#     nodes, and /opt/infra to run bin/app-env.
+#   - Published on the private network only (mode: host on the master), never
+#     on a public interface. Reachable through the Cloudflare tunnel as
+#     admin-<app>.<root>, which is where authentication and Cloudflare Access
+#     belong.
+#   - Credentials arrive as docker secrets, never in this file or the image.
+# =============================================================================
+
+services:
+
+  ui:
+    image: ${APP_NAME}/admin:latest
+    environment:
+      APP_NAME: "${APP_NAME}"
+      ROOT_DOMAIN: "${ROOT_DOMAIN}"
+      VM_URL: "http://victoriametrics:8428"
+      VMALERT_URL: "http://vmalert:8880"
+      INFRA_DIR: "/opt/infra"
+      INFRA_ENV: "/etc/infra/infra.env"
+      # Where the panel SSHes for host-level operations (the firewall). The
+      # key's authorized_keys entry forces bin/panel-hostops, so this is not a
+      # root shell — see that script.
+      MASTER_PRIVATE_IP: "${MASTER_PRIVATE_IP}"
+      PANEL_SSH_KEY: "/run/secrets/PANEL_SSH_KEY"
+      DOCKER_CONFIG: "/root/.docker"
+    secrets:
+      - ADMIN_USER
+      - ADMIN_PASSWORD
+      - SESSION_SECRET
+      # Long syntax purely for `mode`. Docker mounts secrets 0444 by default,
+      # and ssh refuses to use a private key that is group- or world-readable
+      # ("Permissions 0444 are too open"), so every host operation would fail.
+      - source: PANEL_SSH_KEY
+        target: PANEL_SSH_KEY
+        mode: 0400
+    volumes:
+      # The manager socket. This is what makes the panel root-equivalent.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Read-write: the panel edits config/app-*.env and shells out to app-env.
+      - /opt/infra:/opt/infra
+      # Read-write: Settings edits the runtime-safe values in place. Writes are
+      # atomic (temp file + rename) and only touch keys that already exist, so a
+      # bug cannot invent boot configuration the cloud-init does not document.
+      - /etc/infra/infra.env:/etc/infra/infra.env
+      # THE registry credential. --with-registry-auth ships the credential from
+      # whichever client runs the deploy; deploys triggered here run in this
+      # container, so without the host's config they would ship nothing and every
+      # worker created later would fail to pull. Shared, so a `docker login` done
+      # in the panel is also visible to the host.
+      - /root/.docker:/root/.docker
+    networks: [monitoring]
+    ports:
+      # host mode on the master; the tunnel connector reaches it over 10.0.0.0/16
+      - target: 3000
+        published: 3000
+        protocol: tcp
+        mode: host
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request;urllib.request.urlopen('http://127.0.0.1:3000/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+      restart_policy:
+        condition: any
+        delay: 10s
+      resources:
+        limits: { cpus: "0.5", memory: 256M }
+
+networks:
+  monitoring:
+    external: true
+
+secrets:
+  ADMIN_USER:     { external: true }
+  ADMIN_PASSWORD: { external: true }
+  SESSION_SECRET: { external: true }
+  PANEL_SSH_KEY:  { external: true }

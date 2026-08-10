@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ cluster_name }} control · preview</title>
+<style>{{ inline_css|safe }}</style>
+</head>
+<body>
+<div class="shell">
+
+  <nav class="rail" aria-label="Sections">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">{{ cluster_name[:2]|upper }}</div>
+      <div>
+        <div class="brand-name">{{ cluster_name }}</div>
+        <div class="brand-sub">swarm control</div>
+      </div>
+    </div>
+
+    <div class="nav-label">Cluster</div>
+    {% for item in nav %}
+      <a class="nav-item" href="#view-{{ item.key }}" data-nav="{{ item.key }}"
+         {% if loop.first %}aria-current="page"{% endif %}>
+        <span class="dot" aria-hidden="true"></span>{{ item.label }}
+      </a>
+    {% endfor %}
+
+    <div class="nav-label">Preview</div>
+    <a class="nav-item" href="#view-login"><span class="dot" aria-hidden="true"></span>Sign-in screen</a>
+
+    <div class="rail-foot">
+      <button class="btn btn-sm" type="button" data-theme-toggle style="width:100%">Switch theme</button>
+    </div>
+  </nav>
+
+  <div>
+    <header class="topbar">
+      <div class="crumb" id="crumb">{{ cluster_name }} / <strong>Overview</strong></div>
+      <div class="topbar-right">
+        <span class="pill warn plain">preview · dummy data</span>
+        <span class="pill mute plain mono">admin</span>
+      </div>
+    </header>
+
+    <main>
+      <section data-view="overview">{% include "_overview.html" %}</section>
+      <section data-view="apps" hidden>{% include "_apps.html" %}</section>
+
+      {% for d in details %}
+      <section data-view="app-{{ d.app_entry.key }}-{{ d.env_name }}" hidden>
+        {% with app_entry = d.app_entry, env_name = d.env_name, svc = d.svc,
+                tab = d.tab, editable = d.editable, pairs = d.pairs, logs = d.logs,
+                creds = d.creds, access = d.access, webhook = d.webhook,
+                deployments = d.deployments, registries = d.registries,
+                firewall = d.firewall %}
+          {% include "_app_detail.html" %}
+        {% endwith %}
+      </section>
+      {% endfor %}
+
+      <section data-view="cluster" hidden>{% include "_cluster.html" %}</section>
+      <section data-view="autoscaler" hidden>{% include "_autoscaler.html" %}</section>
+      <section data-view="alerts" hidden>{% include "_alerts.html" %}</section>
+      <section data-view="settings" hidden>{% include "_settings.html" %}</section>
+
+      <section data-view="login" hidden>
+        <div class="page-head">
+          <div>
+            <h1>Sign-in screen</h1>
+            <p>What you see before authenticating. Credentials come from docker secrets,
+               set once in <code>master-cloud-init.yaml</code>.</p>
+          </div>
+        </div>
+        <div class="login-card" style="margin:0">
+          <div class="brand" style="padding:0">
+            <div class="brand-mark" aria-hidden="true">{{ cluster_name[:2]|upper }}</div>
+            <div>
+              <div class="brand-name">{{ cluster_name }}</div>
+              <div class="brand-sub">swarm control</div>
+            </div>
+          </div>
+          <h1>Sign in</h1>
+          <p>This panel can redeploy production and read every application credential.</p>
+          <form class="stack" onsubmit="return false">
+            <div class="field">
+              <label for="pv-user">Username</label>
+              <input id="pv-user" type="text" value="admin" style="font-family:var(--ui)">
+            </div>
+            <div class="field">
+              <label for="pv-pass">Password</label>
+              <input id="pv-pass" type="password" value="hunter2hunter2" style="font-family:var(--ui)">
+            </div>
+            <button class="btn btn-primary" type="submit" style="width:100%; justify-content:center">Sign in</button>
+          </form>
+        </div>
+        <p class="hint" style="margin-top:14px">
+          Six failed attempts locks the source address out for five minutes. Passwords are
+          compared in constant time and never stored in plaintext beyond that comparison.
+        </p>
+      </section>
+    </main>
+  </div>
+</div>
+
+<script>{{ inline_js|safe }}</script>
+<script>
+/* Preview-only: hash routing between views. All widget behaviour comes from the
+   shared app.js above, so what you click here is the same code the panel runs. */
+(function () {
+  var LABEL = {{ labels|tojson }};
+  var CLUSTER = {{ cluster_name|tojson }};
+
+  function show(name) {
+    var found = false;
+    document.querySelectorAll("[data-view]").forEach(function (s) {
+      var match = s.getAttribute("data-view") === name;
+      s.hidden = !match;
+      if (match) { found = true; }
+    });
+    if (!found) { return show("overview"); }
+    document.querySelectorAll("[data-nav]").forEach(function (a) {
+      var key = a.getAttribute("data-nav");
+      var on = key === name || (name.indexOf("app-") === 0 && key === "apps");
+      if (on) { a.setAttribute("aria-current", "page"); }
+      else { a.removeAttribute("aria-current"); }
+    });
+    document.getElementById("crumb").innerHTML =
+      CLUSTER + " / <strong>" + (LABEL[name] || name) + "</strong>";
+    window.scrollTo(0, 0);
+  }
+
+  window.addEventListener("hashchange", function () {
+    show((location.hash || "#view-overview").replace(/^#view-/, ""));
+  });
+  show((location.hash || "#view-overview").replace(/^#view-/, ""));
+})();
+</script>
+</body>
+</html>

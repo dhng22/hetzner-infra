@@ -1,0 +1,71 @@
+<div class="page-head">
+  <div>
+    <h1>Alerts</h1>
+    <p>Rules evaluated by vmalert and routed by Alertmanager to your webhook.
+       Firing rules reach you; this page is for checking that the ones you expect exist.</p>
+  </div>
+</div>
+
+{% set firing = alerts|selectattr('state', 'equalto', 'firing')|rejectattr('name', 'equalto', 'Watchdog')|list %}
+{% set pending = alerts|selectattr('state', 'equalto', 'pending')|list %}
+
+<div class="tiles">
+  <div class="tile {{ 'is-bad' if firing else 'is-ok' }}">
+    <span class="k">Firing</span>
+    <span class="v">{{ firing|length }}</span>
+    <span class="m">excluding the heartbeat</span>
+  </div>
+  <div class="tile {{ 'is-warn' if pending else '' }}">
+    <span class="k">Pending</span>
+    <span class="v">{{ pending|length }}</span>
+    <span class="m">threshold crossed, waiting out `for`</span>
+  </div>
+  <div class="tile">
+    <span class="k">Rules</span>
+    <span class="v">{{ alerts|length }}</span>
+    <span class="m">across all groups</span>
+  </div>
+  {% set wd = alerts|selectattr('name', 'equalto', 'Watchdog')|first %}
+  <div class="tile {{ 'is-ok' if wd and wd.state == 'firing' else 'is-bad' }}">
+    <span class="k">Heartbeat</span>
+    <span class="v" style="font-size:20px">{{ 'alive' if wd and wd.state == 'firing' else 'SILENT' }}</span>
+    <span class="m">Watchdog must always be firing</span>
+  </div>
+</div>
+
+{% if not wd or wd.state != 'firing' %}
+<div class="banner bad">
+  <div><strong>The heartbeat is not firing.</strong> Watchdog fires permanently by design, so
+  silence means rules are not being evaluated or the receiver is unreachable — not that
+  everything is fine.</div>
+</div>
+{% endif %}
+
+<section class="panel">
+  <div class="panel-head"><h2>Rules</h2></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Rule</th><th>Group</th><th>Severity</th><th>State</th><th>Summary</th></tr></thead>
+      <tbody>
+        {% for al in alerts %}
+        <tr>
+          <td><strong class="mono">{{ al.name }}</strong></td>
+          <td class="mono muted">{{ al.group }}</td>
+          <td>
+            <span class="pill {{ 'bad' if al.severity == 'critical' else 'warn' if al.severity == 'warning' else 'mute' }} plain">
+              {{ al.severity }}
+            </span>
+          </td>
+          <td><span class="pill {{ al.tone }}">{{ al.state }}</span></td>
+          <td class="muted">{{ al.summary }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="panel-note">
+    Rules live in <code>config/alerts.yml</code> and are unit-tested by
+    <code>config/alerts_test.yml</code>. Run <code>promtool test rules</code> after editing —
+    a rule whose selector has drifted looks exactly like a rule with nothing to report.
+  </div>
+</section>

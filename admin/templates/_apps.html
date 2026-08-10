@@ -1,0 +1,43 @@
+<div class="page-head">
+  <div>
+    <h1>Apps</h1>
+    <p>Every service in the cluster, grouped by what it does. The API runs in two
+       environments; open it to edit configuration or redeploy.</p>
+  </div>
+</div>
+
+{% for category, items in grouped %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>{{ category }}</h2>
+    <span class="spacer"></span>
+    <span class="eyebrow">{{ items|length }} app{{ '' if items|length == 1 else 's' }}</span>
+  </div>
+  <div class="rows">
+    {% for a in items %}
+      {% for env_name, svc in a.envs.items() %}
+      <a class="row {{ svc.tone }}" href="{{ app_href(a.key, env_name) }}">
+        <span class="stripe"></span>
+        <span>
+          <span class="row-title">
+            {{ a.display }}
+            {% if a.environments|length > 1 %}<span class="pill mute plain">{{ env_name }}</span>{% endif %}
+            {% if a.editable %}<span class="pill mute plain">editable</span>{% endif %}
+          </span>
+          <span class="row-sub">{{ svc.name }} · {{ svc.image_short }}</span>
+        </span>
+        <span class="row-metric hide-sm">
+          <span class="k">{{ svc.mode }}</span>
+          <span class="v num">{{ svc.running }}/{{ svc.desired }}</span>
+        </span>
+        <span class="row-metric hide-sm">
+          <span class="k">Updated</span>
+          <span class="v">{{ svc.updated }}</span>
+        </span>
+        <span class="pill {{ svc.tone }}">{{ svc.state }}</span>
+      </a>
+      {% endfor %}
+    {% endfor %}
+  </div>
+</section>
+{% endfor %}

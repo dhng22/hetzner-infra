@@ -1,0 +1,62 @@
+{# Reusable editable settings form. Used whole on Settings, and filtered to the
+   Scaling group on the Autoscaler page, so there is one implementation of
+   "edit a value in infra.env and redeploy what depends on it". #}
+<form method="post" action="{{ settings_href() }}" {% if preview %}data-preview{% endif %}>
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+
+  {% for group in groups %}
+  <section class="panel">
+    <div class="panel-head">
+      <h2>{{ group.title }}</h2>
+      <span class="spacer"></span>
+      {% set n = group.rows|selectattr('editable')|list|length %}
+      <span class="eyebrow">{{ n }} of {{ group.rows|length }} editable</span>
+    </div>
+
+    {% for row in group.rows %}
+    <div class="setting-row">
+      <label for="set-{{ row.key }}">
+        <span class="mono">{{ row.key }}</span>
+      </label>
+
+      {% if row.editable %}
+        <input id="set-{{ row.key }}" type="text" name="value__{{ row.key }}" value="{{ row.value }}">
+        <input type="hidden" name="key" value="{{ row.key }}">
+      {% elif row.masked %}
+        <span class="secret-val">
+          <span class="mono masked" data-secret-text="{{ row.value }}">••••••••••••</span>
+          <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
+        </span>
+      {% else %}
+        <input id="set-{{ row.key }}" type="text" value="{{ row.value }}" readonly>
+      {% endif %}
+
+      <p class="why">
+        {% if not row.editable %}
+          <strong>{{ 'Set at boot' if row.mode == 'boot' else 'Docker secret' }}.</strong>
+          {% if row.mode == 'secret' %}
+            Swarm secrets are immutable and a service's reference is fixed at deploy time, so
+            changing this is a versioned-secret rotation, not an edit — do it in
+            <code>master-cloud-init.yaml</code> and re-run bootstrap.
+          {% endif %}
+        {% endif %}
+        {{ row.why }}
+        {% if row.editable and row.stack %}
+          <em>Saving redeploys the {{ row.stack }} stack.</em>
+        {% elif row.editable %}
+          <em>No redeploy needed.</em>
+        {% endif %}
+      </p>
+    </div>
+    {% endfor %}
+  </section>
+  {% endfor %}
+
+  <div class="sticky-save">
+    <button class="btn btn-primary" type="submit">Save and apply</button>
+    <span class="muted">
+      Only changed values are written. The stacks they affect are redeployed for you;
+      the app stack always goes through the safe path that preserves replicas and image.
+    </span>
+  </div>
+</form>

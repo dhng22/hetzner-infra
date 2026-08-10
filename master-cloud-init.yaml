@@ -4,7 +4,7 @@
 # =============================================================================
 # EDIT ONLY THE BLOCK MARKED "VARIABLES". Everything below it is generic.
 #
-# Server: CPX31 (4 vCPU / 8 GB). The master runs Dokploy, both Redis
+# Server: CPX31 (4 vCPU / 8 GB). The master runs the admin panel, both Redis
 # instances, VictoriaMetrics, Loki, Grafana and the autoscaler. It runs
 # NO application tasks and NO cloudflared — ingress lives entirely on the
 # workers, so losing this box costs you monitoring and scaling, not uptime.
@@ -47,7 +47,7 @@ write_files:
       #   aichat.mydomain.com           production
       #   staging-aichat.mydomain.com   staging
       #   grafana-aichat.mydomain.com   dashboards
-      #   dokploy-aichat.mydomain.com   Dokploy UI
+      #   admin-aichat.mydomain.com     admin panel
 
       # --- Hetzner ------------------------------------------------------------
       HCLOUD_TOKEN=REPLACE_ME
@@ -57,7 +57,10 @@ write_files:
       WORKER_IMAGE=ubuntu-24.04
       WORKER_TYPE=cpx21              # shared worker pool
 
-      # --- container registry (GitHub Actions builds, GHCR hosts) -------------
+      # --- container registry: FIRST BOOT ONLY --------------------------------
+      # Used once, for the initial `docker login` so the very first deploy can
+      # pull. After that the panel owns registry auth (Apps > API > Deployments),
+      # which is per-registry and can be changed without touching this file.
       GHCR_USER=your-github-username
       GHCR_TOKEN=REPLACE_ME          # PAT with read:packages
 
@@ -67,11 +70,24 @@ write_files:
       #   staging-${APP_NAME}.${ROOT_DOMAIN}  -> http://api-staging:8080
       CF_TUNNEL_TOKEN=REPLACE_ME
 
-      # --- MongoDB Atlas: separate databases per environment -----------------
+      # --- FIRST BOOT ONLY ------------------------------------------------------
+      # The four values below are copied into config/app-<env>.env once, so that
+      # this file stays the only thing you fill in to stand the cluster up.
+      # After that they are dead: the panel owns them and these copies go stale.
+      # They are hidden in Settings for exactly that reason.
+      #
+      #   Mongo URI       -> Apps > API > <env> > Environment
+      #   Redis password  -> Apps > Redis > <env> > Credentials
+      #
+      # Changing them here later does nothing — an existing app-<env>.env always
+      # wins, so a re-run of bootstrap cannot clobber what you set in the panel.
+
+      # MongoDB Atlas: separate databases per environment.
       MONGO_URI_PROD=mongodb+srv://user:pass@cluster.mongodb.net/appdb?retryWrites=true&w=majority
       MONGO_URI_STAGING=mongodb+srv://user:pass@cluster.mongodb.net/appdb_staging?retryWrites=true&w=majority
 
-      # --- Redis --------------------------------------------------------------
+      # Redis. One value per environment, enforced by the server and used by the
+      # API and the exporter — the panel keeps all three in step.
       REDIS_PASSWORD_PROD=REPLACE_ME_LONG_RANDOM
       REDIS_PASSWORD_STAGING=REPLACE_ME_LONG_RANDOM
 
@@ -79,13 +95,35 @@ write_files:
       GRAFANA_ADMIN_USER=admin
       GRAFANA_ADMIN_PASSWORD=REPLACE_ME_LONG_RANDOM
 
-      # --- Application images -------------------------------------------------
-      # Pin production to an immutable tag. NEVER :latest — Swarm compares the
-      # reference string and silently no-ops the deploy if it is unchanged.
-      # Only the FIRST deploy uses these. After that, CI sets the image with
-      # docker service update, and the autoscaler owns the replica count.
-      APP_IMAGE_PROD=ghcr.io/you/your-ktor-app:sha-abc1234
-      APP_IMAGE_STAGING=ghcr.io/you/your-ktor-app:sha-abc1234
+      # --- Admin panel --------------------------------------------------------
+      # The web console at admin-${APP_NAME}.${ROOT_DOMAIN}. It can redeploy
+      # production and read every application credential, so this password is
+      # the key to the cluster: make it long and unique, and put the hostname
+      # behind Cloudflare Access as a second factor.
+      ADMIN_USER=admin
+      ADMIN_PASSWORD=REPLACE_ME_LONG_RANDOM
+
+      # --- Alerting -----------------------------------------------------------
+      # Where alerts actually land. A Slack incoming webhook, or a Discord
+      # webhook with /slack appended. Bootstrap REFUSES to start without it.
+      # That is deliberate: an alerting stack that generates, groups, dispatches
+      # and then discards everything is worse than having none, because it looks
+      # like it is working right up until the moment you needed it.
+      ALERT_WEBHOOK_URL=REPLACE_ME
+
+      # --- first image: FIRST BOOT ONLY ---------------------------------------
+      # What the services are created with. From the next deploy onward CI owns
+      # the image and bin/app-env pins whatever is live, so these are never read
+      # again — unless a service is deleted and recreated, when they decide what
+      # it comes back as. The panel shows the LIVE image on the API page; it does
+      # not show these, because they stop being true within a day.
+      #
+      # Use an immutable tag. A moving tag like :prod-latest works here (nothing
+      # exists yet, so there is nothing to no-op against), but a recreated
+      # service would silently come back on whatever is newest rather than the
+      # build you last tested.
+      APP_IMAGE_PROD=ghcr.io/you/your-ktor-app:prod-abc1234
+      APP_IMAGE_STAGING=ghcr.io/you/your-ktor-app:staging-abc1234
       APP_PORT=8080
       APP_METRICS_PATH=/metrics
 
@@ -150,6 +188,43 @@ write_files:
       exec > >(tee -a /var/log/infra-bootstrap.log) 2>&1
       echo "=== bootstrap started $(date -Is) ==="
 
+      # --- preflight ----------------------------------------------------------
+      # This script is written by cloud-init, but the rest of the bundle is not.
+      # Say so plainly instead of failing later on a missing stack file.
+      for required in stacks/app.yml stacks/monitoring.yml stacks/admin.yml \
+                      config/vmagent.yml.tpl autoscaler/Dockerfile admin/Dockerfile \
+                      bin/app-env bin/stack-deploy bin/panel-hostops; do
+        if [ ! -e "/opt/infra/$required" ]; then
+          echo "FATAL: /opt/infra/$required is missing." >&2
+          echo "The bundle was never copied to the master. Uncomment the clone line" >&2
+          echo "in the cloud-config, or scp stacks/ config/ autoscaler/ admin/ bin/" >&2
+          echo "into /opt/infra and re-run this script." >&2
+          exit 1
+        fi
+      done
+      chmod +x /opt/infra/bin/* 2>/dev/null || true
+
+      # Every REPLACE_ME is checked here, before anything is installed or
+      # created. Discovering a missing token after swarm init and two stack
+      # deploys leaves you reconciling half a cluster by hand.
+      missing=()
+      for v in APP_NAME ROOT_DOMAIN HCLOUD_TOKEN HCLOUD_NETWORK_NAME \
+               GHCR_USER GHCR_TOKEN CF_TUNNEL_TOKEN \
+               MONGO_URI_PROD MONGO_URI_STAGING \
+               REDIS_PASSWORD_PROD REDIS_PASSWORD_STAGING \
+               GRAFANA_ADMIN_PASSWORD ALERT_WEBHOOK_URL \
+               ADMIN_USER ADMIN_PASSWORD \
+               APP_IMAGE_PROD APP_IMAGE_STAGING APP_SERVICE APP_CPU_LIMIT; do
+        case "${!v:-}" in
+          ""|REPLACE_ME*) missing+=("$v") ;;
+        esac
+      done
+      if [ "${#missing[@]}" -gt 0 ]; then
+        echo "FATAL: unset or still REPLACE_ME in /etc/infra/infra.env:" >&2
+        printf '  - %s\n' "${missing[@]}" >&2
+        exit 1
+      fi
+
       PRIVATE_IP="$(ip -4 -o addr show | awk '$4 ~ /^10\./ {print $4}' | cut -d/ -f1 | head -n1)"
       if [ -z "$PRIVATE_IP" ]; then
         echo "FATAL: no private network IP. Attach the server to a private network." >&2
@@ -182,32 +257,95 @@ write_files:
       docker plugin install grafana/loki-docker-driver:3.1.1 \
         --alias loki --grant-all-permissions || true
 
-      # --- secrets, one set per environment -----------------------------------
+      # --- secrets -------------------------------------------------------------
+      # Infrastructure credentials only. Application credentials (MONGO_URI,
+      # REDIS_PASSWORD) are deliberately NOT secrets: they are plain env vars in
+      # config/app-<env>.env so the admin panel can edit them. See the tradeoff
+      # note in the README.
       mk_secret() { printf '%s' "$2" | docker secret create "$1" - 2>/dev/null || true; }
-      mk_secret MONGO_URI_prod            "$MONGO_URI_PROD"
-      mk_secret MONGO_URI_staging         "$MONGO_URI_STAGING"
-      mk_secret REDIS_PASSWORD_prod       "$REDIS_PASSWORD_PROD"
-      mk_secret REDIS_PASSWORD_staging    "$REDIS_PASSWORD_STAGING"
       mk_secret CF_TUNNEL_TOKEN           "$CF_TUNNEL_TOKEN"
       mk_secret HCLOUD_TOKEN              "$HCLOUD_TOKEN"
       mk_secret GRAFANA_ADMIN_PASSWORD    "$GRAFANA_ADMIN_PASSWORD"
+      mk_secret ALERT_WEBHOOK_URL         "$ALERT_WEBHOOK_URL"
+      mk_secret ADMIN_USER                "$ADMIN_USER"
+      mk_secret ADMIN_PASSWORD            "$ADMIN_PASSWORD"
+      # Signs admin session cookies. Generated here, never in infra.env: it is
+      # not a knob, and regenerating it simply logs everyone out.
+      mk_secret SESSION_SECRET            "$(openssl rand -hex 32)"
+
+      # --- host access for the admin panel -------------------------------------
+      # The panel manages the firewall, which lives on the host and is not
+      # reachable through the docker socket. It gets one key, and that key's
+      # authorized_keys entry FORCES bin/panel-hostops — so the panel cannot run
+      # an arbitrary command as root, only the handful of verbs that script
+      # implements. `restrict` also disables port/agent/X11 forwarding and PTYs.
+      PANEL_KEY=/opt/infra/state/panel_ssh
+      mkdir -p /opt/infra/state && chmod 700 /opt/infra/state
+      if [ ! -f "$PANEL_KEY" ]; then
+        ssh-keygen -t ed25519 -N "" -C "admin-panel@${APP_NAME}" -f "$PANEL_KEY" >/dev/null
+      fi
+      mkdir -p /root/.ssh && chmod 700 /root/.ssh
+      touch /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
+      PANEL_PUB="$(cat "${PANEL_KEY}.pub")"
+      if ! grep -qF "$PANEL_PUB" /root/.ssh/authorized_keys 2>/dev/null; then
+        printf 'command="/opt/infra/bin/panel-hostops",restrict %s\n' "$PANEL_PUB" \
+          >> /root/.ssh/authorized_keys
+        echo "installed forced-command key for the admin panel"
+      fi
+      mk_secret PANEL_SSH_KEY "$(cat "$PANEL_KEY")"
+
+      # --- seed application config from infra.env ------------------------------
+      # Keeps master-cloud-init.yaml the only file you fill in. Written once; on
+      # later boots the existing file wins, so edits made in the admin panel are
+      # never clobbered by a re-run.
+      seed_env() {
+        local file="/opt/infra/config/app-$1.env"
+        if [ -s "$file" ] && grep -q '^MONGO_URI=' "$file"; then
+          echo "keeping existing $file"
+          return
+        fi
+        {
+          echo "# $1 application configuration."
+          echo "# Seeded from /etc/infra/infra.env at first boot."
+          echo "# Edit in the admin panel (Apps -> API -> $1 -> Environment),"
+          echo "# or with: app-env set KEY=VALUE $1"
+          echo
+          printf 'MONGO_URI=%s\n' "$2"
+          printf 'REDIS_PASSWORD=%s\n' "$3"
+          printf 'LOG_LEVEL=%s\n' "$4"
+        } > "$file"
+        chmod 600 "$file"
+        echo "seeded $file"
+      }
+      seed_env prod    "$MONGO_URI_PROD"    "$REDIS_PASSWORD_PROD"    INFO
+      seed_env staging "$MONGO_URI_STAGING" "$REDIS_PASSWORD_STAGING" DEBUG
 
       # --- render templates ---------------------------------------------------
       envsubst < /opt/infra/config/vmagent.yml.tpl > /opt/infra/config/vmagent.yml
       cp /opt/infra/config/worker-cloud-init.yaml.tpl \
          /opt/infra/config/worker-cloud-init.yaml
 
-      # --- build the autoscaler image ----------------------------------------
+      # --- build local images --------------------------------------------------
       docker build -t "${APP_NAME}/autoscaler:latest" /opt/infra/autoscaler
+      docker build -t "${APP_NAME}/admin:latest"      /opt/infra/admin
 
       # --- monitoring first: the autoscalers need somewhere to read from -----
       docker stack deploy -c /opt/infra/stacks/monitoring.yml monitoring
 
       # --- one stack, both environments, one tunnel --------------------------
-      # --with-registry-auth ships the GHCR credential with the service spec so
-      # a worker created an hour from now can still pull the image.
-      envsubst < /opt/infra/stacks/app.yml \
-        | docker stack deploy --with-registry-auth -c - app
+      # Deployed through bin/app-env so there is exactly ONE deploy path in the
+      # system. It layers config/app-*.env over the stack file, and on every
+      # run after this one it pins the live replica count and CI's deployed
+      # image so a redeploy cannot undo the autoscaler or roll production back.
+      # Nothing is live yet here, so it falls back to infra.env.
+      # It passes --with-registry-auth, which ships the GHCR credential with the
+      # service spec so a worker created an hour from now can still pull.
+      if [ -d /opt/infra/bin ]; then
+        chmod +x /opt/infra/bin/*
+        ln -sf /opt/infra/bin/app-env /usr/local/bin/app-env
+      fi
+      touch /opt/infra/config/app-prod.env /opt/infra/config/app-staging.env
+      /opt/infra/bin/app-env deploy
 
       # --- optional deploy user, so CI never needs root -----------------------
       if [ -n "${CI_SSH_PUBLIC_KEY:-}" ]; then
@@ -222,6 +360,12 @@ write_files:
         echo "CI_SSH_PUBLIC_KEY empty — skipping deploy user"
       fi
 
+      # --- admin panel ---------------------------------------------------------
+      # Deployed last: it is the console for a cluster that must already be up.
+      # It is the ONLY thing here with both the docker socket and a login form,
+      # so it is deliberately the smallest surface we can get away with.
+      envsubst < /opt/infra/stacks/admin.yml | docker stack deploy -c - admin
+
       echo "=== bootstrap finished $(date -Is) ==="
       echo
       echo "Workers do not exist yet — the autoscaler creates the first one on"
@@ -231,15 +375,37 @@ write_files:
       echo "  ${APP_NAME}.${ROOT_DOMAIN}          -> http://api-prod:${APP_PORT}"
       echo "  staging-${APP_NAME}.${ROOT_DOMAIN}  -> http://api-staging:${APP_PORT}"
       echo "  grafana-${APP_NAME}.${ROOT_DOMAIN}  -> http://grafana:3000"
-      echo "  dokploy-${APP_NAME}.${ROOT_DOMAIN}  -> http://${PRIVATE_IP}:3000"
+      echo "  admin-${APP_NAME}.${ROOT_DOMAIN}    -> http://${PRIVATE_IP}:3000"
       echo
-      echo "Put the last two behind Cloudflare Access. They are your cluster."
+      echo "Put the last two behind Cloudflare Access. The admin panel holds the"
+      echo "docker socket and can redeploy production — its password is the"
+      echo "cluster. Access in front of it is your second factor."
 
 runcmd:
   - [ bash, -lc, "mkdir -p /opt/infra" ]
-  # Put the bundle on the box. Either clone your private repo here:
-  # - [ bash, -lc, "git clone https://TOKEN@github.com/you/infra.git /tmp/i && cp -r /tmp/i/* /opt/infra/" ]
-  # ...or scp stacks/ config/ autoscaler/ into /opt/infra and run bootstrap by hand.
+  # Put the bundle on the box. Uncomment ONE of these.
+  #
+  # A private repo works fine — a PAT in the URL is all git needs. Two details
+  # that are easy to get wrong:
+  #   * `rm -rf /tmp/i/.git` BEFORE copying. git stores the remote URL, token
+  #     and all, in .git/config; without this your PAT sits in a file on the
+  #     master forever.
+  #   * `cp -a /tmp/i/.` (dot, not `*`) copies dotfiles and preserves the
+  #     executable bit on bin/. `cp -r /tmp/i/*` silently skips dotfiles.
+  #
+  # Use a fine-grained PAT scoped to CONTENTS:READ on this one repo, and revoke
+  # it once the master is up — it is only needed for this single clone.
+  #
+  # Note the whole cloud-config, including every secret in the VARIABLES block,
+  # stays readable from the instance metadata service for the life of the
+  # server. The git token is not a new exposure, but it is one more thing in
+  # there, which is why a short-lived scoped token is worth the extra minute.
+  #
+  # - [ bash, -lc, "git clone --depth 1 https://TOKEN@github.com/you/infra.git /tmp/i && rm -rf /tmp/i/.git && cp -a /tmp/i/. /opt/infra/ && rm -rf /tmp/i" ]
+  #
+  # ...or leave both commented, scp the bundle to /opt/infra yourself, and run
+  # /opt/infra/bootstrap.sh by hand. No token ever touches the server.
+  #
   - [ bash, -lc, "/opt/infra/bootstrap.sh" ]
 
 final_message: "Master ready after $UPTIME seconds. See /var/log/infra-bootstrap.log"

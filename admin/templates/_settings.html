@@ -1,0 +1,19 @@
+<div class="page-head">
+  <div>
+    <h1>Settings</h1>
+    <p>Everything in <code>/etc/infra/infra.env</code>, the one file you fill in to stand this
+       cluster up. Values that can safely change at runtime are editable here; the rest say
+       why they are not.</p>
+  </div>
+</div>
+
+<div class="banner">
+  <div>
+    Saving writes the value into <code>infra.env</code> and redeploys whatever depends on it.
+    Day-to-day application configuration lives under
+    <a href="{{ section_href({'key': 'apps'}) }}">Apps</a> instead — this page is the
+    cluster's shape.
+  </div>
+</div>
+
+{% include "_settings_form.html" %}

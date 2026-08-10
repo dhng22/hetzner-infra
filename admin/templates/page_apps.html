@@ -1,0 +1,4 @@
+{% extends "base.html" %}
+{% block title %}Apps · {{ cluster_name }}{% endblock %}
+{% block crumb %}{{ cluster_name }} / <strong>Apps</strong>{% endblock %}
+{% block main %}{% include "_apps.html" %}{% endblock %}

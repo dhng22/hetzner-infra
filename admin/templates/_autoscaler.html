@@ -1,0 +1,73 @@
+<div class="page-head">
+  <div>
+    <h1>Autoscaler</h1>
+    <p>Load is absorbed cheapest first: replicas in seconds, nodes in about two minutes.
+       Coming down the order reverses — shed replicas first, remove the node later.</p>
+  </div>
+</div>
+
+<div class="tiles">
+  <div class="tile">
+    <span class="k">Replicas</span>
+    <span class="v">{{ a.current_replicas|int }}<span class="muted" style="font-size:16px">/{{ a.desired_replicas|int }}</span></span>
+    <span class="m">ceiling {{ a.max_replicas|int }}</span>
+    <div class="meter"><i style="width: {{ (a.current_replicas / a.max_replicas * 100)|round|int if a.max_replicas else 0 }}%"></i></div>
+  </div>
+  <div class="tile">
+    <span class="k">Workers</span>
+    <span class="v">{{ a.current_workers|int }}<span class="muted" style="font-size:16px">/{{ a.desired_workers|int }}</span></span>
+    <span class="m">floor {{ a.min_workers|int }} · ceiling {{ a.max_workers|int }}</span>
+    <div class="meter {% if a.current_workers >= a.max_workers %}is-warn{% endif %}">
+      <i style="width: {{ (a.current_workers / a.max_workers * 100)|round|int if a.max_workers else 0 }}%"></i>
+    </div>
+  </div>
+  <div class="tile">
+    <span class="k">SLO</span>
+    <span class="v">{{ a.slo|round|int }}<small style="font-size:14px"> ms</small></span>
+    <span class="m">the number everything derives from</span>
+  </div>
+  <div class="tile">
+    <span class="k">Last loop</span>
+    <span class="v" style="font-size:20px">{{ 'just now' if a.last_loop else '—' }}</span>
+    <span class="m">runs every 60s</span>
+  </div>
+</div>
+
+{% if a.desired_replicas > a.current_replicas %}
+<div class="banner warn">
+  <div><strong>Scaling up.</strong> The autoscaler wants {{ a.desired_replicas|int }} replicas and
+  has {{ a.current_replicas|int }}. If that will not fit, it provisions a worker first.</div>
+</div>
+{% endif %}
+
+<section class="panel">
+  <div class="panel-head"><h2>Signals</h2></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Signal</th><th class="num">Now</th><th>Role</th></tr></thead>
+      <tbody>
+        {% for sig in a.signals %}
+        <tr>
+          <td><strong>{{ sig.key }}</strong></td>
+          <td class="num mono">{% if sig.value is not none %}{{ sig.value|round(1) }}{{ sig.unit }}{% else %}no data{% endif %}</td>
+          <td class="muted">{{ sig.note }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="panel-note">
+    Node CPU is never a scaling trigger — it averages in exporters, the tunnel connector and
+    staging, none of which should influence production capacity.
+  </div>
+</section>
+
+<div class="page-head" style="margin-top:26px">
+  <div>
+    <h1 style="font-size:20px">Policy</h1>
+    <p>These are the numbers the loop above runs on. Change one and the monitoring stack is
+       redeployed so the autoscaler picks it up.</p>
+  </div>
+</div>
+
+{% include "_settings_form.html" %}

@@ -1,0 +1,223 @@
+#!/usr/bin/env bash
+# =============================================================================
+# smoke-test — prove the cluster actually works, on the master, after a deploy.
+# =============================================================================
+#   smoke-test          read-only checks; safe on production at any time
+#   smoke-test --deep   also performs a real no-op deploy and a real CI webhook
+#                       call. Both are designed to be non-disruptive, but they
+#                       do write. Run it once after bootstrap, then read-only.
+#
+# Every check here exists because something in this system can fail silently:
+# a panel with no docker CLI, a deploy that ships no registry credential, an
+# alert rule that can never fire. "docker service ls looks fine" is not proof.
+# =============================================================================
+
+set -uo pipefail
+
+INFRA_DIR="${INFRA_DIR:-/opt/infra}"
+INFRA_ENV="${INFRA_ENV:-/etc/infra/infra.env}"
+DEEP=0
+[ "${1:-}" = "--deep" ] && DEEP=1
+
+PASS=0; FAIL=0; SKIP=0
+G="\033[32m"; R="\033[31m"; Y="\033[33m"; D="\033[2m"; Z="\033[0m"
+
+ok()   { PASS=$((PASS+1)); printf "  ${G}pass${Z}  %s\n" "$1"; }
+bad()  { FAIL=$((FAIL+1)); printf "  ${R}FAIL${Z}  %s\n" "$1"; [ -n "${2:-}" ] && printf "        ${D}%s${Z}\n" "$2"; }
+skip() { SKIP=$((SKIP+1)); printf "  ${Y}skip${Z}  %s ${D}(%s)${Z}\n" "$1" "${2:-}"; }
+head_() { printf "\n${D}--- %s ---${Z}\n" "$1"; }
+
+check() { # check <label> <command...>
+  local label="$1"; shift
+  local out
+  if out="$("$@" 2>&1)"; then ok "$label"; else bad "$label" "$(echo "$out" | tail -2)"; fi
+}
+
+[ -f "$INFRA_ENV" ] || { echo "no $INFRA_ENV — run this on the master"; exit 1; }
+set -a; . "$INFRA_ENV"; set +a
+APP_STACK="${STACK_NAME:-app}"
+
+# ---------------------------------------------------------------------------
+head_ "host"
+check "docker engine responds"        docker info
+if docker info 2>/dev/null | grep -q "Swarm: active"; then ok "swarm is active"; else bad "swarm is active"; fi
+if ufw status 2>/dev/null | grep -q "Status: active"; then ok "ufw is enabled"; else bad "ufw is enabled"; fi
+if ufw status 2>/dev/null | grep -qE "^22/tcp .*ALLOW"; then ok "ssh (22) still allowed"; else bad "ssh (22) still allowed" "you may be locked out on next reboot"; fi
+
+# ---------------------------------------------------------------------------
+head_ "images and stacks"
+for img in "${APP_NAME}/autoscaler:latest" "${APP_NAME}/admin:latest"; do
+  if docker image inspect "$img" >/dev/null 2>&1; then ok "image built: $img"; else bad "image built: $img"; fi
+done
+for stack in monitoring "$APP_STACK" admin; do
+  if docker stack ls --format '{{.Name}}' | grep -qx "$stack"; then ok "stack deployed: $stack"; else bad "stack deployed: $stack"; fi
+done
+
+# ---------------------------------------------------------------------------
+head_ "services converged"
+while read -r name replicas; do
+  [ -z "$name" ] && continue
+  running="${replicas%%/*}"; want="${replicas##*/}"
+  if [ "$running" = "$want" ] && [ "$running" != "0" ]; then
+    ok "$name ($replicas)"
+  else
+    bad "$name ($replicas)" "$(docker service ps --no-trunc --format '{{.Error}}' "$name" 2>/dev/null | grep -v '^$' | head -1)"
+  fi
+done < <(docker service ls --format '{{.Name}} {{.Replicas}}')
+
+# ---------------------------------------------------------------------------
+head_ "admin panel container"
+ADMIN_CID="$(docker ps -q -f name=admin_ui | head -1)"
+if [ -z "$ADMIN_CID" ]; then
+  bad "admin container running"
+else
+  ok "admin container running"
+  # The three things that silently make every button in the UI a no-op.
+  check "  panel has the docker CLI"    docker exec "$ADMIN_CID" docker --version
+  check "  panel can reach the socket"  docker exec "$ADMIN_CID" docker service ls
+  check "  panel has an ssh client"     docker exec "$ADMIN_CID" ssh -V
+  if docker exec "$ADMIN_CID" test -s /root/.docker/config.json 2>/dev/null; then
+    ok "  panel has registry credentials"
+  else
+    bad "  panel has registry credentials" "deploys would ship no auth; workers cannot pull private images"
+  fi
+  if docker exec "$ADMIN_CID" test -r /run/secrets/PANEL_SSH_KEY 2>/dev/null; then
+    perms="$(docker exec "$ADMIN_CID" stat -c '%a' /run/secrets/PANEL_SSH_KEY 2>/dev/null)"
+    if [ "$perms" = "400" ] || [ "$perms" = "600" ]; then
+      ok "  ssh key mounted with usable permissions ($perms)"
+    else
+      bad "  ssh key permissions are $perms" "ssh refuses keys readable by group/other"
+    fi
+  else
+    bad "  ssh key mounted"
+  fi
+  check "  health endpoint"             docker exec "$ADMIN_CID" python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:3000/healthz')"
+
+  # The restricted host channel, end to end.
+  if out="$(docker exec "$ADMIN_CID" python -c "import hostops,sys;ok,o=hostops.status();print(o);sys.exit(0 if ok else 1)" 2>&1)"; then
+    ok "  host ops over ssh (ufw-status)"
+  else
+    bad "  host ops over ssh (ufw-status)" "$(echo "$out" | tail -2)"
+  fi
+  if docker exec "$ADMIN_CID" ssh -i /run/secrets/PANEL_SSH_KEY -o IdentitiesOnly=yes \
+       -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=8 \
+       "root@${MASTER_PRIVATE_IP}" "id" >/dev/null 2>&1; then
+    bad "  ssh key is restricted to panel-hostops" "arbitrary commands are being accepted"
+  else
+    ok "  ssh key refuses arbitrary commands"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+head_ "application config"
+for env in prod staging; do
+  f="$INFRA_DIR/config/app-$env.env"
+  if [ -s "$f" ] && grep -q '^MONGO_URI=' "$f"; then ok "config/app-$env.env seeded"; else bad "config/app-$env.env seeded"; fi
+done
+# The password the server enforces must be the one clients are given.
+for env in prod staging; do
+  want="$(grep -m1 '^REDIS_PASSWORD=' "$INFRA_DIR/config/app-$env.env" 2>/dev/null | cut -d= -f2-)"
+  got="$(docker service inspect "${APP_STACK}_redis-$env" \
+        --format '{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{println .}}{{end}}' 2>/dev/null \
+        | grep '^REDIS_PASSWORD=' | cut -d= -f2-)"
+  if [ -n "$want" ] && [ "$want" = "$got" ]; then
+    ok "redis-$env password matches the app's ($env)"
+  else
+    bad "redis-$env password matches the app's ($env)" "server and clients have drifted"
+  fi
+done
+
+# ---------------------------------------------------------------------------
+head_ "monitoring"
+vm() { docker run --rm --network monitoring curlimages/curl:8.10.1 -fsS "$@" 2>/dev/null; }
+if q="$(vm "http://victoriametrics:8428/api/v1/query?query=up" )"; then
+  ok "victoriametrics answers queries"
+  for metric in autoscaler_last_loop_timestamp_seconds autoscaler_max_replicas node_cpu_seconds_total; do
+    if vm "http://victoriametrics:8428/api/v1/query?query=${metric}" | grep -q '"result":\[{'; then
+      ok "  metric present: $metric"
+    else
+      bad "  metric present: $metric" "nothing is scraping it"
+    fi
+  done
+else
+  bad "victoriametrics answers queries"
+fi
+if vm "http://vmalert:8880/api/v1/rules" | grep -q '"name":"Watchdog"'; then
+  ok "vmalert loaded the rules"
+else
+  bad "vmalert loaded the rules"
+fi
+if vm "http://alertmanager:9093/api/v2/status" | grep -q '"cluster"'; then
+  ok "alertmanager is up"
+else
+  bad "alertmanager is up"
+fi
+if vm "http://loki:3100/ready" >/dev/null; then ok "loki is ready"; else bad "loki is ready"; fi
+
+# ---------------------------------------------------------------------------
+head_ "deploy paths (read-only)"
+# Validate the env files the generator consumes: malformed lines are dropped
+# silently at deploy time, so catching them here is the point.
+for env in prod staging; do
+  f="$INFRA_DIR/config/app-$env.env"
+  problems="$(awk -v FS='=' '
+    /^[[:space:]]*(#|$)/ { next }
+    !/=/ { print "  line " NR ": no \"=\" -> ignored at deploy: " $0; next }
+    $1 !~ /^[A-Za-z_][A-Za-z0-9_]*$/ { print "  line " NR ": invalid name: " $1 }
+    $1 == "REDIS_EXTERNAL_PORT" && $2 !~ /^[0-9]+$/ { print "  line " NR ": REDIS_EXTERNAL_PORT is not a port: " $2 }
+  ' "$f" 2>/dev/null)"
+  if [ -z "$problems" ]; then ok "app-$env.env parses cleanly"; else bad "app-$env.env parses cleanly" "$problems"; fi
+done
+
+if [ -x "$INFRA_DIR/bin/app-env" ]; then ok "bin/app-env is executable"; else bad "bin/app-env is executable"; fi
+if [ -x "$INFRA_DIR/bin/stack-deploy" ]; then ok "bin/stack-deploy is executable"; else bad "bin/stack-deploy is executable"; fi
+if [ -x "$INFRA_DIR/bin/panel-hostops" ]; then ok "bin/panel-hostops is executable"; else bad "bin/panel-hostops is executable"; fi
+
+# The webhook must reject a bad token even when everything else is healthy.
+HOOK="http://127.0.0.1:3000/hooks/deploy/app/staging"
+code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$HOOK" -H 'X-Deploy-Token: definitely-wrong' -H 'Content-Type: application/json' -d '{"image":"x:1"}')"
+[ "$code" = "401" ] && ok "webhook rejects a bad token (401)" || bad "webhook rejects a bad token" "got $code"
+
+TOKEN="$(python3 -c "
+import json
+try:
+    print(json.load(open('$INFRA_DIR/state/deploy-tokens.json'))['app']['staging'])
+except Exception:
+    print('')
+" 2>/dev/null)"
+if [ -z "$TOKEN" ]; then
+  skip "webhook accepts a good token" "no token issued yet — open the Deployments tab once"
+else
+  code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$HOOK" -H "X-Deploy-Token: $TOKEN" -H 'Content-Type: application/json' -d '{"image":"ghcr.io/x/y:latest"}')"
+  [ "$code" = "400" ] && ok "webhook refuses :latest with a good token (400)" || bad "webhook refuses :latest" "got $code"
+fi
+
+# ---------------------------------------------------------------------------
+if [ "$DEEP" = "1" ]; then
+  head_ "deep checks (these write)"
+  # A no-op deploy: same config, same image, same replica count. Proves the
+  # whole path works without changing what is running.
+  before_img="$(docker service inspect "${APP_STACK}_api-prod" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}')"
+  before_rep="$(docker service inspect "${APP_STACK}_api-prod" --format '{{.Spec.Mode.Replicated.Replicas}}')"
+  if out="$("$INFRA_DIR/bin/app-env" deploy 2>&1)"; then ok "app-env deploy succeeded"; else bad "app-env deploy" "$(echo "$out" | tail -3)"; fi
+  after_img="$(docker service inspect "${APP_STACK}_api-prod" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}')"
+  after_rep="$(docker service inspect "${APP_STACK}_api-prod" --format '{{.Spec.Mode.Replicated.Replicas}}')"
+  [ "$before_img" = "$after_img" ] && ok "redeploy preserved the image" || bad "redeploy preserved the image" "$before_img -> $after_img"
+  [ "$before_rep" = "$after_rep" ] && ok "redeploy preserved the replica count ($after_rep)" || bad "redeploy preserved replicas" "$before_rep -> $after_rep"
+
+  if out="$("$INFRA_DIR/bin/stack-deploy" monitoring 2>&1)"; then ok "stack-deploy monitoring"; else bad "stack-deploy monitoring" "$(echo "$out" | tail -3)"; fi
+  if "$INFRA_DIR/bin/stack-deploy" app >/dev/null 2>&1; then
+    bad "stack-deploy refuses the app stack" "it should redirect you to app-env"
+  else
+    ok "stack-deploy refuses the app stack"
+  fi
+else
+  head_ "deep checks"
+  skip "no-op deploy, replica/image preservation, stack-deploy" "re-run with --deep"
+fi
+
+# ---------------------------------------------------------------------------
+printf "\n${D}=====================================${Z}\n"
+printf "  ${G}%d passed${Z}   ${R}%d failed${Z}   ${Y}%d skipped${Z}\n" "$PASS" "$FAIL" "$SKIP"
+[ "$FAIL" -eq 0 ] || printf "  ${R}Something above is broken. Do not assume it will fix itself.${Z}\n"
+exit $([ "$FAIL" -eq 0 ] && echo 0 || echo 1)

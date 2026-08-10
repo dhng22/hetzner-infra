@@ -1,0 +1,522 @@
+{% set multi = app_entry.environments|length > 1 %}
+{% set tabs = ['overview']
+   + (['environment'] if editable else [])
+   + (['credentials'] if creds else [])
+   + (['deployments'] if webhook else [])
+   + ['swarm', 'logs'] %}
+
+<div class="page-head">
+  <div>
+    <h1>{{ app_entry.display }}</h1>
+    <p>{{ app_entry.blurb }}</p>
+  </div>
+  <div class="spacer"></div>
+  <div class="inline">
+    {% if access %}
+      {% if access.reachable %}
+        <a class="btn btn-primary" href="{{ access.url }}" target="_blank" rel="noopener">
+          Open{% if multi %} {{ env_name }}{% endif %} ↗
+        </a>
+      {% else %}
+        <span class="pill mute plain mono" title="{{ access.note }}">{{ access.url }}</span>
+      {% endif %}
+    {% endif %}
+    {% if multi %}
+    <div class="seg" role="group" aria-label="Environment">
+      {% for e in app_entry.environments %}
+        <a href="{{ app_href(app_entry.key, e) }}" {% if e == env_name %}aria-current="true"{% endif %}>{{ e }}</a>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{% if access and not access.reachable %}
+<div class="banner"><div>{{ access.note }}</div></div>
+{% endif %}
+
+<div class="tiles">
+  <div class="tile is-{{ svc.tone if svc.tone != 'mute' else '' }}">
+    <span class="k">State</span>
+    <span class="v" style="font-size:22px">{{ svc.state }}</span>
+    <span class="m">{{ svc.mode }} · updated {{ svc.updated }}</span>
+  </div>
+  <div class="tile">
+    <span class="k">Tasks</span>
+    <span class="v">{{ svc.running }}<span class="muted" style="font-size:17px">/{{ svc.desired }}</span></span>
+    <span class="m">{% if app_entry.get('scalable') is sameas false %}replica count owned by the autoscaler{% else %}running / desired{% endif %}</span>
+  </div>
+  <div class="tile" style="grid-column: span 2">
+    <span class="k">Image</span>
+    <span class="v mono" style="font-size:14px; word-break:break-all; font-weight:500">{{ svc.image }}</span>
+  </div>
+</div>
+
+<div class="tabs" data-tabs role="tablist">
+  {% for t in tabs %}
+    <a class="tab" role="tab" data-tab="{{ t }}"
+       aria-selected="{{ 'true' if tab == t else 'false' }}"
+       href="{{ app_href(app_entry.key, env_name, t) }}">{{ t|capitalize }}</a>
+  {% endfor %}
+</div>
+
+<div data-panels>
+
+  <!-- overview ------------------------------------------------------------ -->
+  <div data-panel="overview" {% if tab != 'overview' %}hidden{% endif %}>
+    {% if app_entry.note %}<div class="banner"><div>{{ app_entry.note }}</div></div>{% endif %}
+
+    <section class="panel">
+      <div class="panel-head"><h2>Tasks</h2></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Task</th><th>Node</th><th>State</th><th>Desired</th><th>Since</th></tr></thead>
+          <tbody>
+            {% for t in svc.tasks %}
+            <tr>
+              <td class="mono">{{ t.id }}</td>
+              <td class="mono">{{ t.node }}</td>
+              <td><span class="pill {{ 'ok' if t.state == 'running' else 'warn' }}">{{ t.state }}</span></td>
+              <td class="mono muted">{{ t.desired }}</td>
+              <td class="muted">{{ t.since }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" class="empty">No tasks are scheduled.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    {% if app_entry.deployable %}
+    <section class="panel">
+      <div class="panel-head"><h2>Actions</h2></div>
+      <div class="panel-body">
+        <div class="btn-row">
+          {% for act, label, cls in [('redeploy', 'Redeploy', 'btn-primary'),
+                                     ('restart', 'Rolling restart', ''),
+                                     ('rollback', 'Roll back', 'btn-danger')] %}
+          <form method="post" action="{{ action_href(app_entry.key) }}" {% if preview %}data-preview{% endif %}>
+            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="env" value="{{ env_name }}">
+            <input type="hidden" name="action" value="{{ act }}">
+            <button class="btn {{ cls }}" type="submit">{{ label }}</button>
+          </form>
+          {% endfor %}
+        </div>
+        <p class="hint">
+          Redeploy re-applies the stack with the current configuration. It keeps the live
+          replica count and the image CI last deployed, so it will not undo the autoscaler
+          or roll production back to the bootstrap tag. Roll back returns the service to its
+          previous spec.
+        </p>
+      </div>
+    </section>
+    {% endif %}
+  </div>
+
+  <!-- environment ---------------------------------------------------------- -->
+  {% if editable %}
+  <div data-panel="environment" {% if tab != 'environment' %}hidden{% endif %}>
+    <form method="post" action="{{ env_href(app_entry.key) }}" {% if preview %}data-preview{% endif %}>
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <input type="hidden" name="env" value="{{ env_name }}">
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Environment — {{ env_name }}</h2>
+          <span class="spacer"></span>
+          <button class="btn btn-sm" type="button" data-add-var>Add variable</button>
+        </div>
+        <div class="panel-body">
+          <div class="kv-grid" data-kv>
+            <div class="eyebrow">Name</div><div class="eyebrow">Value</div><div></div>
+            {% for p in pairs %}
+            <input class="k-in" type="text" name="key" value="{{ p.key }}" aria-label="Variable name">
+            <input type="text" name="value" value="{{ p.value }}" aria-label="Value for {{ p.key }}"
+                   {% if p.sensitive %}data-sensitive{% endif %}>
+            <button class="btn btn-sm btn-danger" type="button" data-remove-var
+                    aria-label="Remove {{ p.key }}">Remove</button>
+            {% endfor %}
+          </div>
+          <p class="hint">
+            Injected into <code>{{ svc.name }}</code> at deploy time and read with
+            <code>System.getenv</code>. <code>REDIS_PASSWORD</code> is also what the matching
+            Redis enforces. <code>KTOR_ENV</code>, <code>REDIS_HOST</code> and
+            <code>REDIS_PORT</code> come from the stack file and are refused here.
+          </p>
+        </div>
+        <div class="panel-note">
+          Saving redeploys <strong>both</strong> environments, because a stack deploy reconciles
+          the whole stack. Live replica count and deployed image are preserved.
+        </div>
+      </section>
+
+      <div class="sticky-save">
+        <button class="btn btn-primary" type="submit">Save and deploy</button>
+        <a class="btn" href="{{ app_href(app_entry.key, env_name) }}">Cancel</a>
+        <span class="muted">Changes apply with a rolling, health-gated update.</span>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+
+  <!-- credentials ----------------------------------------------------------- -->
+  {% if creds %}
+  <div data-panel="credentials" {% if tab != 'credentials' %}hidden{% endif %}>
+    <div class="split">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Internal</h2>
+          <span class="spacer"></span>
+          <span class="pill ok plain">in-cluster</span>
+        </div>
+        <div class="panel-body stack">
+          <div>
+            <div class="eyebrow" style="margin-bottom:6px">Connection URL</div>
+            <div class="conn">
+              <code>redis://default:{{ creds.password }}@{{ creds.internal_host }}:{{ creds.internal_port }}</code>
+              <button class="btn btn-sm" type="button" data-copy
+                      data-copy-text="redis://default:{{ creds.password }}@{{ creds.internal_host }}:{{ creds.internal_port }}">Copy</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <tbody>
+                <tr><td class="muted">Host</td><td class="mono">{{ creds.internal_host }}</td></tr>
+                <tr><td class="muted">Port</td><td class="mono num">{{ creds.internal_port }}</td></tr>
+                <tr><td class="muted">Username</td><td class="mono">default</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="panel-note">
+          This is what the API uses. It resolves on the <code>data-{{ creds.env }}</code>
+          overlay network, which staging cannot reach.
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>External</h2>
+          <span class="spacer"></span>
+          <span class="pill {{ 'warn' if creds.external_port else 'mute' }} plain">
+            {{ 'published' if creds.external_port else 'not published' }}
+          </span>
+        </div>
+        <div class="panel-body stack">
+          {% if creds.external_url %}
+          <div>
+            <div class="eyebrow" style="margin-bottom:6px">Connection URL</div>
+            <div class="conn">
+              <code>{{ creds.external_url }}</code>
+              <button class="btn btn-sm" type="button" data-copy data-copy-text="{{ creds.external_url }}">Copy</button>
+            </div>
+          </div>
+          {% else %}
+          <p class="muted" style="margin:0">
+            Not reachable from outside the cluster. Set a port below to publish it on the
+            master.
+          </p>
+          {% endif %}
+          <div class="table-wrap">
+            <table>
+              <tbody>
+                <tr><td class="muted">Host</td><td class="mono">{{ creds.external_host }}</td></tr>
+                <tr><td class="muted">Port</td><td class="mono num">{{ creds.external_port or '—' }}</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        {% if creds.external_port and firewall %}
+        <div class="panel-body" style="border-top:1px solid var(--line)">
+          <div class="inline" style="justify-content:space-between">
+            <span>
+              <span class="eyebrow" style="display:block">Master firewall</span>
+              <span class="pill {{ 'warn' if firewall.open else 'mute' }}">
+                {{ 'port ' + creds.external_port|string + ' is open to the internet'
+                   if firewall.open else 'port ' + creds.external_port|string + ' is blocked' }}
+              </span>
+            </span>
+            {% if firewall.available %}
+            <form method="post" action="{{ firewall_href(app_entry.key) }}" {% if preview %}data-preview{% endif %}>
+              <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+              <input type="hidden" name="env" value="{{ env_name }}">
+              <input type="hidden" name="port" value="{{ creds.external_port }}">
+              <input type="hidden" name="firewall_action" value="{{ 'close' if firewall.open else 'open' }}">
+              <button class="btn {{ 'btn-danger' if firewall.open else 'btn-primary' }}" type="submit">
+                {{ 'Close the port' if firewall.open else 'Open the port' }}
+              </button>
+            </form>
+            {% else %}
+            <span class="muted">Host access is not configured on this panel.</span>
+            {% endif %}
+          </div>
+        </div>
+        {% endif %}
+        <div class="panel-note">
+          Publishing binds the port on the master; <code>ufw</code> decides whether anything
+          outside can reach it. The button above runs <code>ufw allow</code> on the host for
+          you over a key that can <strong>only</strong> run
+          <code>bin/panel-hostops</code> — no shell, three verbs, and port 22 can never be
+          closed. <strong>Opening it puts Redis on the public internet</strong>, protected by
+          its password alone; an SSH tunnel is the safer habit.
+        </div>
+      </section>
+    </div>
+
+    <form method="post" action="{{ creds_href(app_entry.key) }}" {% if preview %}data-preview{% endif %}>
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <input type="hidden" name="env" value="{{ env_name }}">
+      <section class="panel">
+        <div class="panel-head"><h2>Change credentials</h2></div>
+        <div class="setting-row">
+          <label for="redis-pw-{{ env_name }}">Password</label>
+          <input id="redis-pw-{{ env_name }}" type="text" name="password" value="{{ creds.password }}">
+          <p class="why">Applied to the Redis server, the API and the exporter in one deploy,
+             so they cannot drift apart. Existing connections drop when the server restarts.</p>
+        </div>
+        <div class="setting-row">
+          <label for="redis-port-{{ env_name }}">External port</label>
+          <input id="redis-port-{{ env_name }}" type="text" name="external_port"
+                 value="{{ creds.external_port }}" placeholder="blank = not published">
+          <p class="why">Clear the field to unpublish.</p>
+        </div>
+      </section>
+      <div class="sticky-save">
+        <button class="btn btn-primary" type="submit">Save and redeploy Redis</button>
+        <span class="muted">Redis, the API and the exporter are updated together.</span>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+
+  <!-- deployments ----------------------------------------------------------- -->
+  {% if webhook %}
+  <div data-panel="deployments" {% if tab != 'deployments' %}hidden{% endif %}>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>CI webhook — {{ env_name }}</h2>
+        <span class="spacer"></span>
+        <span class="pill mute plain">POST</span>
+      </div>
+      <div class="panel-body stack">
+        <div>
+          <div class="eyebrow" style="margin-bottom:6px">Endpoint</div>
+          <div class="conn">
+            <code>{{ webhook.url }}</code>
+            <button class="btn btn-sm" type="button" data-copy data-copy-text="{{ webhook.url }}">Copy</button>
+          </div>
+        </div>
+        <div>
+          <div class="eyebrow" style="margin-bottom:6px">Deploy token — send as <code>X-Deploy-Token</code></div>
+          <div class="conn">
+            <code data-secret-text="{{ webhook.token }}" class="masked">••••••••••••••••••••</code>
+            <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
+            <button class="btn btn-sm" type="button" data-copy data-copy-text="{{ webhook.token }}">Copy</button>
+          </div>
+        </div>
+        <div>
+          <div class="eyebrow" style="margin-bottom:6px">Call it from your pipeline</div>
+          <div class="conn">
+            <code style="white-space:pre">{{ webhook.curl }}</code>
+            <button class="btn btn-sm" type="button" data-copy data-copy-text="{{ webhook.curl }}">Copy</button>
+          </div>
+        </div>
+        <form method="post" action="{{ token_href(app_entry.key) }}" {% if preview %}data-preview{% endif %}>
+          <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+          <input type="hidden" name="env" value="{{ env_name }}">
+          <button class="btn btn-danger btn-sm" type="submit">Regenerate token</button>
+        </form>
+      </div>
+      <div class="panel-note">
+        The update is graceful because of the service's own policy, not this endpoint:
+        <code>start-first</code> brings the new task to healthy before stopping the old one,
+        <code>monitor: 90s</code> gives the JVM time to boot before Swarm judges it, and a
+        failure rolls back automatically. The call waits for that to finish and returns
+        <code>502</code> if Swarm rolled the deploy back, so a bad image fails your pipeline
+        instead of quietly reverting.
+        <strong>:latest is rejected</strong> — Swarm compares the reference string, so an
+        unchanged tag is a silent no-op.
+        If the panel is behind Cloudflare Access, exempt this path or give CI a service token.
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Registry credentials</h2>
+        <span class="spacer"></span>
+        <span class="eyebrow">{{ registries|length }} logged in</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Registry</th><th>Username</th></tr></thead>
+          <tbody>
+            {% for r in registries %}
+            <tr><td class="mono">{{ r.registry }}</td><td class="mono">{{ r.username or '—' }}</td></tr>
+            {% else %}
+            <tr><td colspan="2" class="empty">No registry credentials. Private images will fail to pull.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <form method="post" action="{{ registry_href() }}" {% if preview %}data-preview{% endif %}>
+        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="env" value="{{ env_name }}">
+        <div class="setting-row">
+          <label for="reg-host">Registry</label>
+          <input id="reg-host" type="text" name="registry" value="ghcr.io" placeholder="ghcr.io">
+          <p class="why">Any registry: <code>ghcr.io</code>, <code>registry.gitlab.com</code>,
+             <code>docker.io</code>, or your own.</p>
+        </div>
+        <div class="setting-row">
+          <label for="reg-user">Username</label>
+          <input id="reg-user" type="text" name="username" placeholder="github-username">
+        </div>
+        <div class="setting-row">
+          <label for="reg-pass">Password or token</label>
+          <input id="reg-pass" type="password" name="password" placeholder="PAT with read:packages">
+          <p class="why">Sent on stdin to <code>docker login</code>, never on the command line.</p>
+        </div>
+        <div class="panel-body" style="padding-top:0">
+          <button class="btn btn-primary" type="submit">Save credentials</button>
+        </div>
+      </form>
+      <div class="panel-note">
+        Stored in the docker config the panel shares with the host, which is what
+        <code>--with-registry-auth</code> ships to workers with the service spec. That is why
+        a worker created an hour from now can still pull your private image — it never talks
+        to the registry with its own credentials.
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Deploy an image now</h2></div>
+      <form method="post" action="{{ action_href(app_entry.key) }}" {% if preview %}data-preview{% endif %}>
+        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="env" value="{{ env_name }}">
+        <input type="hidden" name="action" value="deploy-image">
+        <div class="setting-row">
+          <label for="img-{{ env_name }}">Image reference</label>
+          <input id="img-{{ env_name }}" type="text" name="image" value="{{ svc.image.split('@')[0] }}">
+          <p class="why">Same path CI takes. Must be an immutable tag.</p>
+        </div>
+        <div class="panel-body" style="padding-top:0">
+          <button class="btn btn-primary" type="submit">Deploy</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>History</h2>
+        <span class="spacer"></span>
+        <span class="eyebrow">{{ deployments|length }} recorded</span>
+      </div>
+      <div class="rows">
+        {% for d in deployments %}
+        <div class="deploy-row {{ 'ok' if d.ok else 'bad' }}">
+          <span class="stripe"></span>
+          <span class="src">{{ d.source }}</span>
+          <span>
+            <span class="row-title mono" style="font-size:13.5px">{{ d.image }}</span>
+            <span class="row-sub" style="font-family:var(--ui)">
+              {{ d.at.replace('T', ' ')[:16] }} UTC{% if d.actor %} · {{ d.actor }}{% endif %}
+              {% if d.detail %} · {{ d.detail.splitlines()[0] }}{% endif %}
+            </span>
+          </span>
+          <span class="pill {{ 'ok' if d.ok else 'bad' }}">{{ 'deployed' if d.ok else 'rolled back' }}</span>
+        </div>
+        {% else %}
+        <div class="empty">Nothing deployed through the panel or the webhook yet.</div>
+        {% endfor %}
+      </div>
+    </section>
+  </div>
+  {% endif %}
+
+  <!-- swarm ---------------------------------------------------------------- -->
+  <div data-panel="swarm" {% if tab != 'swarm' %}hidden{% endif %}>
+    <div class="split">
+      <section class="panel">
+        <div class="panel-head"><h2>Resources</h2></div>
+        <div class="table-wrap">
+          <table>
+            <tbody>
+              <tr><td class="muted">CPU limit</td><td class="num mono">{{ svc.resources.cpu_limit or '—' }}</td></tr>
+              <tr><td class="muted">CPU reservation</td><td class="num mono">{{ svc.resources.cpu_res or '—' }}</td></tr>
+              <tr><td class="muted">Memory limit</td><td class="num mono">{% if svc.resources.mem_limit %}{{ svc.resources.mem_limit }} MB{% else %}—{% endif %}</td></tr>
+              <tr><td class="muted">Memory reservation</td><td class="num mono">{% if svc.resources.mem_res %}{{ svc.resources.mem_res }} MB{% else %}—{% endif %}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        {% if app_entry.key == 'app' %}
+        <div class="panel-note">
+          The CPU limit is the denominator the autoscaler uses for CPU-per-replica. Change it
+          in <code>stacks/app.yml</code> and change <code>APP_CPU_LIMIT</code> under
+          <a href="{{ section_href({'key': 'autoscaler'}) }}">Autoscaler</a> with it, or the
+          signal silently misreports.
+        </div>
+        {% endif %}
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2>Rolling updates</h2></div>
+        <div class="table-wrap">
+          <table>
+            <tbody>
+              <tr><td class="muted">Order</td><td class="mono">{{ svc.update_config.order or '—' }}</td></tr>
+              <tr><td class="muted">Parallelism</td><td class="num mono">{{ svc.update_config.parallelism if svc.update_config.parallelism is not none else '—' }}</td></tr>
+              <tr><td class="muted">Delay</td><td class="mono">{{ svc.update_config.delay or '—' }}</td></tr>
+              <tr><td class="muted">Monitor</td><td class="mono">{{ svc.update_config.monitor or '—' }}</td></tr>
+              <tr><td class="muted">On failure</td><td class="mono">{{ svc.update_config.failure_action or '—' }}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="panel-note">
+          Swarm's default monitor window is 5s — shorter than JVM startup, which would call a
+          deploy successful before the app finished booting.
+        </div>
+      </section>
+    </div>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Placement and networks</h2></div>
+      <div class="panel-body stack">
+        <div>
+          <div class="eyebrow" style="margin-bottom:6px">Constraints</div>
+          <div class="inline">
+            {% for c in svc.placement %}<span class="pill mute plain mono">{{ c }}</span>
+            {% else %}<span class="muted">None — runs anywhere.</span>{% endfor %}
+          </div>
+        </div>
+        <div>
+          <div class="eyebrow" style="margin-bottom:6px">Networks</div>
+          <div class="inline">
+            {% for n in svc.networks %}<span class="pill mute plain mono">{{ n }}</span>
+            {% else %}<span class="muted">None.</span>{% endfor %}
+          </div>
+        </div>
+      </div>
+      <div class="panel-note">
+        Placement, networks and resources are the service's shape, and they come from
+        <code>stacks/app.yml</code>. Editing them here would be reverted by the next deploy,
+        so the panel shows them instead of pretending to own them.
+      </div>
+    </section>
+  </div>
+
+  <!-- logs ----------------------------------------------------------------- -->
+  <div data-panel="logs" {% if tab != 'logs' %}hidden{% endif %}>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Recent logs</h2>
+        <span class="spacer"></span>
+        <span class="eyebrow">last 200 lines · {{ svc.name }}</span>
+      </div>
+      <div class="panel-body">
+        <div class="logs">{{ logs }}</div>
+      </div>
+    </section>
+  </div>
+</div>

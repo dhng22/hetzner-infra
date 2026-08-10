@@ -1,4 +1,16 @@
 groups:
+  - name: meta
+    rules:
+      # Always firing, on purpose. Proves rules are being evaluated AND that
+      # the receiver is reachable. Every other rule in this file is silent when
+      # things are healthy, which is indistinguishable from a broken pipeline.
+      # Routed to its own 24h receiver so it is a daily heartbeat, not noise.
+      - alert: Watchdog
+        expr: vector(1)
+        labels: { severity: none }
+        annotations:
+          summary: "Alerting pipeline is alive"
+
   - name: infra
     rules:
       - alert: NodeDown
@@ -49,16 +61,34 @@ groups:
         annotations:
           summary: "p95 is above the SLO and the autoscaler has not recovered it"
 
+      # Compare against the exported ceiling, never a literal. This hardcoded
+      # `>= 12`, so raising MAX_REPLICAS left the alert pinned to the old
+      # number — the same config-drift failure that killed NoHealthyReplicas.
+      # AutoscalerAtMax already does it correctly; this now mirrors it.
+      #
+      # The old `desired >= current` conjunct added nothing: at the ceiling the
+      # autoscaler clamps desired to current, so it is true by construction.
+      #
+      # Distinct from AutoscalerAtMax on purpose. That one means "out of node
+      # budget"; this means "out of replicas". The worker ceiling can pin you
+      # below MAX_REPLICAS and trip only the other one.
       - alert: ReplicaCeiling
-        expr: autoscaler_desired_replicas >= autoscaler_current_replicas
-          and autoscaler_current_replicas >= 12
+        expr: autoscaler_current_replicas >= autoscaler_max_replicas
         for: 15m
         labels: { severity: warning }
         annotations:
           summary: "Replica ceiling reached — capacity plan or app efficiency issue"
 
+      # `service` is the SWARM name (stack_service), set by the vmagent relabel.
+      # It must match APP_SERVICE in infra.env — it was `prod_api` from the old
+      # two-stack layout, which matched nothing and made this rule dead.
+      #
+      # `or vector(0)` is load-bearing. In the outage this rule exists to catch,
+      # every replica is gone, so the series does not exist — and `sum(nothing)
+      # < 1` does not evaluate false, it returns no series at all and never
+      # fires. The fallback is what turns "no data" into an alert.
       - alert: NoHealthyReplicas
-        expr: sum(up{job="swarm-services", service="prod_api"}) < 1
+        expr: (sum(up{job="swarm-services", service="app_api-prod"}) or vector(0)) < 1
         for: 2m
         labels: { severity: critical }
         annotations:

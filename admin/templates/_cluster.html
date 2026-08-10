@@ -1,0 +1,63 @@
+<div class="page-head">
+  <div>
+    <h1>Cluster</h1>
+    <p>Swarm nodes. The manager runs no application traffic — losing it costs scaling and
+       observability, not uptime. Workers are created and drained by the autoscaler.</p>
+  </div>
+</div>
+
+<div class="tiles">
+  <div class="tile">
+    <span class="k">Nodes</span>
+    <span class="v">{{ nodes|length }}</span>
+    <span class="m">1 manager · {{ nodes|selectattr('role', 'equalto', 'worker')|list|length }} workers</span>
+  </div>
+  <div class="tile">
+    <span class="k">Worker ceiling</span>
+    <span class="v">{{ s.max_workers }}</span>
+    <span class="m">a budget cap, not a capacity plan</span>
+  </div>
+  <div class="tile">
+    <span class="k">Total vCPU</span>
+    <span class="v">{{ nodes|sum(attribute='cpus') }}</span>
+    <span class="m">across every node</span>
+  </div>
+  <div class="tile">
+    <span class="k">Total memory</span>
+    <span class="v">{{ nodes|sum(attribute='memory_gb')|round(1) }}<small style="font-size:14px"> GB</small></span>
+    <span class="m">across every node</span>
+  </div>
+</div>
+
+<section class="panel">
+  <div class="panel-head"><h2>Nodes</h2></div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Hostname</th><th>Role</th><th>State</th><th>Availability</th>
+          <th>Address</th><th class="num">vCPU</th><th class="num">Memory</th><th>Engine</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for n in nodes %}
+        <tr>
+          <td><strong>{{ n.hostname }}</strong><div class="row-sub">{{ n.id }}</div></td>
+          <td><span class="pill {{ 'ok' if n.role == 'manager' else 'mute' }} plain">{{ n.role }}</span></td>
+          <td><span class="pill {{ n.tone }}">{{ n.state }}</span></td>
+          <td class="mono {{ 'muted' if n.availability == 'active' }}">{{ n.availability }}</td>
+          <td class="mono">{{ n.addr }}</td>
+          <td class="num">{{ n.cpus }}</td>
+          <td class="num">{{ n.memory_gb }} GB</td>
+          <td class="mono muted">{{ n.engine }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="panel-note">
+    A worker in <code>drain</code> is being removed: its tasks have been rescheduled and the
+    server is deleted once they have all left, plus a grace period for the tunnel connector
+    to release its edge connections.
+  </div>
+</section>

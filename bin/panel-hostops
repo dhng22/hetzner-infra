@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# =============================================================================
+# panel-hostops — the ONLY thing the admin panel can run on the host.
+# =============================================================================
+# The panel needs to change the firewall, which lives on the host and cannot be
+# reached through the docker socket. So bootstrap gives it an SSH key, and this
+# script is pinned as that key's forced command in root's authorized_keys:
+#
+#   command="/opt/infra/bin/panel-hostops",restrict ssh-ed25519 AAAA...
+#
+# `command=` means the client cannot choose what runs — whatever it asks for
+# arrives in SSH_ORIGINAL_COMMAND and this script decides. `restrict` disables
+# port forwarding, agent forwarding, X11 and PTY allocation.
+#
+# So the panel does NOT have root shell on the master. It has exactly the verbs
+# below, with arguments it cannot smuggle anything through: ports are matched
+# against ^[0-9]+$ and range-checked before they reach ufw.
+#
+# Adding a verb here widens what a compromised panel can do to the host. Think
+# before you do it, and never add one that takes a free-form string.
+# =============================================================================
+
+set -euo pipefail
+
+log() { logger -t panel-hostops -- "$*" 2>/dev/null || true; echo "$*"; }
+
+deny() {
+  log "REFUSED: ${SSH_ORIGINAL_COMMAND:-<empty>}"
+  echo "refused: the admin panel may only run: ufw-allow <port>, ufw-deny <port>, ufw-status" >&2
+  exit 2
+}
+
+read -r -a argv <<< "${SSH_ORIGINAL_COMMAND:-}"
+verb="${argv[0]:-}"
+arg="${argv[1]:-}"
+
+valid_port() {
+  [[ "$1" =~ ^[0-9]+$ ]] || return 1
+  [ "$1" -ge 1 ] && [ "$1" -le 65535 ] || return 1
+  # 22 is how you get back in if the panel is ever wrong. Never let it be closed.
+  [ "$1" -ne 22 ] || return 1
+}
+
+case "$verb" in
+  ufw-allow)
+    valid_port "$arg" || deny
+    log "ufw allow ${arg}/tcp"
+    ufw allow "${arg}/tcp"
+    ;;
+  ufw-deny)
+    valid_port "$arg" || deny
+    log "ufw delete allow ${arg}/tcp"
+    # `delete allow` removes the rule; absent rules are not an error worth failing on.
+    ufw delete allow "${arg}/tcp" || true
+    ;;
+  ufw-status)
+    ufw status numbered
+    ;;
+  *)
+    deny
+    ;;
+esac

@@ -1,0 +1,94 @@
+<div class="page-head">
+  <div>
+    <h1>Overview</h1>
+    <p>Everything that decides whether the cluster is healthy right now, in one screen.</p>
+  </div>
+</div>
+
+<div class="tiles">
+  <div class="tile is-{{ s.p95_tone }}">
+    <span class="k">p95 latency</span>
+    <span class="v">{% if s.p95 is not none %}{{ s.p95|round|int }}<small style="font-size:14px"> ms</small>{% else %}—{% endif %}</span>
+    <span class="m">SLO {{ s.slo|round|int }} ms · act at {{ (s.slo * 0.8)|round|int }} ms</span>
+    <div class="meter {% if s.p95_tone != 'ok' %}is-{{ s.p95_tone }}{% endif %}">
+      <i style="width: {{ [((s.p95 or 0) / s.slo * 100), 100]|min }}%"></i>
+    </div>
+  </div>
+
+  <div class="tile">
+    <span class="k">API replicas</span>
+    <span class="v">{{ s.replicas_running }}<span class="muted" style="font-size:16px">/{{ s.replicas_desired }}</span></span>
+    <span class="m">owned by the autoscaler</span>
+  </div>
+
+  <div class="tile">
+    <span class="k">Workers</span>
+    <span class="v">{{ s.workers_ready }}<span class="muted" style="font-size:16px">/{{ s.workers }}</span></span>
+    <span class="m">ceiling {{ s.max_workers }} · a budget cap</span>
+  </div>
+
+  <div class="tile">
+    <span class="k">CPU per replica</span>
+    <span class="v">{% if s.cpu_per_replica is not none %}{{ s.cpu_per_replica|round|int }}<small style="font-size:14px">%</small>{% else %}—{% endif %}</span>
+    <span class="m">of each replica's own limit</span>
+  </div>
+</div>
+
+{% if s.degraded %}
+<div class="banner warn">
+  <div>
+    <strong>{{ s.degraded|length }} service{{ '' if s.degraded|length == 1 else 's' }} need{{ 's' if s.degraded|length == 1 else '' }} attention.</strong>
+    {% for a in s.degraded %}<a href="{{ app_href(a.key) }}">{{ a.display }}</a>{{ ', ' if not loop.last }}{% endfor %}
+  </div>
+</div>
+{% else %}
+<div class="banner ok"><div>All services are reporting healthy.</div></div>
+{% endif %}
+
+<div class="grid-2">
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Services</h2>
+      <span class="spacer"></span>
+      <a class="btn btn-sm" href="{{ section_href({'key': 'apps'}) }}">All apps</a>
+    </div>
+    <div class="rows">
+      {% for a in apps[:7] %}
+        {% set primary = a.envs.values()|list|first %}
+        <a class="row {{ a.tone }}" href="{{ app_href(a.key) }}">
+          <span class="stripe"></span>
+          <span>
+            <span class="row-title">{{ a.display }}</span>
+            <span class="row-sub">{{ primary.image_short }}</span>
+          </span>
+          <span class="row-metric hide-sm">
+            <span class="k">Tasks</span>
+            <span class="v num">{{ primary.running }}/{{ primary.desired }}</span>
+          </span>
+          <span class="pill {{ a.tone }}">{{ primary.state }}</span>
+        </a>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Alert rules</h2></div>
+    <div class="rows">
+      {% for al in alerts if al.state != 'inactive' %}
+        <div class="row {{ al.tone }}">
+          <span class="stripe"></span>
+          <span>
+            <span class="row-title">{{ al.name }}</span>
+            <span class="row-sub" style="font-family:var(--ui)">{{ al.summary }}</span>
+          </span>
+          <span class="pill {{ al.tone }}">{{ al.state }}</span>
+        </div>
+      {% else %}
+        <div class="empty">No rules are firing.</div>
+      {% endfor %}
+    </div>
+    <div class="panel-note">
+      Watchdog fires permanently by design — its silence means the alerting path is broken, not quiet.
+    </div>
+  </section>
+</div>

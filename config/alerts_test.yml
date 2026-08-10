@@ -1,0 +1,102 @@
+# =============================================================================
+# UNIT TESTS FOR alerts.yml
+# =============================================================================
+#   promtool test rules config/alerts_test.yml
+#
+# These exist because of a rule that was dead for months without anyone
+# noticing. NoHealthyReplicas matched service="prod_api", a name left over from
+# an earlier two-stack layout. It matched nothing, so it could never fire — and
+# a rule that cannot fire looks exactly like a rule with nothing to report.
+#
+# The two scenarios below are the ones that actually matter, and they fail
+# differently:
+#   - the service is scraped and reporting down  -> series exists, value 0
+#   - every replica is gone                      -> series does not exist
+# The second is the real outage, and it is the one a bare `sum(...) < 1` misses,
+# because sum() over no series returns no series rather than 0. `or vector(0)`
+# is what makes it fire. Delete that fallback and scenario 1 goes silent again.
+#
+# Timing note: series go stale 5m after their last sample, and `for: 2m` runs
+# on top of that, so the vanished-series case cannot be asserted before ~8m.
+# =============================================================================
+
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+
+  # --- TOTAL OUTAGE: the series itself disappears --------------------------
+  - interval: 1m
+    input_series:
+      - series: 'up{job="swarm-services", service="app_api-prod", instance="w1"}'
+        values: '1 1 _x20'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: NoHealthyReplicas
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations: { summary: "No healthy app replicas are being scraped" }
+
+  # --- SCRAPED BUT DOWN: series present, value 0 ---------------------------
+  - interval: 1m
+    input_series:
+      - series: 'up{job="swarm-services", service="app_api-prod", instance="w1"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: NoHealthyReplicas
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations: { summary: "No healthy app replicas are being scraped" }
+
+  # --- HEALTHY: must stay silent -------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'up{job="swarm-services", service="app_api-prod", instance="w1"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: NoHealthyReplicas
+        exp_alerts: []
+
+  # --- REPLICA CEILING: threshold tracks the gauge, not a literal ----------
+  # The regression this guards: the rule hardcoded `>= 12`. With MAX_REPLICAS
+  # raised to 20, sitting at 12 replicas is mid-range and must stay silent,
+  # but the old rule fired anyway.
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_current_replicas'
+        values: '12x20'
+      - series: 'autoscaler_max_replicas'
+        values: '20x20'
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: ReplicaCeiling
+        exp_alerts: []
+
+  # Actually pinned at a raised ceiling -> must fire.
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_current_replicas'
+        values: '20x20'
+      - series: 'autoscaler_max_replicas'
+        values: '20x20'
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: ReplicaCeiling
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "Replica ceiling reached — capacity plan or app efficiency issue"
+
+  # --- WATCHDOG: fires with no input at all, which is the entire point -----
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: Watchdog
+        exp_alerts:
+          - exp_labels: { severity: none }
+            exp_annotations: { summary: "Alerting pipeline is alive" }

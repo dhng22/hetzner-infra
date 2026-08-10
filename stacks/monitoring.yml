@@ -112,6 +112,10 @@ services:
     image: prom/alertmanager:v0.27.0
     volumes:
       - /opt/infra/config/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    # The webhook is read from the secret, not baked into the config file.
+    # Alertmanager refuses to start if it is missing, which is the behaviour we
+    # want: a loud failure beats silently dropping every alert.
+    secrets: [ALERT_WEBHOOK_URL]
     networks: [monitoring]
     deploy: { replicas: 1, <<: *manager-only }
 
@@ -206,4 +210,6 @@ secrets:
   HCLOUD_TOKEN:
     external: true
   GRAFANA_ADMIN_PASSWORD:
+    external: true
+  ALERT_WEBHOOK_URL:
     external: true
