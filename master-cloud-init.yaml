@@ -383,25 +383,7 @@ write_files:
 
 runcmd:
   - [ bash, -lc, "mkdir -p /opt/infra" ]
-  # Put the bundle on the box. Uncomment ONE of these.
-  #
-  # A private repo works fine — a PAT in the URL is all git needs. Two details
-  # that are easy to get wrong:
-  #   * `rm -rf /tmp/i/.git` BEFORE copying. git stores the remote URL, token
-  #     and all, in .git/config; without this your PAT sits in a file on the
-  #     master forever.
-  #   * `cp -a /tmp/i/.` (dot, not `*`) copies dotfiles and preserves the
-  #     executable bit on bin/. `cp -r /tmp/i/*` silently skips dotfiles.
-  #
-  # Use a fine-grained PAT scoped to CONTENTS:READ on this one repo, and revoke
-  # it once the master is up — it is only needed for this single clone.
-  #
-  # Note the whole cloud-config, including every secret in the VARIABLES block,
-  # stays readable from the instance metadata service for the life of the
-  # server. The git token is not a new exposure, but it is one more thing in
-  # there, which is why a short-lived scoped token is worth the extra minute.
-  #
-  # - [ bash, -lc, "git clone --depth 1 https://TOKEN@github.com/you/infra.git /tmp/i && rm -rf /tmp/i/.git && cp -a /tmp/i/. /opt/infra/ && rm -rf /tmp/i" ]
+  - [ bash, -lc, "git clone --depth 1 https://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@github.com/you/infra.git /tmp/i && rm -rf /tmp/i/.git && cp -a /tmp/i/. /opt/infra/ && rm -rf /tmp/i" ]
   #
   # ...or leave both commented, scp the bundle to /opt/infra yourself, and run
   # /opt/infra/bootstrap.sh by hand. No token ever touches the server.
