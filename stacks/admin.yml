@@ -79,7 +79,10 @@ services:
         condition: any
         delay: 10s
       resources:
-        limits: { cpus: "0.5", memory: 256M }
+        limits:       { cpus: "0.5", memory: 256M }
+        # Reserved so the autoscaler's capacity model knows the master is
+        # running a panel, not sitting idle.
+        reservations: { cpus: "0.10", memory: 128M }
 
 networks:
   monitoring:

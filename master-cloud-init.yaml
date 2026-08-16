@@ -138,6 +138,7 @@ write_files:
 
       # --- Autoscaler ---------------------------------------------------------
       APP_SERVICE=app_api-prod
+      APP_SERVICE_STAGING=app_api-staging   # follows prod's placement; blank to opt out
       APP_CPU_LIMIT=1.0              # MUST match the limit in stacks/app.yml
 
       # THE number. Everything else is derived from it. Set it to the p95 your
@@ -152,7 +153,7 @@ write_files:
       SCALE_UP_CPU=70
       SCALE_DOWN_CPU=30
 
-      # Placement guard, not a trigger: if a worker is this loaded on CPU or
+      # Placement guard, not a trigger: if a node is this loaded on CPU or
       # memory, another replica physically will not fit, so ask for a node.
       NODE_PRESSURE_PCT=80
 
@@ -161,7 +162,20 @@ write_files:
       # used on first deploy — the autoscaler owns it from then on.
       MIN_REPLICAS=2
       MAX_REPLICAS=12
-      REPLICAS_PER_WORKER=2          # CPX21 = 3 vCPU; 2 x 1.0 leaves headroom
+
+      # HOSTS, not Hetzner servers. The master is host #1, so:
+      #   MIN_WORKERS=1  ->  the master alone runs the app, nothing is billed
+      #   2 hosts        ->  1 Hetzner worker, and the master runs NO app
+      #   6 hosts        ->  5 Hetzner workers
+      # An idle cluster is therefore one box, not two. Set MIN_WORKERS=2 if you
+      # would rather the master never ran application traffic at all.
+      #
+      # How many replicas fit on a node is NOT configured. It is measured: each
+      # node's real CPU and RAM, minus what Swarm has already reserved there,
+      # divided by one replica's own reservation from stacks/app.yml. A new
+      # worker's size comes from the Hetzner catalogue for WORKER_TYPE. Change
+      # the worker type or resize the master and the arithmetic just follows.
+      # Existing workers are filled before another one is bought.
       MIN_WORKERS=1
       MAX_WORKERS=6                  # a BUDGET cap, not a capacity plan
 
@@ -174,7 +188,11 @@ write_files:
       COOLDOWN_UP_SECONDS=300
       COOLDOWN_DOWN_SECONDS=900
 
-      SCHEDULE_FLOOR=08:00-20:00=2   # UTC; "HH:MM-HH:MM=N" comma separated
+      # Blank on purpose. A floor here overrides MIN_WORKERS for the hours it
+      # covers, so `08:00-20:00=2` would keep two workers alive all day and
+      # scale-to-zero would only ever happen overnight. Set it only if you have
+      # a known traffic window worth pre-warming for.
+      SCHEDULE_FLOOR=                # UTC; "HH:MM-HH:MM=N" comma separated
       DRY_RUN=false
 
   # ---------------------------------------------------------------------------
@@ -223,6 +241,34 @@ write_files:
         echo "FATAL: unset or still REPLACE_ME in /etc/infra/infra.env:" >&2
         printf '  - %s\n' "${missing[@]}" >&2
         exit 1
+      fi
+
+      # Scaling numbers that have to agree with each other. The autoscaler
+      # clamps rather than crashing, so without this the cluster would run
+      # quietly on numbers you did not choose.
+      : "${MIN_WORKERS:=1}" "${MAX_WORKERS:=6}"
+
+      if [ "$MIN_WORKERS" -lt 1 ]; then
+        echo "FATAL: MIN_WORKERS must be at least 1. The master is host #1, so 1" >&2
+        echo "already means 'no Hetzner workers'. There is no lower state." >&2
+        exit 1
+      fi
+      if [ "$MAX_WORKERS" -lt "$MIN_WORKERS" ]; then
+        echo "FATAL: MAX_WORKERS ($MAX_WORKERS) is below MIN_WORKERS ($MIN_WORKERS)." >&2
+        exit 1
+      fi
+
+      # Whether the master can hold the replica floor is measured at runtime
+      # from live Swarm reservations, which this script cannot see before the
+      # stacks are deployed. It is only advisory here: a master this small still
+      # works, it just never returns to the free single-host state and always
+      # keeps at least one worker running. The autoscaler says so in its log.
+      MASTER_CPUS="$(nproc)"
+      if [ "$MIN_WORKERS" -eq 1 ] && [ "$MASTER_CPUS" -lt 4 ]; then
+        echo "NOTE: this master has ${MASTER_CPUS} vCPU. After the monitoring stack," >&2
+        echo "Redis and the panel reserve theirs, there may be no room left for app" >&2
+        echo "replicas — in which case a worker always stays up. Check the" >&2
+        echo "'measured capacity' line in: docker service logs monitoring_autoscaler" >&2
       fi
 
       PRIVATE_IP="$(ip -4 -o addr show | awk '$4 ~ /^10\./ {print $4}' | cut -d/ -f1 | head -n1)"

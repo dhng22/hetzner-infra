@@ -117,6 +117,49 @@ def deploy_stack(name):
 INFRA_ENV = os.environ.get("INFRA_ENV", "/etc/infra/infra.env")
 
 
+def _split_comment(rest):
+    """
+    Split everything after the `=` into (value, trailing comment).
+
+        "6    # a BUDGET cap"   -> ("6", "    # a BUDGET cap")
+        "     # UTC; HH:MM=N"   -> ("",  "     # UTC; HH:MM=N")
+
+    infra.env is a documented file — most lines carry a trailing comment
+    explaining the number — and it is consumed two ways: `set -a; source` in
+    bootstrap, and this parser in the panel. They have to agree, or the panel
+    shows one thing and the cluster runs another.
+
+    These are shell rules, deliberately:
+      VAR=abc # note   -> abc      (whitespace before # starts a comment)
+      VAR=abc#def      -> abc#def  (no whitespace, so it is part of the value)
+      VAR=  # note     -> ''       (an empty value, not the comment text)
+    The middle case matters: tokens and webhook URLs contain '#' and must not
+    be truncated. A quoted value is taken whole for the same reason.
+
+    `rest` must NOT be pre-stripped — the whitespace before a '#' is exactly
+    what decides between the first case and the second.
+    """
+    stripped = rest.lstrip()
+    lead = rest[:len(rest) - len(stripped)]
+    if stripped[:1] in ("'", '"'):
+        quote = stripped[0]
+        end = stripped.find(quote, 1)
+        if end != -1:
+            return stripped[:end + 1], lead + stripped[end + 1:]
+        return stripped, lead
+    for i, ch in enumerate(stripped):
+        # i == 0 is only a comment if something separated it from the '=';
+        # `VAR=#x` assigns "#x", `VAR= #x` assigns "".
+        if ch == "#" and (i > 0 and stripped[i - 1] in " \t" or i == 0 and lead):
+            value = stripped[:i].rstrip()
+            # Keep the separating whitespace with the comment. Re-emitting
+            # `KEY=` + `# note` with nothing between them would turn the
+            # comment into the value on the next `source` — `VAR=#x` assigns
+            # "#x". The whitespace is what makes it a comment.
+            return value, (rest[len(lead) + len(value):] if value else rest)
+    return stripped.rstrip(), rest[len(lead) + len(stripped.rstrip()):]
+
+
 def load_infra():
     values = {}
     try:
@@ -125,7 +168,8 @@ def load_infra():
                 line = raw.strip()
                 if line and not line.startswith("#") and "=" in line:
                     k, v = line.split("=", 1)
-                    values[k.strip()] = v.strip()
+                    # v is deliberately not stripped — see _split_comment.
+                    values[k.strip()] = _split_comment(v)[0]
     except OSError:
         pass
     return values
@@ -150,10 +194,15 @@ def save_infra(updates):
             key = stripped.split("=", 1)[0].strip()
             if key in updates:
                 new = str(updates[key])
-                if new != stripped.split("=", 1)[1].strip():
+                # Compare against, and re-attach, the value without its trailing
+                # comment. Without this every save rewrites the line (the old
+                # "value" still had the comment glued on), reports a change that
+                # did not happen, and erases the documentation as it goes.
+                old, comment = _split_comment(stripped.split("=", 1)[1])
+                if new != old:
                     changed.append(key)
                 indent = raw[:len(raw) - len(raw.lstrip())]
-                out.append(f"{indent}{key}={new}")
+                out.append(f"{indent}{key}={new}{comment}")
                 continue
         out.append(raw)
 

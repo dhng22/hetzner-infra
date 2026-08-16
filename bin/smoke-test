@@ -66,6 +66,72 @@ while read -r name replicas; do
 done < <(docker service ls --format '{{.Name}} {{.Replicas}}')
 
 # ---------------------------------------------------------------------------
+# Placement is a two-state machine the autoscaler drives, and every failure in
+# it is silent: tasks sit pending, or production quietly runs on the master.
+# Assert the state is self-consistent rather than trusting `service ls`.
+head_ "placement mode"
+READY_WORKERS="$(docker node ls --format '{{.Hostname}} {{.Status}} {{.ManagerStatus}}' \
+                 | awk '$3 == "" && $2 == "Ready"' | wc -l | tr -d ' ')"
+PINNED=0
+docker service inspect "${APP_STACK}_api-prod" \
+  --format '{{range .Spec.TaskTemplate.Placement.Constraints}}{{println .}}{{end}}' 2>/dev/null \
+  | tr -d ' ' | grep -qx 'node.role==worker' && PINNED=1
+
+MGR_TASKS="$(docker service ps "${APP_STACK}_api-prod" \
+             --filter desired-state=running --format '{{.Node}}' 2>/dev/null \
+             | grep -cx "$(hostname)" || true)"
+
+if [ "$PINNED" = "1" ] && [ "$READY_WORKERS" = "0" ]; then
+  bad "app is placeable" \
+      "pinned to node.role==worker with no ready worker — every task is unplaceable. The autoscaler should fail back within a loop; check its logs."
+elif [ "$PINNED" = "1" ]; then
+  ok "worker mode: $READY_WORKERS ready worker(s), app pinned to them"
+  if [ "${MGR_TASKS:-0}" != "0" ]; then
+    bad "master carries no app replicas" \
+        "$MGR_TASKS api-prod task(s) still on the master while pinned to workers — a handover did not finish"
+  else
+    ok "master carries no app replicas"
+  fi
+else
+  if [ "$READY_WORKERS" != "0" ]; then
+    skip "manager mode with $READY_WORKERS worker(s) present" "mid-handover, or MIN_WORKERS raised; re-run shortly"
+  else
+    ok "manager mode: no workers, master runs the app (scale-to-zero resting state)"
+  fi
+  if [ "${MGR_TASKS:-0}" = "0" ] && [ "$READY_WORKERS" = "0" ]; then
+    bad "master is running api-prod" "no api-prod task on the master and no workers exist — nothing is serving"
+  fi
+fi
+
+# Capacity is measured from Swarm reservations now, so the thing worth checking
+# is that the reservations exist at all. Without them Swarm sees an idle box and
+# the autoscaler believes in room that is not there.
+if docker service inspect "${APP_STACK}_api-prod" \
+     --format '{{.Spec.TaskTemplate.Resources.Reservations.NanoCPUs}}' 2>/dev/null \
+     | grep -qE '^[1-9]'; then
+  ok "api-prod declares a CPU reservation (the autoscaler's capacity unit)"
+else
+  bad "api-prod declares a CPU reservation" \
+      "without one the autoscaler cannot size a node and falls back to APP_CPU_LIMIT"
+fi
+for g in monitoring_victoriametrics monitoring_loki "${APP_STACK}_redis-prod"; do
+  if docker service inspect "$g" \
+       --format '{{.Spec.TaskTemplate.Resources.Reservations.MemoryBytes}}' 2>/dev/null \
+       | grep -qE '^[1-9]'; then
+    ok "$g reserves memory (keeps app replicas off the master's headroom)"
+  else
+    bad "$g reserves memory" \
+        "the autoscaler will over-count the master and place replicas on top of it"
+  fi
+done
+
+if [ "${MIN_WORKERS:-1}" -lt 1 ]; then
+  bad "MIN_WORKERS >= 1" "the master is host #1, so 1 already means 'no Hetzner workers'"
+else
+  ok "MIN_WORKERS (${MIN_WORKERS:-1}) is a host count, master included"
+fi
+
+# ---------------------------------------------------------------------------
 head_ "admin panel container"
 ADMIN_CID="$(docker ps -q -f name=admin_ui | head -1)"
 if [ -z "$ADMIN_CID" ]; then

@@ -91,6 +91,136 @@ tests:
             exp_annotations:
               summary: "Replica ceiling reached — capacity plan or app efficiency issue"
 
+  # --- AUTOSCALER ERRORS: a wedged handover must not be silent -------------
+  # A counter climbing steadily in one stage. Must fire, and must name the
+  # stage — "it is broken" without saying where is barely better than silence.
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_errors_total{stage="placement"}'
+        values: '0+1x25'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: AutoscalerErrors
+        exp_alerts:
+          - exp_labels: { severity: warning, stage: placement }
+            exp_annotations:
+              summary: "Autoscaler is failing repeatedly in stage 'placement'"
+
+  # A single blip that then stops. `for: 15m` must swallow it: transient query
+  # failures happen every time VictoriaMetrics restarts.
+  #
+  # Evaluated at 5m, while the 10m rate window still sees the increment, so the
+  # `for` is the only thing keeping it silent. At 25m the rate has decayed to
+  # zero on its own and the test would pass even with `for: 0m` — pinning
+  # nothing.
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_errors_total{stage="query"}'
+        values: '0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: AutoscalerErrors
+        exp_alerts: []
+
+  # --- CEILING vs STRANDED use DIFFERENT gauges ----------------------------
+  # `autoscaler_current_hosts` counts the master, `autoscaler_current_workers`
+  # does not. Collapsing them once made the stranded rule unfireable, because
+  # hosts is never below 1. These two cases pin them apart.
+  #
+  # At the free floor: 1 host, 0 servers, ceiling 6. Nothing should fire.
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_current_hosts'
+        values: '1x20'
+      - series: 'autoscaler_max_workers'
+        values: '6x20'
+      - series: 'autoscaler_current_workers'
+        values: '0x20'
+      - series: 'autoscaler_placement_worker_mode'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: AutoscalerAtMax
+        exp_alerts: []
+      - eval_time: 18m
+        alertname: AppStrandedWithoutWorkers
+        exp_alerts: []
+
+  # At the ceiling: 6 hosts = master + 5 servers. AutoscalerAtMax must fire.
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_current_hosts'
+        values: '6x20'
+      - series: 'autoscaler_max_workers'
+        values: '6x20'
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: AutoscalerAtMax
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "Autoscaler pinned at MAX_WORKERS — raise the ceiling or optimise"
+
+  # --- STRANDED: worker-pinned with an empty fleet -------------------------
+  # The hard-outage state of the two-mode placement model. Every task is
+  # unplaceable, so this must fire.
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_placement_worker_mode'
+        values: '1x20'
+      - series: 'autoscaler_current_workers'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: AppStrandedWithoutWorkers
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "App is pinned to worker nodes but no worker exists — tasks cannot be placed"
+
+  # Manager mode with zero workers is the NORMAL idle state, not an outage.
+  # If this ever fires, scale-to-zero pages someone every night.
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_placement_worker_mode'
+        values: '0x20'
+      - series: 'autoscaler_current_workers'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: AppStrandedWithoutWorkers
+        exp_alerts: []
+
+  # Worker mode WITH workers is the normal loaded state. Also silent.
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_placement_worker_mode'
+        values: '1x20'
+      - series: 'autoscaler_current_workers'
+        values: '3x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: AppStrandedWithoutWorkers
+        exp_alerts: []
+
+  # The self-healing window. The autoscaler notices on its next loop and fails
+  # back, so this state exists for about a minute during any worker loss. `for:
+  # 2m` is what stops that routine transient from paging.
+  #
+  # Evaluated at 1m, INSIDE the window, on purpose: at 6m the alert has
+  # resolved either way, so a test there passes even with `for: 0m` and pins
+  # nothing. This one fails if the `for` is ever dropped.
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_placement_worker_mode'
+        values: '1 1 0 0 0 0'
+      - series: 'autoscaler_current_workers'
+        values: '0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: AppStrandedWithoutWorkers
+        exp_alerts: []
+
   # --- WATCHDOG: fires with no input at all, which is the entire point -----
   - interval: 1m
     input_series: []

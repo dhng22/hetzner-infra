@@ -63,16 +63,31 @@ make without issuing them. This is the safe way to exercise a scaling-logic chan
    `docker swarm init` on the private IP, creates the `docker secret`s, seeds `config/app-*.env` from
    `infra.env` (existing files win, so panel edits survive a re-run), renders the templates, builds the
    `autoscaler` and `admin` images, and deploys `monitoring` → `app` (via `bin/app-env`) → `admin`.
-4. No workers exist yet. The autoscaler creates the first one on its first loop; that is the proof the
-   Hetzner token and worker cloud-init both work.
+4. No workers exist, and at rest none ever will — the master is host #1. That means the Hetzner token and
+   worker cloud-init are NOT exercised at boot; set `MIN_WORKERS=2` temporarily to prove them.
 
 ## Architecture invariants
 
 These constraints span multiple files. Breaking one of them fails silently rather than loudly.
 
-**Master runs no traffic.** Everything stateful is pinned with `node.role == manager` (Redis, the whole
-monitoring stack, the autoscaler). Everything in the request path is pinned to `node.role == worker`
-(`api-prod`, `api-staging`, `cloudflared`). Losing the master costs scaling and observability, not uptime.
+**The app's placement is owned by the autoscaler, not by `stacks/app.yml`.** Everything stateful is
+pinned with `node.role == manager` (Redis, the whole monitoring stack, the autoscaler). `api-prod` and
+`api-staging` carry **no** role constraint in the stack file: the autoscaler adds `node.role == worker`
+when workers exist and removes it when the pool empties, via `docker service update
+--constraint-add/--constraint-rm`. Adding that constraint to the stack file breaks scale-to-zero — the
+last worker's removal leaves every task pending. `cloudflared` is `mode: global` with no constraint on
+purpose, so the master always has a registered connector and the tunnel does not gap during a handover.
+
+**The master is host #1.** `MIN_WORKERS`/`MAX_WORKERS` count HOSTS, master included: `MIN_WORKERS=1`
+means zero Hetzner servers and the master serving, `MAX_WORKERS=6` means master + up to 5 workers.
+`MIN_WORKERS=2` opts the master out of the request path entirely. Consequently, at the floor, losing the
+master costs uptime and not just scaling and observability — the deliberate price of the free floor.
+
+**Every `reservations:` block is load-bearing TWICE.** Swarm's scheduler subtracts them when placing
+tasks, *and* `node_app_capacity()` derives every scaling decision from them. Strip one and the master
+looks like an idle 8 GB box, so app replicas get packed on top of VictoriaMetrics; understate one and the
+autoscaler believes in room that does not exist. The `mode: global` reservations (node-exporter, cadvisor,
+cloudflared) are the per-node tax subtracted from a new worker's advertised size.
 
 **`monitoring` is an external overlay network.** `stacks/monitoring.yml` creates it; `stacks/app.yml`
 declares it `external: true`. Monitoring must be deployed first or the app stack fails to deploy.
@@ -86,9 +101,16 @@ in (c).
 of `CPU_REPLICA_EXPR`. Change one without the other and the secondary scaling signal misreports with no
 error.
 
-**`REPLICAS_PER_WORKER` encodes the worker shape.** It assumes CPX21 (3 vCPU) with a 1.0 CPU limit per
-replica. Changing `WORKER_TYPE` without changing it produces either wasted nodes or permanently unplaceable
-tasks.
+**Capacity is measured, never configured.** There is no `REPLICAS_PER_WORKER`, no
+`MANAGER_REPLICA_CAPACITY` and no headroom constant — all three existed and all three were wrong, because
+each was a guess about hardware the autoscaler can read directly. `node_app_capacity()` = (node's
+advertised CPU/RAM − reservations of non-app tasks on it) ÷ one replica's reservation from the live
+service spec. `worker_type_capacity()` = the Hetzner catalogue entry for `WORKER_TYPE` − the global
+services' per-node reservations. Do not reintroduce a constant for any of this.
+
+The unit is the **reservation**, not the limit, because reservations are what Swarm's scheduler actually
+subtracts when placing a task. Using limits would under-count every node and, on a CPX31 master, put the
+capacity below `MIN_REPLICAS` so the free floor became unreachable.
 
 **Service discovery is label-driven, never enumerated.** `config/vmagent.yml.tpl` keeps any Swarm task
 carrying `prometheus.scrape/port/path` deploy labels, and `node-exporter`/`cadvisor` run `mode: global`.
@@ -118,14 +140,38 @@ project is protected only by that label.
 `autoscaler/autoscaler.py` is a single-file loop (`loop()`, every `LOOP_SECONDS`) with a strict order:
 
 1. `reap_orphans()` — delete Hetzner servers that never joined, and swarm nodes whose server is gone.
-2. `read_signals()` — p95 latency (primary), CPU-per-replica (secondary), node CPU/mem (placement guard only).
+2. `read_signals()` — p95 latency (primary), CPU-per-replica (secondary), node CPU/mem (placement guard
+   only; reads workers, or the manager when the pool is empty).
 3. `desired_replicas()` — tier 1. Scale up if *either* signal is sustained high over `SUSTAIN_UP`; scale
    down only if *both* stayed low over `SUSTAIN_DOWN`.
-4. `workers_needed()` — tier 2. `ceil(replicas / REPLICAS_PER_WORKER)`, plus one if node pressure exceeds
-   `NODE_PRESSURE_PCT`.
-5. Apply in order: **create nodes → adjust replicas → remove nodes**. Scale-down of a node requires that
-   replicas have already been shed, drains for up to 180s, then waits `POST_DRAIN_GRACE` for cloudflared to
-   release its edge connections.
+4. `hosts_needed()` — tier 2. Returns `1` (master only) while the replicas fit in the master's measured
+   capacity. Otherwise the master stops being a placement target, so the workers must cover the *whole*
+   count: existing workers' measured capacity is summed first and only the shortfall becomes new servers,
+   which is what fills a half-empty node before buying another and what makes mixed fleets work. Plus one
+   host if node pressure exceeds `NODE_PRESSURE_PCT`. `servers = hosts - 1`.
+5. Apply in order: **release the worker pin (scaling in) → create nodes → adjust replicas → add the worker
+   pin (scaling out) → remove nodes**.
+
+That order is the whole gaplessness argument, and reversing any of it causes an outage:
+
+- The pin is released *before* the last worker is deleted, so the master is already serving; the removal
+  additionally blocks on `running_replicas_on_manager() >= 1`, waiting indefinitely rather than trading
+  uptime for a few euros.
+- The pin is added only once workers are `ready` *and* their measured capacity covers every replica; until
+  then the replica count is capped at what the currently-eligible nodes can hold, so tasks are never
+  scheduled where they cannot run.
+- `pick_removal_candidate()` takes a `spare` argument — the master's capacity once the pin is off. Without
+  it the LAST worker is never removable (the remaining workers total zero, never ≥ the replica count) and
+  the cluster sticks one server above the floor forever.
+- `provisioning_workers()` counts booting servers towards the fleet. Sizing off `swarm_ready_workers()`
+  alone re-orders the same capacity every loop for two minutes and sails past `MAX_WORKERS`.
+- Node scale-down still requires replicas to have been shed first, drains for up to 180s, then waits
+  `POST_DRAIN_GRACE` for cloudflared to release its edge connections.
+
+Both mode changes are idempotent and re-derived from the live spec each loop, so a crash mid-handover
+resumes rather than half-applying. Worker mode with an empty fleet is treated as an emergency and fails
+straight back to the master (`AppStrandedWithoutWorkers` covers the case where that recovery is itself
+broken).
 
 Node CPU is deliberately never a scaling trigger — it averages in exporters, cloudflared and staging.
 CPU-per-replica exists because `histogram_quantile` over an empty bucket returns nothing, so at low traffic
@@ -139,9 +185,11 @@ and Hetzner bills hourly.
 Never suggest a bare `docker stack deploy` for the app stack, and never add one to a script. It is
 declarative over the whole stack and silently overwrites live state owned by other things
 ([docker/cli#2235](https://github.com/docker/cli/issues/2235)): `deploy.replicas: ${MIN_REPLICAS}` resets
-the autoscaler's replica count to 2, and `image: ${APP_IMAGE_PROD}` rolls back whatever CI last deployed.
-`bin/app-env deploy` reads both from the live service and pins them for the deploy; bootstrap uses it too,
-falling back to `infra.env` when nothing is running yet.
+the autoscaler's replica count to 2, `image: ${APP_IMAGE_PROD}` rolls back whatever CI last deployed, and
+the absent `node.role` constraint strips the worker pin so production drifts back onto the master.
+`bin/app-env deploy` reads all three from the live service and pins them for the deploy (`live_replicas`,
+`live_image`, `worker_pinned`/`render_placement`); bootstrap uses it too, falling back to `infra.env` when
+nothing is running yet.
 
 Application config lives in `config/app-{prod,staging}.env` and is layered on as a second `-c` override
 file using plain `environment:` mappings, which
@@ -191,6 +239,11 @@ The alerting path was rebuilt after all three of its parts turned out to be iner
   signal; do not "fix" it.
 
 Guard all of this with `promtool test rules config/alerts_test.yml` before changing `alerts.yml`.
+
+**`autoscaler_current_workers` and `autoscaler_current_hosts` are different numbers.** The first counts
+Hetzner servers and reaches 0 at the floor, which is what `AppStrandedWithoutWorkers` keys on; the second
+adds the master and is never below 1, which is what the `MAX_WORKERS` ceiling is expressed in. Collapsing
+them made the stranded alert unfireable. `config/alerts_test.yml` pins both.
 
 **Alert thresholds are never literals.** Every threshold that mirrors a config value compares against an
 exported gauge (`autoscaler_max_replicas`, `autoscaler_max_workers`). Adding a tunable that an alert keys

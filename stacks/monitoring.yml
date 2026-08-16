@@ -6,6 +6,22 @@ version: "3.8"
 # Everything that stores state is pinned to the manager (the master node).
 # node-exporter and cadvisor are GLOBAL — they land automatically on every
 # worker the autoscaler creates, with no extra configuration.
+#
+# RESERVATIONS ARE LOAD-BEARING HERE, TWICE OVER.
+#
+#   1. Swarm's scheduler subtracts them when placing tasks. Without them it sees
+#      an idle 4 vCPU / 8 GB master and packs api-prod on top of VictoriaMetrics
+#      until something is OOM-killed — and the thing that dies is the monitoring
+#      you would use to find out.
+#   2. The autoscaler reads them to work out how many replicas each node can
+#      hold. That is the whole of its capacity model now: there is no
+#      REPLICAS_PER_WORKER constant to fall back on. Understate a reservation
+#      here and it will believe in room that does not exist.
+#
+# They are a floor the scheduler must respect, not a limit on what a service may
+# actually use. The global services below are reserved for the same reason: they
+# land on EVERY node, so their cost has to come off a new worker's advertised
+# size before the rest is treated as app capacity.
 # =============================================================================
 
 x-manager-only: &manager-only
@@ -20,6 +36,7 @@ x-autoscaler-env: &autoscaler-env
   HCLOUD_SSH_KEY_NAME: "${HCLOUD_SSH_KEY_NAME}"
   WORKER_IMAGE: "${WORKER_IMAGE}"
   APP_SERVICE: "${APP_SERVICE}"
+  APP_SERVICE_STAGING: "${APP_SERVICE_STAGING}"
   APP_CPU_LIMIT: "${APP_CPU_LIMIT}"
   SLO_P95_MS: "${SLO_P95_MS}"
   SCALE_UP_P95_RATIO: "${SCALE_UP_P95_RATIO}"
@@ -29,7 +46,6 @@ x-autoscaler-env: &autoscaler-env
   NODE_PRESSURE_PCT: "${NODE_PRESSURE_PCT}"
   MIN_REPLICAS: "${MIN_REPLICAS}"
   MAX_REPLICAS: "${MAX_REPLICAS}"
-  REPLICAS_PER_WORKER: "${REPLICAS_PER_WORKER}"
   SCALE_UP_FACTOR: "${SCALE_UP_FACTOR}"
   REPLICA_COOLDOWN_SECONDS: "${REPLICA_COOLDOWN_SECONDS}"
   SUSTAIN_UP_SECONDS: "${SUSTAIN_UP_SECONDS}"
@@ -55,6 +71,8 @@ x-autoscaler-base: &autoscaler-base
       prometheus.scrape: "true"
       prometheus.port: "9200"
       prometheus.path: "/metrics"
+    resources:
+      reservations: { cpus: "0.1", memory: 96M }
     restart_policy:
       condition: any
       delay: 30s
@@ -76,7 +94,8 @@ services:
       replicas: 1
       <<: *manager-only
       resources:
-        limits: { memory: 1500M }
+        limits:       { memory: 1500M }
+        reservations: { cpus: "0.5", memory: 768M }
 
   # --- scraper with Swarm service discovery ---------------------------------
   # Discovers new nodes and app tasks automatically. This is why adding a
@@ -94,6 +113,8 @@ services:
     deploy:
       replicas: 1
       <<: *manager-only   # dockerswarm_sd requires a manager socket
+      resources:
+        reservations: { cpus: "0.15", memory: 128M }
 
   # --- alerting -------------------------------------------------------------
   vmalert:
@@ -106,7 +127,11 @@ services:
     volumes:
       - /opt/infra/config/alerts.yml:/etc/alerts/alerts.yml:ro
     networks: [monitoring]
-    deploy: { replicas: 1, <<: *manager-only }
+    deploy:
+      replicas: 1
+      <<: *manager-only
+      resources:
+        reservations: { cpus: "0.1", memory: 96M }
 
   alertmanager:
     image: prom/alertmanager:v0.27.0
@@ -117,7 +142,11 @@ services:
     # want: a loud failure beats silently dropping every alert.
     secrets: [ALERT_WEBHOOK_URL]
     networks: [monitoring]
-    deploy: { replicas: 1, <<: *manager-only }
+    deploy:
+      replicas: 1
+      <<: *manager-only
+      resources:
+        reservations: { cpus: "0.1", memory: 96M }
 
   # --- logs -----------------------------------------------------------------
   loki:
@@ -133,7 +162,11 @@ services:
         protocol: tcp
         mode: host
     networks: [monitoring]
-    deploy: { replicas: 1, <<: *manager-only }
+    deploy:
+      replicas: 1
+      <<: *manager-only
+      resources:
+        reservations: { cpus: "0.3", memory: 512M }
 
   # --- dashboards -----------------------------------------------------------
   grafana:
@@ -148,7 +181,11 @@ services:
       - grafanadata:/var/lib/grafana
       - /opt/infra/config/grafana-datasources.yml:/etc/grafana/provisioning/datasources/ds.yml:ro
     networks: [monitoring]
-    deploy: { replicas: 1, <<: *manager-only }
+    deploy:
+      replicas: 1
+      <<: *manager-only
+      resources:
+        reservations: { cpus: "0.2", memory: 256M }
 
   # --- per-node exporters (global = every current AND future node) ----------
   node-exporter:
@@ -166,6 +203,8 @@ services:
     networks: [monitoring]
     deploy:
       mode: global
+      resources:
+        reservations: { cpus: "0.05", memory: 64M }
 
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.49.1
@@ -183,6 +222,8 @@ services:
     networks: [monitoring]
     deploy:
       mode: global
+      resources:
+        reservations: { cpus: "0.10", memory: 128M }
 
   # --- the autoscaler -------------------------------------------------------
   # Manages the single shared worker pool. Staging rides along on it as one

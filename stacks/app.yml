@@ -23,9 +23,35 @@ version: "3.8"
 # between your environments.
 # =============================================================================
 
-x-worker-placement: &worker-placement
-  constraints:
-    - node.role == worker
+# PLACEMENT — no node.role constraint here, ON PURPOSE. The autoscaler owns it.
+#
+# These services used to be pinned to `node.role == worker`. That made a
+# master-owned floor impossible: draining the last worker left every task pending
+# and the site down. The master is host #1 now, so placement has to move:
+#
+#   no workers   -> no constraint, the master runs the app, nothing is billed
+#   any workers  -> `node.role == worker` is added, the master runs none
+#
+# autoscaler.py adds and removes that constraint with `docker service update
+# --constraint-add/--constraint-rm`, ordered so a healthy replica is serving
+# throughout the handover. Setting it here instead would fight it: every stack
+# deploy would slam placement back to whatever this file says, at whatever
+# moment CI happened to ship. `bin/app-env` reads the live constraint and
+# re-states it for exactly that reason — see the header there.
+#
+# What DOES belong here is the spread preference. Swarm balances tasks across
+# eligible nodes by count, which is what makes the handover converge: the master
+# holds no tasks of this service when the pin is released, so it wins the next
+# placement and starts serving before the last worker is deleted.
+#
+# Do NOT add `max_replicas_per_node`. It looks like the obvious safety cap and
+# it deadlocks `order: start-first`: on a full cluster the new task has nowhere
+# to be scheduled while the old one is still running, so the rolling update
+# hangs rather than failing. The autoscaler's own arithmetic is the cap, and the
+# resource reservations in monitoring.yml are the backstop.
+x-app-placement: &app-placement
+  preferences:
+    - spread: node.id
 
 x-loki-logging: &loki-logging
   driver: loki
@@ -90,10 +116,7 @@ services:
         prometheus.port: "${APP_PORT}"
         prometheus.path: "${APP_METRICS_PATH}"
         app.env: "prod"
-      placement:
-        <<: *worker-placement
-        preferences:
-          - spread: node.id   # never stack all replicas on one worker
+      placement: *app-placement
       update_config: *update-policy
       rollback_config: *rollback-policy
       restart_policy:
@@ -120,6 +143,10 @@ services:
       replicas: 1
       placement: { constraints: [node.role == manager] }
       labels: { app.env: "prod" }
+      resources:
+        # Sized from --maxmemory 512mb plus AOF overhead. Manager-pinned, so
+        # this is capacity the autoscaler must not offer to app replicas.
+        reservations: { cpus: "0.20", memory: 640M }
 
   # ==========================================================================
   # STAGING — one capped replica, wherever there is room
@@ -146,7 +173,7 @@ services:
         prometheus.port: "${APP_PORT}"
         prometheus.path: "${APP_METRICS_PATH}"
         app.env: "staging"
-      placement: *worker-placement
+      placement: *app-placement
       update_config: *update-policy
       rollback_config: *rollback-policy
       restart_policy:
@@ -171,6 +198,8 @@ services:
       replicas: 1
       placement: { constraints: [node.role == manager] }
       labels: { app.env: "staging" }
+      resources:
+        reservations: { cpus: "0.05", memory: 192M }
 
   # ==========================================================================
   # INGRESS — ONE tunnel, one connector per worker
@@ -185,8 +214,16 @@ services:
     logging: *loki-logging
     stop_grace_period: 45s     # cloudflared drains edge connections on SIGTERM
     deploy:
+      # Global with no role constraint, so the MANAGER always has a connector
+      # too. This is load-bearing for scale-to-zero: at zero workers it is the
+      # only ingress there is, and when the last worker is drained the master's
+      # connector is already registered with Cloudflare, so the tunnel never
+      # goes dark mid-scale-down.
       mode: global
-      placement: *worker-placement
+      resources:
+        # Global, so this is a per-node tax the autoscaler subtracts from a new
+        # worker's size before counting app capacity.
+        reservations: { cpus: "0.05", memory: 32M }
       labels:
         prometheus.scrape: "true"
         prometheus.port: "2000"
@@ -204,6 +241,8 @@ services:
     deploy:
       replicas: 1
       placement: { constraints: [node.role == manager] }
+      resources:
+        reservations: { cpus: "0.05", memory: 32M }
       labels:
         prometheus.scrape: "true"
         prometheus.port: "9121"

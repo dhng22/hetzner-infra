@@ -184,13 +184,15 @@ def autoscaler_state():
              "note": "Primary signal. What users feel."},
             {"key": "CPU per replica", "value": 64.0, "unit": "%",
              "note": "Secondary. Keeps scale-down working when traffic is near zero."},
-            {"key": "Worker CPU", "value": 71.0, "unit": "%",
-             "note": "Placement guard only, never a trigger."},
-            {"key": "Worker memory", "value": 58.0, "unit": "%",
+            {"key": "Node CPU", "value": 71.0, "unit": "%",
+             "note": "Placement guard only, never a trigger. Reads the workers, "
+                     "or the master when the fleet is empty."},
+            {"key": "Node memory", "value": 58.0, "unit": "%",
              "note": "Placement guard only."},
         ],
         "current_replicas": 6, "desired_replicas": 8, "max_replicas": 12,
-        "current_workers": 3, "desired_workers": 4, "max_workers": 6, "min_workers": 2,
+        "current_workers": 4, "current_servers": 3, "desired_workers": 5, "max_workers": 6, "min_workers": 1,
+        "worker_mode": 1.0, "manager_capacity": 3.0, "worker_capacity": 5.0,
         "slo": 500.0, "last_loop": 1_770_000_000.0,
     }
 

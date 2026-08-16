@@ -2,7 +2,10 @@
   <div>
     <h1>Autoscaler</h1>
     <p>Load is absorbed cheapest first: replicas in seconds, nodes in about two minutes.
-       Coming down the order reverses — shed replicas first, remove the node later.</p>
+       Coming down the order reverses — shed replicas first, remove the node later.
+       The master is host&nbsp;#1, so with no workers it runs the app itself and nothing
+       is billed; past {{ a.manager_capacity|int }} replicas the app moves entirely onto
+       workers. Per-node capacity is measured from real CPU and RAM, not configured.</p>
   </div>
 </div>
 
@@ -14,12 +17,28 @@
     <div class="meter"><i style="width: {{ (a.current_replicas / a.max_replicas * 100)|round|int if a.max_replicas else 0 }}%"></i></div>
   </div>
   <div class="tile">
-    <span class="k">Workers</span>
+    <span class="k">Hosts</span>
     <span class="v">{{ a.current_workers|int }}<span class="muted" style="font-size:16px">/{{ a.desired_workers|int }}</span></span>
-    <span class="m">floor {{ a.min_workers|int }} · ceiling {{ a.max_workers|int }}</span>
+    <span class="m">master is #1 · floor {{ a.min_workers|int }} · ceiling {{ a.max_workers|int }}</span>
     <div class="meter {% if a.current_workers >= a.max_workers %}is-warn{% endif %}">
       <i style="width: {{ (a.current_workers / a.max_workers * 100)|round|int if a.max_workers else 0 }}%"></i>
     </div>
+  </div>
+  <div class="tile">
+    <span class="k">Placement</span>
+    {% if a.worker_mode %}
+      <span class="v" style="font-size:20px">Workers</span>
+      <span class="m">master carries no app replicas</span>
+    {% else %}
+      <span class="v" style="font-size:20px">Master</span>
+      <span class="m">no workers billed · master holds {{ a.manager_capacity|int }} replica{{ '' if a.manager_capacity|int == 1 else 's' }}</span>
+    {% endif %}
+  </div>
+  <div class="tile">
+    <span class="k">Measured room</span>
+    <span class="v">{{ a.manager_capacity|int }}<span class="muted" style="font-size:16px">
+      &nbsp;/&nbsp;{{ a.worker_capacity|int }}</span></span>
+    <span class="m">replicas per master / per new worker — from real CPU and RAM</span>
   </div>
   <div class="tile">
     <span class="k">SLO</span>

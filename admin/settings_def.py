@@ -30,8 +30,9 @@ FIELDS = {
     "HCLOUD_SSH_KEY_NAME": (EDIT, "monitoring", "Installed on workers created from now on."),
     "WORKER_IMAGE": (EDIT, "monitoring", "Applies to workers created from now on."),
     "WORKER_TYPE": (EDIT, "monitoring",
-                    "Change REPLICAS_PER_WORKER with it. It assumes CPX21 with a 1.0 CPU limit; "
-                    "leaving it stale either wastes nodes or queues tasks Swarm cannot place."),
+                    "Applies to workers created from now on. How many replicas it holds is "
+                    "read from the Hetzner catalogue, so there is nothing to keep in sync — "
+                    "a bigger type simply means fewer, larger nodes."),
 
     # --- registry / first image ----------------------------------------------
     # All four are read exactly once, by bootstrap. Registry auth afterwards
@@ -51,14 +52,16 @@ FIELDS = {
     "SCALE_DOWN_P95_RATIO": (EDIT, "monitoring", ""),
     "SCALE_UP_CPU": (EDIT, "monitoring", "Percent of one replica's own limit, not node CPU."),
     "SCALE_DOWN_CPU": (EDIT, "monitoring", ""),
-    "NODE_PRESSURE_PCT": (EDIT, "monitoring", "Placement guard: above this, another replica will not fit."),
+    "NODE_PRESSURE_PCT": (EDIT, "monitoring", "Placement guard, never a trigger: above this the autoscaler asks for one host more than the capacity arithmetic alone would."),
     "MIN_REPLICAS": (EDIT, "monitoring",
                      "Two is the production floor: with one, a crash is an outage and a rolling "
                      "update has nowhere to shift traffic."),
     "MAX_REPLICAS": (EDIT, "monitoring", "The ReplicaCeiling alert compares against this."),
-    "REPLICAS_PER_WORKER": (EDIT, "monitoring", "Encodes the worker shape. Keep it honest about WORKER_TYPE."),
-    "MIN_WORKERS": (EDIT, "monitoring", ""),
-    "MAX_WORKERS": (EDIT, "monitoring", "A budget cap, not a capacity plan."),
+    "MIN_WORKERS": (EDIT, "monitoring",
+                    "A HOST count, and the master is host #1. 1 means no Hetzner workers at "
+                    "all — the master runs the app and nothing is billed. 2 or more means "
+                    "the master never runs application traffic."),
+    "MAX_WORKERS": (EDIT, "monitoring", "A budget cap, not a capacity plan. Also a host count, so 6 means the master plus up to 5 Hetzner workers."),
     "SUSTAIN_UP_SECONDS": (EDIT, "monitoring", "Up fast."),
     "SUSTAIN_DOWN_SECONDS": (EDIT, "monitoring", "Down slow. Never make these symmetric."),
     "SCALE_UP_FACTOR": (EDIT, "monitoring", "+50% of current, minimum +1. One at a time cannot track a spike."),
@@ -72,7 +75,23 @@ FIELDS = {
     "APP_CPU_LIMIT": (EDIT, "monitoring",
                       "The denominator for CPU-per-replica. It MUST match the cpus limit on api-prod "
                       "in stacks/app.yml or the signal silently misreports."),
+    # --- application topology ----------------------------------------------
+    # Both are rendered into stacks/app.yml by envsubst on every deploy, so a
+    # change here really does take effect — after the app stack is redeployed.
+    # They were previously unlisted, which made the panel fall back to "not
+    # managed" and show them as unchangeable for no reason.
+    "APP_PORT": (EDIT, "app",
+                 "The port your app listens on. Feeds the healthcheck, the Prometheus "
+                 "scrape label and both tunnel targets. Change it only alongside the "
+                 "app itself — a wrong value fails the healthcheck and rolls back."),
+    "APP_METRICS_PATH": (EDIT, "app",
+                         "Where the app exposes Prometheus metrics. If this is wrong the "
+                         "latency signal disappears and the autoscaler falls back to CPU."),
     "APP_SERVICE": (EDIT, "monitoring", "The service the autoscaler scales."),
+    "APP_SERVICE_STAGING": (EDIT, "monitoring",
+                            "Follows production between manager-only and worker-only "
+                            "placement, so the master runs no app at all once workers "
+                            "exist. It is never scaled. Blank to leave staging alone."),
 
     # --- access ------------------------------------------------------------
     "GRAFANA_ADMIN_USER": (EDIT, "monitoring", "Grafana only applies this on first start."),
@@ -95,10 +114,11 @@ GROUPS = [
                  "WORKER_IMAGE", "WORKER_TYPE", "HCLOUD_TOKEN"]),
     ("Scaling", ["SLO_P95_MS", "SCALE_UP_P95_RATIO", "SCALE_DOWN_P95_RATIO", "SCALE_UP_CPU",
                  "SCALE_DOWN_CPU", "NODE_PRESSURE_PCT", "MIN_REPLICAS", "MAX_REPLICAS",
-                 "REPLICAS_PER_WORKER", "MIN_WORKERS", "MAX_WORKERS", "SUSTAIN_UP_SECONDS",
+                 "MIN_WORKERS", "MAX_WORKERS", "SUSTAIN_UP_SECONDS",
                  "SUSTAIN_DOWN_SECONDS", "SCALE_UP_FACTOR", "COOLDOWN_UP_SECONDS",
                  "COOLDOWN_DOWN_SECONDS", "REPLICA_COOLDOWN_SECONDS", "SCHEDULE_FLOOR",
-                 "DRY_RUN", "APP_CPU_LIMIT", "APP_SERVICE"]),
+                 "DRY_RUN", "APP_CPU_LIMIT", "APP_SERVICE", "APP_SERVICE_STAGING"]),
+    ("Application", ["APP_PORT", "APP_METRICS_PATH"]),
     ("Access", ["ADMIN_USER", "ADMIN_PASSWORD", "GRAFANA_ADMIN_USER", "GRAFANA_ADMIN_PASSWORD",
                 "ALERT_WEBHOOK_URL", "CF_TUNNEL_TOKEN", "CI_SSH_PUBLIC_KEY"]),
     # Not shown, on purpose: GHCR_USER, GHCR_TOKEN, APP_IMAGE_PROD,

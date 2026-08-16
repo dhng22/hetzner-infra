@@ -33,8 +33,13 @@
 #   image    — the stack file says ${APP_IMAGE_PROD}, the tag pinned at
 #              bootstrap. CI has moved on via `docker service update`. A plain
 #              redeploy would roll production back to the first-boot image.
+#   placement — the stack file sets no node.role constraint, because the
+#              autoscaler moves the app between manager-only and worker-only
+#              placement as the fleet grows and shrinks. A plain redeploy in
+#              worker mode would drop the pin and let production replicas drift
+#              back onto the master, at whatever moment CI happened to ship.
 #
-# So both are read from the LIVE service and pinned for the duration of the
+# So all three are read from the LIVE service and pinned for the duration of the
 # deploy. First deploy, when no service exists yet, falls back to infra.env.
 # =============================================================================
 
@@ -184,6 +189,43 @@ live_image() {
     --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' 2>/dev/null || true
 }
 
+# Is this service currently pinned to worker nodes?
+#
+# The autoscaler owns that constraint at runtime, exactly like it owns the
+# replica count. stacks/app.yml deliberately does not set it, so a plain stack
+# deploy would strip it — and stripping it in worker mode invites production
+# replicas back onto the master silently, at whatever moment CI happens to
+# ship. Same failure as replicas and image, third instance of it.
+worker_pinned() {
+  docker service inspect "${STACK_NAME}_$1" \
+    --format '{{range .Spec.TaskTemplate.Placement.Constraints}}{{println .}}{{end}}' \
+    2>/dev/null | tr -d ' ' | grep -qx 'node.role==worker'
+}
+
+# Emit a compose override that re-states the pin for whichever services have it.
+# `placement` is a mapping, so this merges with the base file's `preferences`
+# rather than replacing it.
+render_placement() {
+  local out="$1"; shift
+  local svc body=""
+  for svc in "$@"; do
+    if worker_pinned "$svc"; then
+      echo "preserving worker pin on $svc"
+      body="${body}  ${svc}:
+    deploy:
+      placement:
+        constraints:
+          - node.role == worker
+"
+    fi
+  done
+  # No pin live: the app is in manager mode, or has never been deployed. Write
+  # nothing and let the caller drop the -c rather than feeding stack deploy an
+  # empty services map.
+  [ -n "$body" ] || return 1
+  printf 'version: "3.8"\nservices:\n%s' "$body" > "$out"
+}
+
 deploy() {
   local tmp; tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' RETURN
 
@@ -229,8 +271,12 @@ deploy() {
 
   render_override "$tmp/override.yml" "$n" "${triples[@]}" "${quads[@]}"
 
-  docker stack deploy --with-registry-auth \
-    -c "$tmp/app.yml" -c "$tmp/override.yml" "$STACK_NAME"
+  local files=(-c "$tmp/app.yml" -c "$tmp/override.yml")
+  if render_placement "$tmp/placement.yml" api-prod api-staging; then
+    files+=(-c "$tmp/placement.yml")
+  fi
+
+  docker stack deploy --with-registry-auth "${files[@]}" "$STACK_NAME"
 }
 
 # --- commands ---------------------------------------------------------------

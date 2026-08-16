@@ -29,12 +29,44 @@ groups:
         annotations:
           summary: "Disk over 85% on {{ $labels.instance }}"
 
+      # MAX_WORKERS is a HOST ceiling (the master is host #1), so this compares
+      # against the host gauge. `autoscaler_current_workers` counts only Hetzner
+      # servers and would be one short of the ceiling forever.
       - alert: AutoscalerAtMax
-        expr: autoscaler_current_workers >= autoscaler_max_workers
+        expr: autoscaler_current_hosts >= autoscaler_max_workers
         for: 15m
         labels: { severity: warning }
         annotations:
           summary: "Autoscaler pinned at MAX_WORKERS — raise the ceiling or optimise"
+
+      # The app is pinned to worker nodes and there are no worker nodes, so
+      # every task is unplaceable. The autoscaler fails back to manager mode on
+      # its next loop, which makes this self-healing within ~60s — so if it is
+      # still true after two minutes, the recovery itself is broken (no docker
+      # CLI in the image, socket permissions, a rollout wedged mid-flight).
+      #
+      # Both gauges come from the same target, so the labels match and `and`
+      # composes them. This is the one state in the new placement model that is
+      # a hard outage rather than a slow degradation.
+      - alert: AppStrandedWithoutWorkers
+        expr: autoscaler_placement_worker_mode == 1 and autoscaler_current_workers < 1
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "App is pinned to worker nodes but no worker exists — tasks cannot be placed"
+
+      # The autoscaler swallows its own errors so one bad loop cannot kill it —
+      # which means a persistently failing stage is invisible without this.
+      # `stage` distinguishes them: "placement" is a constraint change that will
+      # not apply, "handover" is a scale-in that cannot finish, "query" is
+      # usually VictoriaMetrics being unreachable. A couple of blips are normal;
+      # a sustained rate is not.
+      - alert: AutoscalerErrors
+        expr: sum by (stage) (rate(autoscaler_errors_total[10m])) > 0
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "Autoscaler is failing repeatedly in stage '{{ $labels.stage }}'"
 
       - alert: AutoscalerStalled
         expr: time() - autoscaler_last_loop_timestamp_seconds > 300

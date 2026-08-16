@@ -2776,7 +2776,7 @@ textarea { resize: vertical; min-height: 260px; }
 <div class="page-head">
   <div>
     <h1>Cloudflare Tunnel</h1>
-    <p>One connector per worker. All inbound traffic arrives here.</p>
+    <p>One connector per node, master included. All inbound traffic arrives here.</p>
   </div>
   <div class="spacer"></div>
   <div class="inline">
@@ -4148,7 +4148,7 @@ textarea { resize: vertical; min-height: 260px; }
 <div class="page-head">
   <div>
     <h1>Autoscaler</h1>
-    <p>Two-tier scaler. Owns the API&#39;s replica count and the worker pool.</p>
+    <p>Two-tier scaler. Owns the API&#39;s replica count, its placement, and the worker pool.</p>
   </div>
   <div class="spacer"></div>
   <div class="inline">
@@ -5051,7 +5051,10 @@ textarea { resize: vertical; min-height: 260px; }
   <div>
     <h1>Autoscaler</h1>
     <p>Load is absorbed cheapest first: replicas in seconds, nodes in about two minutes.
-       Coming down the order reverses — shed replicas first, remove the node later.</p>
+       Coming down the order reverses — shed replicas first, remove the node later.
+       The master is host&nbsp;#1, so with no workers it runs the app itself and nothing
+       is billed; past 3 replicas the app moves entirely onto
+       workers. Per-node capacity is measured from real CPU and RAM, not configured.</p>
   </div>
 </div>
 
@@ -5063,12 +5066,25 @@ textarea { resize: vertical; min-height: 260px; }
     <div class="meter"><i style="width: 50%"></i></div>
   </div>
   <div class="tile">
-    <span class="k">Workers</span>
-    <span class="v">3<span class="muted" style="font-size:16px">/4</span></span>
-    <span class="m">floor 2 · ceiling 6</span>
+    <span class="k">Hosts</span>
+    <span class="v">4<span class="muted" style="font-size:16px">/5</span></span>
+    <span class="m">master is #1 · floor 1 · ceiling 6</span>
     <div class="meter ">
-      <i style="width: 50%"></i>
+      <i style="width: 67%"></i>
     </div>
+  </div>
+  <div class="tile">
+    <span class="k">Placement</span>
+    
+      <span class="v" style="font-size:20px">Workers</span>
+      <span class="m">master carries no app replicas</span>
+    
+  </div>
+  <div class="tile">
+    <span class="k">Measured room</span>
+    <span class="v">3<span class="muted" style="font-size:16px">
+      &nbsp;/&nbsp;5</span></span>
+    <span class="m">replicas per master / per new worker — from real CPU and RAM</span>
   </div>
   <div class="tile">
     <span class="k">SLO</span>
@@ -5109,13 +5125,13 @@ textarea { resize: vertical; min-height: 260px; }
         </tr>
         
         <tr>
-          <td><strong>Worker CPU</strong></td>
+          <td><strong>Node CPU</strong></td>
           <td class="num mono">71.0%</td>
-          <td class="muted">Placement guard only, never a trigger.</td>
+          <td class="muted">Placement guard only, never a trigger. Reads the workers, or the master when the fleet is empty.</td>
         </tr>
         
         <tr>
-          <td><strong>Worker memory</strong></td>
+          <td><strong>Node memory</strong></td>
           <td class="num mono">58.0%</td>
           <td class="muted">Placement guard only.</td>
         </tr>
@@ -5288,7 +5304,7 @@ textarea { resize: vertical; min-height: 260px; }
 
       <p class="why">
         
-        Change REPLICAS_PER_WORKER with it. It assumes CPX21 with a 1.0 CPU limit; leaving it stale either wastes nodes or queues tasks Swarm cannot place.
+        Applies to workers created from now on. How many replicas it holds is read from the Hetzner catalogue, so there is nothing to keep in sync — a bigger type simply means fewer, larger nodes.
         
           <em>Saving redeploys the monitoring stack.</em>
         
@@ -5439,7 +5455,7 @@ textarea { resize: vertical; min-height: 260px; }
 
       <p class="why">
         
-        Placement guard: above this, another replica will not fit.
+        Placement guard, never a trigger: above this the autoscaler asks for one host more than the capacity arithmetic alone would.
         
           <em>Saving redeploys the monitoring stack.</em>
         
@@ -5485,25 +5501,6 @@ textarea { resize: vertical; min-height: 260px; }
     </div>
     
     <div class="setting-row">
-      <label for="set-REPLICAS_PER_WORKER">
-        <span class="mono">REPLICAS_PER_WORKER</span>
-      </label>
-
-      
-        <input id="set-REPLICAS_PER_WORKER" type="text" name="value__REPLICAS_PER_WORKER" value="2">
-        <input type="hidden" name="key" value="REPLICAS_PER_WORKER">
-      
-
-      <p class="why">
-        
-        Encodes the worker shape. Keep it honest about WORKER_TYPE.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
       <label for="set-MIN_WORKERS">
         <span class="mono">MIN_WORKERS</span>
       </label>
@@ -5515,7 +5512,7 @@ textarea { resize: vertical; min-height: 260px; }
 
       <p class="why">
         
-        
+        A HOST count, and the master is host #1. 1 means no Hetzner workers at all — the master runs the app and nothing is billed. 2 or more means the master never runs application traffic.
         
           <em>Saving redeploys the monitoring stack.</em>
         
@@ -5534,7 +5531,7 @@ textarea { resize: vertical; min-height: 260px; }
 
       <p class="why">
         
-        A budget cap, not a capacity plan.
+        A budget cap, not a capacity plan. Also a host count, so 6 means the master plus up to 5 Hetzner workers.
         
           <em>Saving redeploys the monitoring stack.</em>
         
@@ -5661,7 +5658,7 @@ textarea { resize: vertical; min-height: 260px; }
       </label>
 
       
-        <input id="set-SCHEDULE_FLOOR" type="text" name="value__SCHEDULE_FLOOR" value="08:00-20:00=2">
+        <input id="set-SCHEDULE_FLOOR" type="text" name="value__SCHEDULE_FLOOR" value="">
         <input type="hidden" name="key" value="SCHEDULE_FLOOR">
       
 
@@ -5727,6 +5724,74 @@ textarea { resize: vertical; min-height: 260px; }
         The service the autoscaler scales.
         
           <em>Saving redeploys the monitoring stack.</em>
+        
+      </p>
+    </div>
+    
+    <div class="setting-row">
+      <label for="set-APP_SERVICE_STAGING">
+        <span class="mono">APP_SERVICE_STAGING</span>
+      </label>
+
+      
+        <input id="set-APP_SERVICE_STAGING" type="text" name="value__APP_SERVICE_STAGING" value="app_api-staging">
+        <input type="hidden" name="key" value="APP_SERVICE_STAGING">
+      
+
+      <p class="why">
+        
+        Follows production between manager-only and worker-only placement, so the master runs no app at all once workers exist. It is never scaled. Blank to leave staging alone.
+        
+          <em>Saving redeploys the monitoring stack.</em>
+        
+      </p>
+    </div>
+    
+  </section>
+  
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Application</h2>
+      <span class="spacer"></span>
+      
+      <span class="eyebrow">2 of 2 editable</span>
+    </div>
+
+    
+    <div class="setting-row">
+      <label for="set-APP_PORT">
+        <span class="mono">APP_PORT</span>
+      </label>
+
+      
+        <input id="set-APP_PORT" type="text" name="value__APP_PORT" value="8080">
+        <input type="hidden" name="key" value="APP_PORT">
+      
+
+      <p class="why">
+        
+        The port your app listens on. Feeds the healthcheck, the Prometheus scrape label and both tunnel targets. Change it only alongside the app itself — a wrong value fails the healthcheck and rolls back.
+        
+          <em>Saving redeploys the app stack.</em>
+        
+      </p>
+    </div>
+    
+    <div class="setting-row">
+      <label for="set-APP_METRICS_PATH">
+        <span class="mono">APP_METRICS_PATH</span>
+      </label>
+
+      
+        <input id="set-APP_METRICS_PATH" type="text" name="value__APP_METRICS_PATH" value="/metrics">
+        <input type="hidden" name="key" value="APP_METRICS_PATH">
+      
+
+      <p class="why">
+        
+        Where the app exposes Prometheus metrics. If this is wrong the latency signal disappears and the autoscaler falls back to CPU.
+        
+          <em>Saving redeploys the app stack.</em>
         
       </p>
     </div>
@@ -6248,7 +6313,7 @@ textarea { resize: vertical; min-height: 260px; }
 
       <p class="why">
         
-        Change REPLICAS_PER_WORKER with it. It assumes CPX21 with a 1.0 CPU limit; leaving it stale either wastes nodes or queues tasks Swarm cannot place.
+        Applies to workers created from now on. How many replicas it holds is read from the Hetzner catalogue, so there is nothing to keep in sync — a bigger type simply means fewer, larger nodes.
         
           <em>Saving redeploys the monitoring stack.</em>
         
@@ -6399,7 +6464,7 @@ textarea { resize: vertical; min-height: 260px; }
 
       <p class="why">
         
-        Placement guard: above this, another replica will not fit.
+        Placement guard, never a trigger: above this the autoscaler asks for one host more than the capacity arithmetic alone would.
         
           <em>Saving redeploys the monitoring stack.</em>
         
@@ -6445,25 +6510,6 @@ textarea { resize: vertical; min-height: 260px; }
     </div>
     
     <div class="setting-row">
-      <label for="set-REPLICAS_PER_WORKER">
-        <span class="mono">REPLICAS_PER_WORKER</span>
-      </label>
-
-      
-        <input id="set-REPLICAS_PER_WORKER" type="text" name="value__REPLICAS_PER_WORKER" value="2">
-        <input type="hidden" name="key" value="REPLICAS_PER_WORKER">
-      
-
-      <p class="why">
-        
-        Encodes the worker shape. Keep it honest about WORKER_TYPE.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
       <label for="set-MIN_WORKERS">
         <span class="mono">MIN_WORKERS</span>
       </label>
@@ -6475,7 +6521,7 @@ textarea { resize: vertical; min-height: 260px; }
 
       <p class="why">
         
-        
+        A HOST count, and the master is host #1. 1 means no Hetzner workers at all — the master runs the app and nothing is billed. 2 or more means the master never runs application traffic.
         
           <em>Saving redeploys the monitoring stack.</em>
         
@@ -6494,7 +6540,7 @@ textarea { resize: vertical; min-height: 260px; }
 
       <p class="why">
         
-        A budget cap, not a capacity plan.
+        A budget cap, not a capacity plan. Also a host count, so 6 means the master plus up to 5 Hetzner workers.
         
           <em>Saving redeploys the monitoring stack.</em>
         
@@ -6621,7 +6667,7 @@ textarea { resize: vertical; min-height: 260px; }
       </label>
 
       
-        <input id="set-SCHEDULE_FLOOR" type="text" name="value__SCHEDULE_FLOOR" value="08:00-20:00=2">
+        <input id="set-SCHEDULE_FLOOR" type="text" name="value__SCHEDULE_FLOOR" value="">
         <input type="hidden" name="key" value="SCHEDULE_FLOOR">
       
 
@@ -6687,6 +6733,74 @@ textarea { resize: vertical; min-height: 260px; }
         The service the autoscaler scales.
         
           <em>Saving redeploys the monitoring stack.</em>
+        
+      </p>
+    </div>
+    
+    <div class="setting-row">
+      <label for="set-APP_SERVICE_STAGING">
+        <span class="mono">APP_SERVICE_STAGING</span>
+      </label>
+
+      
+        <input id="set-APP_SERVICE_STAGING" type="text" name="value__APP_SERVICE_STAGING" value="app_api-staging">
+        <input type="hidden" name="key" value="APP_SERVICE_STAGING">
+      
+
+      <p class="why">
+        
+        Follows production between manager-only and worker-only placement, so the master runs no app at all once workers exist. It is never scaled. Blank to leave staging alone.
+        
+          <em>Saving redeploys the monitoring stack.</em>
+        
+      </p>
+    </div>
+    
+  </section>
+  
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Application</h2>
+      <span class="spacer"></span>
+      
+      <span class="eyebrow">2 of 2 editable</span>
+    </div>
+
+    
+    <div class="setting-row">
+      <label for="set-APP_PORT">
+        <span class="mono">APP_PORT</span>
+      </label>
+
+      
+        <input id="set-APP_PORT" type="text" name="value__APP_PORT" value="8080">
+        <input type="hidden" name="key" value="APP_PORT">
+      
+
+      <p class="why">
+        
+        The port your app listens on. Feeds the healthcheck, the Prometheus scrape label and both tunnel targets. Change it only alongside the app itself — a wrong value fails the healthcheck and rolls back.
+        
+          <em>Saving redeploys the app stack.</em>
+        
+      </p>
+    </div>
+    
+    <div class="setting-row">
+      <label for="set-APP_METRICS_PATH">
+        <span class="mono">APP_METRICS_PATH</span>
+      </label>
+
+      
+        <input id="set-APP_METRICS_PATH" type="text" name="value__APP_METRICS_PATH" value="/metrics">
+        <input type="hidden" name="key" value="APP_METRICS_PATH">
+      
+
+      <p class="why">
+        
+        Where the app exposes Prometheus metrics. If this is wrong the latency signal disappears and the autoscaler falls back to CPU.
+        
+          <em>Saving redeploys the app stack.</em>
         
       </p>
     </div>

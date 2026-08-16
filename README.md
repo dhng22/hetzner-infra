@@ -10,22 +10,30 @@ anything new without configuration.
                      Cloudflare — ONE tunnel, four hostnames
                                      │
    ┌─────────────────────────────────┴──────────────────────────────┐
-   │  WORKER POOL — autoscaled 1..MAX, CPX21                        │
-   │    cloudflared (global: one connector per worker)              │
+   │  WORKER POOL — 0 servers at rest, autoscaled up to MAX-1        │
+   │    cloudflared (global: one connector per node)                │
    │    api-prod    (N replicas, autoscaled)                        │
    │    api-staging (1 replica, capped at 0.5 CPU)                  │
    │    node-exporter + cadvisor (global)                           │
    └─────────────────────────────────┬──────────────────────────────┘
             creates, drains          │        metrics, logs
    ┌─────────────────────────────────┴──────────────────────────────┐
-   │  MASTER — manual, CPX31, OUTSIDE the request path              │
+   │  MASTER — manual, CPX31. HOST #1.                              │
    │    admin panel · autoscaler                                    │
    │    VictoriaMetrics · Loki · Grafana · vmagent                  │
    │    redis-prod · redis-staging                                  │
+   │    cloudflared                                                 │
+   │    ...and api-prod/api-staging ONLY while no worker exists     │
    └────────────────────────────────────────────────────────────────┘
                                      │
                           MongoDB Atlas (prod + staging DBs)
 ```
+
+The master is **host #1**, so the resting state is one box and no Hetzner
+servers. When load outgrows what the master can hold, workers are provisioned
+for *all* the replicas and the master goes back to carrying none. How much each
+node holds is measured from its real CPU and RAM, not configured.
+See [Scaling policy](#scaling-policy).
 
 Networks: `edge` (cloudflared + both api services), `data-prod`,
 `data-staging` (each api to its own Redis), `monitoring`.
@@ -54,9 +62,70 @@ Load is absorbed cheapest-first:
 
 Coming down, the order reverses: shed replicas first, remove the node later.
 
+### Where the app runs — the master is host #1
+
+Hosts are counted **including the master**, so the floor costs nothing:
+
+| Hosts | Hetzner servers | Constraint on `api-*` | Who runs the app |
+|---|---|---|---|
+| 1 | none | *(none)* | the master |
+| 2+ | that many | `node.role == worker` | the workers only; master carries zero |
+
+`MIN_WORKERS=1` therefore means "no workers, the master serves". `MAX_WORKERS=6`
+means the master plus up to 5 workers. Set `MIN_WORKERS=2` if you would rather
+the master never ran application traffic.
+
+The autoscaler adds and removes that constraint itself — `stacks/app.yml`
+deliberately does not set it.
+
+### Capacity is measured, not configured
+
+There is no `REPLICAS_PER_WORKER`. How many replicas a node holds is computed
+from **that node's real CPU and RAM, minus what Swarm has already reserved on
+it**, divided by one replica's own reservation from `stacks/app.yml`. A new
+worker's size comes from the Hetzner catalogue for `WORKER_TYPE`.
+
+With the shipped reservations:
+
+| Node | Holds |
+|---|---|
+| master CPX31 (4 vCPU / 8 GB) | **3** replicas — after monitoring, Redis and the panel take theirs |
+| worker CPX21 (3 vCPU / 4 GB) | **5** replicas |
+| worker CPX31 (4 vCPU / 8 GB) | **7** replicas |
+
+Resize the master, change a limit or switch worker type and the arithmetic just
+follows. Nothing to keep in sync, nothing to drift.
+
+**Existing nodes are filled before new ones are bought.** If two workers hold 10
+between them and you want 11, it buys one more — it does not round up per node.
+That also makes mixed fleets work: a node is worth what it can actually hold, so
+a half-empty 4 vCPU worker is used up before another is ordered.
+
+So the counts run: 2 replicas → 0 servers · 5 → 1 server · 6 → 2 servers.
+
+> The unit is the **reservation** (0.5 CPU), not the limit (1.0 CPU), because
+> reservations are what Swarm's scheduler actually subtracts when placing a
+> task. The limit is burst headroom on top. If replicas do contend, p95 rises
+> and the autoscaler adds capacity — which is the signal it is built on anyway.
+
+### Both handovers are ordered so something is always serving
+
+- **Out:** provision workers → wait until they are `ready` *and* their measured
+  capacity covers every replica → only then add the pin. The master serves the
+  whole time.
+- **In:** remove the pin *first*, while the last worker is still up → wait until
+  a replica is actually running on the master → only then drain and delete it.
+
+If every worker disappears at once, the next loop puts the app back on the
+master by the same path, and `AppStrandedWithoutWorkers` fires if that recovery
+does not happen within two minutes. That emergency path applies even at
+`MIN_WORKERS=2` — an outage is worse than temporary co-tenancy.
+
 | Setting | Default | Why |
 |---|---|---|
 | `SLO_P95_MS` | 500 | **The** number. Everything derives from it. Set it from your real latency distribution. |
+| `MIN_WORKERS` | 1 | A **host** count, master included. `1` = no servers billed. `2`+ = master never runs the app. |
+| `MAX_WORKERS` | 6 | Also a host count, so master + up to 5 workers. A **budget** cap. |
 | `SCALE_UP_P95_RATIO` | 0.8 | Act at 80% of SLO, before users feel it |
 | `SCALE_UP_CPU` | 70 | % of one replica's own limit — not node CPU |
 | `NODE_PRESSURE_PCT` | 80 | Placement guard: another replica will not fit |
@@ -64,7 +133,6 @@ Coming down, the order reverses: shed replicas first, remove the node later.
 | `SUSTAIN_DOWN_SECONDS` | 900 | Down slow. Never symmetric. |
 | `SCALE_UP_FACTOR` | 0.5 | +50% of current, min +1. One at a time cannot track a spike. |
 | `COOLDOWN_UP_SECONDS` | 300 | Must exceed boot + pull + JVM warmup, or you overshoot |
-| `MAX_WORKERS` | 6 | A **budget** cap, not a capacity plan |
 
 Why CPU is still there when the policy is latency-led: `histogram_quantile`
 over an empty bucket returns nothing. At low traffic the latency signal
@@ -195,8 +263,12 @@ two things it does not own:
 - **image** — the file says `${APP_IMAGE_PROD}`, the tag pinned at bootstrap.
   CI has moved on. A plain redeploy rolls production back to the first-boot
   image.
+- **placement** — the file sets no `node.role` constraint, because the
+  autoscaler moves the app between the master and the workers. A plain redeploy
+  while the app is pinned to workers drops the pin, and production replicas
+  drift back onto the master at whatever moment CI happened to ship.
 
-`app-env` reads both from the running service and pins them for the deploy.
+`app-env` reads all three from the running service and pins them for the deploy.
 
 ## Things that will bite you
 
@@ -206,9 +278,23 @@ two things it does not own:
 - **`APP_CPU_LIMIT` must match `stacks/app.yml`.** It is the denominator for
   CPU-per-replica. Change the limit in one place only and the signal silently
   misreports.
-- **`REPLICAS_PER_WORKER=2` assumes CPX21 and a 1.0 CPU limit.** Change the
-  worker type without changing this and you will either waste nodes or queue
-  unplaceable tasks.
+- **At the floor the master IS the request path.** That is the deal for not
+  paying for an idle worker: while no workers exist, losing the master costs
+  uptime and not just monitoring. Set `MIN_WORKERS=2` if that trade is wrong
+  for you.
+- **Do not put a `node.role` constraint on `api-prod` or `api-staging`.** The
+  autoscaler owns it. Pinning them to workers in the stack file makes the free
+  floor an outage instead of a saving; pinning them to the manager keeps
+  production on the master forever.
+- **Every `reservations:` block is load-bearing, twice.** Swarm schedules
+  against them, *and* the autoscaler derives node capacity from them. Delete one
+  and the master looks like an idle 8 GB box: replicas get packed on top of
+  VictoriaMetrics until something is OOM-killed. Understate one and the
+  autoscaler believes in room that is not there.
+- **A small master never reaches the free floor.** If the monitoring stack's
+  reservations leave no room for `MIN_REPLICAS` replicas, one worker always
+  stays up. The autoscaler says so on startup — look for `measured capacity` in
+  its log. A CPX31 holds 3, which is enough; a CPX21 holds 1, which is not.
 - **Staging shares the pool.** Capped at 0.5 CPU, so idle staging is noise. A
   real load test is not — it will move production. Cap it or expect a worker.
 - **The master is a single point of failure for control, not traffic.** Enable
@@ -239,14 +325,22 @@ two things it does not own:
    ```bash
    ssh root@<ip> tail -f /var/log/infra-bootstrap.log
    ```
-5. **Wait for the first worker.** No workers exist until the autoscaler's first
-   loop — that moment is your proof the Hetzner token and the worker cloud-init
-   both work:
+5. **Expect no workers.** With `MIN_WORKERS=1` a healthy idle cluster is one
+   node, with `api-prod` running on the master. That is the resting state, not a
+   failure:
    ```bash
-   docker service logs -f monitoring_autoscaler
-   docker node ls
+   docker service logs -f monitoring_autoscaler   # "placement manager", "measured capacity"
+   docker node ls                                 # just the master
+   docker service ps app_api-prod                 # tasks on the master
    ```
-6. **Add the four tunnel hostnames** in Cloudflare, once a worker has joined:
+   Check the `measured capacity` line: it says how many replicas the master
+   holds. If that is below `MIN_REPLICAS`, a worker will always stay up.
+
+   The Hetzner token and worker cloud-init are therefore *not* exercised at
+   boot. To prove them before you need them, temporarily set `MIN_WORKERS=2` in
+   the panel (Settings → Scaling), watch a worker join and the app move onto it,
+   then set it back to 1 and watch it hand back.
+6. **Add the four tunnel hostnames** in Cloudflare:
 
    | Hostname | Target |
    |---|---|
