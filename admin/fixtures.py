@@ -152,19 +152,97 @@ def logs(service_name, lines=200):
 
 def nodes():
     return [
-        {"id": "k39dl2mzq018", "hostname": "aichat-master", "role": "manager", "state": "ready",
+        {"id": "k39dl2mzq018", "full_id": "k39dl2mzq018aa", "hostname": "aichat-master",
+         "role": "manager", "state": "ready",
          "availability": "active", "tone": "ok", "cpus": 4, "memory_gb": 7.6,
          "engine": "27.3.1", "addr": "10.0.0.2"},
-        {"id": "w1af02c9be47", "hostname": "aichat-worker-1754812203", "role": "worker",
+        {"id": "w1af02c9be47", "full_id": "w1af02c9be47aa",
+         "hostname": "aichat-worker-1754812203", "role": "worker",
          "state": "ready", "availability": "active", "tone": "ok", "cpus": 3, "memory_gb": 3.8,
          "engine": "27.3.1", "addr": "10.0.0.5"},
-        {"id": "w2bc71d0aa93", "hostname": "aichat-worker-1754819114", "role": "worker",
+        {"id": "w2bc71d0aa93", "full_id": "w2bc71d0aa93aa",
+         "hostname": "aichat-worker-1754819114", "role": "worker",
          "state": "ready", "availability": "active", "tone": "ok", "cpus": 3, "memory_gb": 3.8,
          "engine": "27.3.1", "addr": "10.0.0.6"},
-        {"id": "w3de92f1cc05", "hostname": "aichat-worker-1754823887", "role": "worker",
+        {"id": "w3de92f1cc05", "full_id": "w3de92f1cc05aa",
+         "hostname": "aichat-worker-1754823887", "role": "worker",
          "state": "ready", "availability": "drain", "tone": "warn", "cpus": 3, "memory_gb": 3.8,
          "engine": "27.3.1", "addr": "10.0.0.7"},
     ]
+
+
+# Same shape as swarm.topology(): one entry per RUNNING task, named individually.
+# A worker mid-drain with only a couple of tasks left is the state most worth
+# being able to see at a glance, so the dummy data shows one.
+_BANDS = [("api-prod", "prod"), ("api-staging", "staging"), ("data", "data"),
+          ("observability", "observe"), ("platform", "platform")]
+_BAND_OF = {
+    "api-prod": ("api-prod", "prod"),
+    "api-staging": ("api-staging", "staging"),
+    "redis-prod": ("data", "data"),
+    "redis-staging": ("data", "data"),
+    "redis-exporter-prod": ("data", "data"),
+    "victoriametrics": ("observability", "observe"),
+    "vmagent": ("observability", "observe"),
+    "vmalert": ("observability", "observe"),
+    "alertmanager": ("observability", "observe"),
+    "loki": ("observability", "observe"),
+    "grafana": ("observability", "observe"),
+    "node-exporter": ("observability", "observe"),
+    "cadvisor": ("observability", "observe"),
+}
+_STACK_OF = {"api-prod": "app", "api-staging": "app", "redis-prod": "app",
+             "redis-staging": "app", "redis-exporter-prod": "app",
+             "cloudflared": "app", "ui": "admin"}
+
+
+def _tasks(spec):
+    """spec: [(short_name, replica_count), ...] -> flat per-task list."""
+    rank = {b: i for i, (b, _) in enumerate(_BANDS)}
+    out = []
+    for name, count in spec:
+        band, key = _BAND_OF.get(name, ("platform", "platform"))
+        stack = _STACK_OF.get(name, "monitoring")
+        for i in range(count):
+            out.append({"id": f"{name[:6]}{i}kd93jf01"[:12], "name": name,
+                        "service": f"{stack}_{name}", "band": band, "key": key})
+    out.sort(key=lambda x: (rank.get(x["band"], 99), x["name"], x["id"]))
+    return out
+
+
+def topology():
+    n = {x["hostname"]: x for x in nodes()}
+    rows = [
+        (n["aichat-master"], 78.0, 61.0, [
+            ("victoriametrics", 1), ("vmagent", 1), ("vmalert", 1),
+            ("alertmanager", 1), ("loki", 1), ("grafana", 1),
+            ("node-exporter", 1), ("cadvisor", 1),
+            ("redis-prod", 1), ("redis-staging", 1), ("redis-exporter-prod", 1),
+            ("cloudflared", 1), ("autoscaler", 1), ("ui", 1),
+        ]),
+        (n["aichat-worker-1754812203"], 64.0, 47.0, [
+            ("api-prod", 3), ("node-exporter", 1), ("cadvisor", 1), ("cloudflared", 1),
+        ]),
+        (n["aichat-worker-1754819114"], 71.0, 52.0, [
+            ("api-prod", 2), ("api-staging", 1),
+            ("node-exporter", 1), ("cadvisor", 1), ("cloudflared", 1),
+        ]),
+        (n["aichat-worker-1754823887"], 12.0, 19.0, [
+            ("api-prod", 1), ("node-exporter", 1), ("cadvisor", 1),
+        ]),
+    ]
+    out = []
+    for node, cpu, mem, spec in rows:
+        items = _tasks(spec)
+        counts = {}
+        for it in items:
+            counts[it["name"]] = counts.get(it["name"], 0) + 1
+        out.append({**node, "tasks_total": len(items), "tasks": items,
+                    "by_service": [{"name": k, "count": v} for k, v in sorted(counts.items())],
+                    "cpu_pct": cpu, "mem_pct": mem})
+    return {"nodes": out,
+            "bands": [{"band": b, "key": k} for b, k in _BANDS],
+            "max_tasks": max(x["tasks_total"] for x in out)}
 
 
 def summary():

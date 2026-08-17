@@ -62,6 +62,25 @@ def vm_query(expr):
         return None
 
 
+def vm_query_by(expr, label="instance"):
+    """Instant query returning {label_value: float} instead of a single number."""
+    out = {}
+    try:
+        r = requests.get(f"{VM_URL}/api/v1/query", params={"query": expr}, timeout=8)
+        r.raise_for_status()
+        for row in r.json().get("data", {}).get("result", []):
+            key = row.get("metric", {}).get(label)
+            if key is None:
+                continue
+            try:
+                out[key] = float(row["value"][1])
+            except (KeyError, IndexError, ValueError):
+                continue
+    except Exception:
+        pass
+    return out
+
+
 # --- services --------------------------------------------------------------
 
 def _task_rows(service_id):
@@ -218,6 +237,8 @@ def nodes():
                    "warn" if state == "ready" else "bad"
             out.append({
                 "id": n.id[:12],
+                # Tasks reference the untruncated node id; topology() joins on it.
+                "full_id": n.id,
                 "hostname": desc.get("Hostname", "—"),
                 "role": spec.get("Role", "—"),
                 "state": state,
@@ -231,6 +252,108 @@ def nodes():
     except Exception:
         pass
     return sorted(out, key=lambda n: (n["role"] != "manager", n["hostname"]))
+
+
+# Which colour band a service belongs to on the topology chart. Ordered, and
+# matched by prefix against the stack-qualified service name — first hit wins,
+# so `app_api-prod` cannot fall into the generic `app_` bucket.
+#
+# Four categorical hues plus a neutral tail, on purpose. The panel already
+# reserves green/amber/red for status and teal for interaction, so a categorical
+# ramp has to dodge all four; four hues is what survives the CVD checks against
+# both surfaces. Everything past them folds into "platform" in neutral grey
+# rather than inventing a fifth hue nobody can distinguish.
+SERVICE_BANDS = [
+    ("api-prod",      "prod",     ("_api-prod",)),
+    ("api-staging",   "staging",  ("_api-staging",)),
+    ("data",          "data",     ("_redis", "_mongo")),
+    ("observability", "observe",  ("monitoring_victoriametrics", "monitoring_vmagent",
+                                   "monitoring_vmalert", "monitoring_alertmanager",
+                                   "monitoring_loki", "monitoring_grafana",
+                                   "monitoring_node-exporter", "monitoring_cadvisor")),
+]
+PLATFORM_BAND = ("platform", "platform")
+
+
+def _band_of(service_name):
+    for label, key, prefixes in SERVICE_BANDS:
+        if any(p in service_name for p in prefixes):
+            return label, key
+    return PLATFORM_BAND
+
+
+def short_service(name):
+    """`app_api-prod` -> `api-prod`. The stack prefix is noise in a per-node view."""
+    for stack in ("app_", "monitoring_", "admin_"):
+        if name.startswith(stack):
+            return name[len(stack):]
+    return name
+
+
+def topology():
+    """
+    Per-node composition: every RUNNING task on every box, named individually.
+
+    One entry per task, not per service — three replicas of api-prod are three
+    entries, because "how many of this are on that node" is the whole question
+    the view answers. Counts are of running tasks rather than desired replicas
+    on purpose: "desired 6, running 4" is exactly the state worth seeing.
+    """
+    band_order = [b[0] for b in SERVICE_BANDS] + [PLATFORM_BAND[0]]
+    band_key = {b[0]: b[1] for b in SERVICE_BANDS}
+    band_key[PLATFORM_BAND[0]] = PLATFORM_BAND[1]
+    band_rank = {b: i for i, b in enumerate(band_order)}
+
+    try:
+        svc_names = {s.id: s.name for s in client().services.list()}
+        tasks = client().api.tasks(filters={"desired-state": "running"})
+    except Exception:
+        svc_names, tasks = {}, []
+
+    by_node = {}
+    for t in tasks:
+        if t.get("Status", {}).get("State") != "running":
+            continue
+        node_id = t.get("NodeID")
+        if not node_id:
+            continue
+        full = svc_names.get(t.get("ServiceID"), "unknown")
+        band, key = _band_of(full)
+        by_node.setdefault(node_id, []).append({
+            "id": (t.get("ID") or "")[:12],
+            "name": short_service(full),
+            "service": full,
+            "band": band,
+            "key": key,
+        })
+
+    cpu = vm_query_by('100 - (avg by (instance) '
+                      '(rate(node_cpu_seconds_total{mode="idle"}[2m])) * 100)')
+    mem = vm_query_by('100 * (1 - node_memory_MemAvailable_bytes '
+                      '/ node_memory_MemTotal_bytes)')
+
+    out = []
+    for n in nodes():
+        items = by_node.get(n["full_id"], [])
+        # Grouped by band, then by name, so replicas of one service sit together
+        # and the bands read as blocks without needing colour to do the work.
+        items.sort(key=lambda x: (band_rank.get(x["band"], 99), x["name"], x["id"]))
+        counts = {}
+        for it in items:
+            counts[it["name"]] = counts.get(it["name"], 0) + 1
+        out.append({
+            **n,
+            "tasks_total": len(items),
+            "tasks": items,
+            "by_service": [{"name": k, "count": v} for k, v in sorted(counts.items())],
+            "cpu_pct": cpu.get(n["hostname"]),
+            "mem_pct": mem.get(n["hostname"]),
+        })
+    return {
+        "nodes": out,
+        "bands": [{"band": b, "key": band_key[b]} for b in band_order],
+        "max_tasks": max([n["tasks_total"] for n in out], default=0),
+    }
 
 
 def summary():

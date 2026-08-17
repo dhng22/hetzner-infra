@@ -441,6 +441,176 @@ textarea { resize: vertical; min-height: 260px; }
   backdrop-filter: blur(8px);
   border: 1px solid var(--line); border-radius: var(--r-lg);
 }
+
+/* --- cluster map (Overview) --------------------------------------------------
+   One horizontal stacked bar per node: bar length = running tasks relative to
+   the busiest node, segments = which kind of workload occupies it.
+
+   The four series hues are a categorical palette validated against BOTH
+   surfaces (OKLCH lightness band, chroma floor, protan/deutan separation,
+   normal-vision floor, WCAG contrast). They deliberately avoid the panel's
+   reserved colours: --ok/--warn/--bad carry status and --accent carries
+   interaction, so none of them may also mean "series 3". Anything past the four
+   folds into a neutral "platform" grey rather than a fifth invented hue.
+
+   Do not re-order these without re-running the validator: the order IS the
+   check. blue/orange/violet/magenta passes; swapping magenta next to orange
+   fails the normal-vision floor in both modes.
+   -------------------------------------------------------------------------- */
+   Follows this file's existing convention: :root carries the DARK values and
+   the light ones arrive via the media query and the explicit toggles, so the
+   two sets stay in the same places as every other token.
+
+   The dark column is the same four hues re-stepped for the dark surface, not a
+   second palette. Each column was validated against its own surface
+   (#ffffff / #16212a).
+   -------------------------------------------------------------------------- */
+:root {
+  --s-prod:     #3987e5;   /* blue    */
+  --s-staging:  #d95926;   /* orange  */
+  --s-data:     #9085e9;   /* violet  */
+  --s-observe:  #d55181;   /* magenta */
+  --s-platform: #7d919c;   /* neutral tail, not a categorical hue */
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --s-prod: #2a78d6; --s-staging: #eb6834; --s-data: #4a3aa7;
+    --s-observe: #e87ba4; --s-platform: #8497a1;
+  }
+}
+:root[data-theme="light"], body.theme-light {
+  --s-prod: #2a78d6; --s-staging: #eb6834; --s-data: #4a3aa7;
+  --s-observe: #e87ba4; --s-platform: #8497a1;
+}
+:root[data-theme="dark"], body.theme-dark {
+  --s-prod: #3987e5; --s-staging: #d95926; --s-data: #9085e9;
+  --s-observe: #d55181; --s-platform: #7d919c;
+}
+
+.panel-intro { margin: 0 16px 12px; color: var(--text-mute); font-size: 13px; max-width: 74ch; }
+
+.live { display: inline-flex; align-items: center; gap: 6px; font-size: 11px;
+  text-transform: uppercase; letter-spacing: .08em; font-weight: 650;
+  color: var(--text-mute); }
+.live i { width: 7px; height: 7px; border-radius: 50%; background: var(--ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
+.live.is-stale i { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent); }
+.live.is-idle  i { background: var(--text-mute); box-shadow: none; animation: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .live i { animation: livepulse 2.4s ease-in-out infinite; }
+  @keyframes livepulse { 0%, 100% { opacity: 1 } 50% { opacity: .45 } }
+}
+
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 0 16px 12px; }
+.legend-item { display: inline-flex; align-items: center; gap: 7px;
+  font-size: 12.5px; color: var(--text-mute); }
+.sw { width: 10px; height: 10px; border-radius: 3px; flex: none;
+  background: var(--s-platform); }
+.sw-prod     { background: var(--s-prod); }
+.sw-staging  { background: var(--s-staging); }
+.sw-data     { background: var(--s-data); }
+.sw-observe  { background: var(--s-observe); }
+.sw-platform { background: var(--s-platform); }
+
+/* --- the tree ---------------------------------------------------------------
+   Root (cluster) at the top, hosts on the next level, their tasks hanging below
+   each host. Connectors are drawn with pseudo-elements rather than SVG so every
+   node stays real DOM: the pills, tooltips and focus rings keep working, text
+   stays selectable, and the whole thing reflows instead of needing layout maths
+   on resize.
+   -------------------------------------------------------------------------- */
+.tree-scroll { overflow-x: auto; padding: 4px 16px 18px; }
+.tree { display: inline-flex; flex-direction: column; align-items: center; min-width: 100%; }
+
+.tree-top { display: flex; justify-content: center; }
+
+.tree-kids { display: flex; align-items: flex-start; justify-content: center; }
+
+/* Each branch draws its own half of the horizontal bus plus the vertical drop
+   into its own card. The first and last trim their outer half so the bus stops
+   at the outermost children instead of running off into space. */
+.tree-branch { position: relative; padding: 26px 9px 0; display: flex;
+  flex-direction: column; align-items: center; }
+.tree-branch::before, .tree-branch::after {
+  content: ""; position: absolute; top: 0; height: 26px; width: 50%;
+  border-top: 1px solid var(--line);
+}
+.tree-branch::before { right: 50%; border-right: 1px solid var(--line); }
+.tree-branch::after  { left: 50%; }
+.tree-branch:first-child::before { border-top-color: transparent; border-top-left-radius: 0; }
+.tree-branch:last-child::after   { border-top-color: transparent; }
+/* a lone host has no bus, just a straight drop */
+.tree-branch:only-child::before { border-top-color: transparent; }
+.tree-branch:only-child::after  { border-top-color: transparent; }
+
+/* the stub from the root card down into the bus */
+.tree-top .tnode-root { position: relative; }
+.tree-top .tnode-root::after {
+  content: ""; position: absolute; left: 50%; top: 100%; width: 1px; height: 26px;
+  background: var(--line);
+}
+
+/* --- the boxes ------------------------------------------------------------ */
+.tnode {
+  display: flex; flex-direction: column; gap: 3px;
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--surface-2); padding: 9px 12px; min-width: 168px;
+  text-align: left;
+}
+.tnode-root { background: var(--surface); border-color: var(--accent);
+  align-items: center; text-align: center; }
+.tnode-host.is-manager { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.tnode-head { display: flex; gap: 6px; flex-wrap: wrap; }
+.tnode-title { font: 600 13px/1.35 var(--mono); overflow-wrap: anywhere; }
+.tnode-sub { font-size: 12px; color: var(--text-mute); }
+.tnode-sub b { color: var(--text); font-family: var(--mono); font-weight: 600; }
+.tnode-meters { display: flex; gap: 12px; font-size: 12px; color: var(--text-mute); }
+.tnode-meters b { color: var(--text); font-family: var(--mono); font-weight: 600; }
+
+/* Tasks hang off a single spine dropped from the host card's left edge, one
+   tick per task — the file-tree read, which is what keeps 14 of them legible
+   where a horizontal row of 14 would not be.
+
+   The spine and the drop share an x of 0 so there is no jog between them, and
+   it stops at the last task's tick rather than running past the final item. */
+.slots { position: relative; align-self: stretch;
+  display: flex; flex-direction: column; align-items: flex-start;
+  gap: 5px; margin-top: 20px; padding-left: 18px; }
+.slots::before { content: ""; position: absolute; left: 0; top: -20px; width: 1px;
+  height: calc(100% - 13px + 20px); background: var(--line); }
+.slots > .slot { position: relative; }
+.slots > .slot::before { content: ""; position: absolute; right: 100%; top: 50%;
+  width: 18px; height: 1px; background: var(--line); }
+.slot {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 9px 5px 7px; min-height: 26px;
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--surface-2); color: var(--text);
+  font: 500 12px/1 var(--mono); white-space: nowrap;
+  transition: transform .12s ease, border-color .12s ease;
+}
+.slot .sw { width: 8px; height: 8px; border-radius: 2px; }
+.slot:hover, .slot:focus-visible {
+  transform: translateY(-1px); border-color: var(--accent); outline: none;
+}
+.slot.is-empty { color: var(--text-mute); font-style: italic; border-style: dashed; }
+
+/* Tint per band. Kept low so the mono label stays the loudest thing in the
+   block; the dot is the saturated mark. */
+.slot-prod     { background: color-mix(in srgb, var(--s-prod) 14%, var(--surface));
+                 border-color: color-mix(in srgb, var(--s-prod) 34%, transparent); }
+.slot-staging  { background: color-mix(in srgb, var(--s-staging) 14%, var(--surface));
+                 border-color: color-mix(in srgb, var(--s-staging) 34%, transparent); }
+.slot-data     { background: color-mix(in srgb, var(--s-data) 14%, var(--surface));
+                 border-color: color-mix(in srgb, var(--s-data) 34%, transparent); }
+.slot-observe  { background: color-mix(in srgb, var(--s-observe) 14%, var(--surface));
+                 border-color: color-mix(in srgb, var(--s-observe) 34%, transparent); }
+.slot-platform { background: color-mix(in srgb, var(--s-platform) 14%, var(--surface));
+                 border-color: color-mix(in srgb, var(--s-platform) 34%, transparent); }
+
+@media (max-width: 720px) {
+  .topo-facts { margin-left: 0; gap: 10px; }
+}
 </style>
 </head>
 <body>
@@ -550,6 +720,298 @@ textarea { resize: vertical; min-height: 260px; }
   </div>
 </div>
 
+
+<section class="panel" id="topology" data-topology>
+  <div class="panel-head">
+    <h2>Cluster map</h2>
+    <span class="spacer"></span>
+    <span class="live" data-topo-live><i></i>live</span>
+    <a class="btn btn-sm" href="#view-cluster">Nodes</a>
+  </div>
+
+  <p class="panel-intro">
+    Every node, and every task running on it — one block per task, so three
+    replicas of a service are three blocks. The master is host&nbsp;#1: while no
+    worker exists it carries the API itself, and once workers appear it should
+    carry none.
+  </p>
+
+  <!-- Colour groups the blocks; the name on each block is what identifies it. -->
+  <div class="legend" data-topo-legend>
+    
+      <span class="legend-item"><i class="sw sw-prod"></i>api-prod</span>
+    
+      <span class="legend-item"><i class="sw sw-staging"></i>api-staging</span>
+    
+      <span class="legend-item"><i class="sw sw-data"></i>data</span>
+    
+      <span class="legend-item"><i class="sw sw-observe"></i>observability</span>
+    
+      <span class="legend-item"><i class="sw sw-platform"></i>platform</span>
+    
+  </div>
+
+  <!-- A wide fleet scrolls inside this box rather than making the page scroll
+       sideways. -->
+  <div class="tree-scroll">
+    <div class="tree" data-topo-rows>
+      <div class="tree-top">
+        <div class="tnode tnode-root">
+          <span class="tnode-title">aichat</span>
+          <span class="tnode-sub">
+            <b data-f="hosts">4</b> hosts
+            · <b data-f="total">29</b> tasks
+          </span>
+        </div>
+      </div>
+
+      <div class="tree-kids">
+        
+          <div class="tree-branch" data-node="k39dl2mzq018">
+            <div class="tnode tnode-host is-manager">
+              <span class="tnode-head">
+                <span class="pill accent">manager</span>
+                
+              </span>
+              <span class="tnode-title" title="aichat-master">aichat-master</span>
+              <span class="tnode-sub">
+                <b data-f="tasks">14</b> tasks · 4 vCPU · 7.6 GB
+              </span>
+              <span class="tnode-meters">
+                <span title="node CPU utilisation">cpu <b data-f="cpu">78%</b></span>
+                <span title="node memory utilisation">mem <b data-f="mem">61%</b></span>
+              </span>
+            </div>
+
+            <!-- data-sig matches the signature the poller computes, so the first
+                 tick on an unchanged cluster rebuilds nothing at all. -->
+            <div class="slots" data-slots
+                 data-sig="redis-exporter-prod|data;redis-prod|data;redis-staging|data;alertmanager|observe;cadvisor|observe;grafana|observe;loki|observe;node-exporter|observe;victoriametrics|observe;vmagent|observe;vmalert|observe;autoscaler|platform;cloudflared|platform;ui|platform;">
+              
+                <span class="slot slot-data" tabindex="0"
+                      title="app_redis-exporter-prod — task redis-0kd93j on aichat-master">
+                  <i class="sw sw-data"></i>redis-exporter-prod
+                </span>
+              
+                <span class="slot slot-data" tabindex="0"
+                      title="app_redis-prod — task redis-0kd93j on aichat-master">
+                  <i class="sw sw-data"></i>redis-prod
+                </span>
+              
+                <span class="slot slot-data" tabindex="0"
+                      title="app_redis-staging — task redis-0kd93j on aichat-master">
+                  <i class="sw sw-data"></i>redis-staging
+                </span>
+              
+                <span class="slot slot-observe" tabindex="0"
+                      title="monitoring_alertmanager — task alertm0kd93j on aichat-master">
+                  <i class="sw sw-observe"></i>alertmanager
+                </span>
+              
+                <span class="slot slot-observe" tabindex="0"
+                      title="monitoring_cadvisor — task cadvis0kd93j on aichat-master">
+                  <i class="sw sw-observe"></i>cadvisor
+                </span>
+              
+                <span class="slot slot-observe" tabindex="0"
+                      title="monitoring_grafana — task grafan0kd93j on aichat-master">
+                  <i class="sw sw-observe"></i>grafana
+                </span>
+              
+                <span class="slot slot-observe" tabindex="0"
+                      title="monitoring_loki — task loki0kd93jf0 on aichat-master">
+                  <i class="sw sw-observe"></i>loki
+                </span>
+              
+                <span class="slot slot-observe" tabindex="0"
+                      title="monitoring_node-exporter — task node-e0kd93j on aichat-master">
+                  <i class="sw sw-observe"></i>node-exporter
+                </span>
+              
+                <span class="slot slot-observe" tabindex="0"
+                      title="monitoring_victoriametrics — task victor0kd93j on aichat-master">
+                  <i class="sw sw-observe"></i>victoriametrics
+                </span>
+              
+                <span class="slot slot-observe" tabindex="0"
+                      title="monitoring_vmagent — task vmagen0kd93j on aichat-master">
+                  <i class="sw sw-observe"></i>vmagent
+                </span>
+              
+                <span class="slot slot-observe" tabindex="0"
+                      title="monitoring_vmalert — task vmaler0kd93j on aichat-master">
+                  <i class="sw sw-observe"></i>vmalert
+                </span>
+              
+                <span class="slot slot-platform" tabindex="0"
+                      title="monitoring_autoscaler — task autosc0kd93j on aichat-master">
+                  <i class="sw sw-platform"></i>autoscaler
+                </span>
+              
+                <span class="slot slot-platform" tabindex="0"
+                      title="app_cloudflared — task cloudf0kd93j on aichat-master">
+                  <i class="sw sw-platform"></i>cloudflared
+                </span>
+              
+                <span class="slot slot-platform" tabindex="0"
+                      title="admin_ui — task ui0kd93jf01 on aichat-master">
+                  <i class="sw sw-platform"></i>ui
+                </span>
+              
+            </div>
+          </div>
+        
+          <div class="tree-branch" data-node="w1af02c9be47">
+            <div class="tnode tnode-host ">
+              <span class="tnode-head">
+                <span class="pill ok">worker</span>
+                
+              </span>
+              <span class="tnode-title" title="aichat-worker-1754812203">aichat-worker-1754812203</span>
+              <span class="tnode-sub">
+                <b data-f="tasks">6</b> tasks · 3 vCPU · 3.8 GB
+              </span>
+              <span class="tnode-meters">
+                <span title="node CPU utilisation">cpu <b data-f="cpu">64%</b></span>
+                <span title="node memory utilisation">mem <b data-f="mem">47%</b></span>
+              </span>
+            </div>
+
+            <!-- data-sig matches the signature the poller computes, so the first
+                 tick on an unchanged cluster rebuilds nothing at all. -->
+            <div class="slots" data-slots
+                 data-sig="api-prod|prod;api-prod|prod;api-prod|prod;cadvisor|observe;node-exporter|observe;cloudflared|platform;">
+              
+                <span class="slot slot-prod" tabindex="0"
+                      title="app_api-prod — task api-pr0kd93j on aichat-worker-1754812203">
+                  <i class="sw sw-prod"></i>api-prod
+                </span>
+              
+                <span class="slot slot-prod" tabindex="0"
+                      title="app_api-prod — task api-pr1kd93j on aichat-worker-1754812203">
+                  <i class="sw sw-prod"></i>api-prod
+                </span>
+              
+                <span class="slot slot-prod" tabindex="0"
+                      title="app_api-prod — task api-pr2kd93j on aichat-worker-1754812203">
+                  <i class="sw sw-prod"></i>api-prod
+                </span>
+              
+                <span class="slot slot-observe" tabindex="0"
+                      title="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754812203">
+                  <i class="sw sw-observe"></i>cadvisor
+                </span>
+              
+                <span class="slot slot-observe" tabindex="0"
+                      title="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754812203">
+                  <i class="sw sw-observe"></i>node-exporter
+                </span>
+              
+                <span class="slot slot-platform" tabindex="0"
+                      title="app_cloudflared — task cloudf0kd93j on aichat-worker-1754812203">
+                  <i class="sw sw-platform"></i>cloudflared
+                </span>
+              
+            </div>
+          </div>
+        
+          <div class="tree-branch" data-node="w2bc71d0aa93">
+            <div class="tnode tnode-host ">
+              <span class="tnode-head">
+                <span class="pill ok">worker</span>
+                
+              </span>
+              <span class="tnode-title" title="aichat-worker-1754819114">aichat-worker-1754819114</span>
+              <span class="tnode-sub">
+                <b data-f="tasks">6</b> tasks · 3 vCPU · 3.8 GB
+              </span>
+              <span class="tnode-meters">
+                <span title="node CPU utilisation">cpu <b data-f="cpu">71%</b></span>
+                <span title="node memory utilisation">mem <b data-f="mem">52%</b></span>
+              </span>
+            </div>
+
+            <!-- data-sig matches the signature the poller computes, so the first
+                 tick on an unchanged cluster rebuilds nothing at all. -->
+            <div class="slots" data-slots
+                 data-sig="api-prod|prod;api-prod|prod;api-staging|staging;cadvisor|observe;node-exporter|observe;cloudflared|platform;">
+              
+                <span class="slot slot-prod" tabindex="0"
+                      title="app_api-prod — task api-pr0kd93j on aichat-worker-1754819114">
+                  <i class="sw sw-prod"></i>api-prod
+                </span>
+              
+                <span class="slot slot-prod" tabindex="0"
+                      title="app_api-prod — task api-pr1kd93j on aichat-worker-1754819114">
+                  <i class="sw sw-prod"></i>api-prod
+                </span>
+              
+                <span class="slot slot-staging" tabindex="0"
+                      title="app_api-staging — task api-st0kd93j on aichat-worker-1754819114">
+                  <i class="sw sw-staging"></i>api-staging
+                </span>
+              
+                <span class="slot slot-observe" tabindex="0"
+                      title="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754819114">
+                  <i class="sw sw-observe"></i>cadvisor
+                </span>
+              
+                <span class="slot slot-observe" tabindex="0"
+                      title="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754819114">
+                  <i class="sw sw-observe"></i>node-exporter
+                </span>
+              
+                <span class="slot slot-platform" tabindex="0"
+                      title="app_cloudflared — task cloudf0kd93j on aichat-worker-1754819114">
+                  <i class="sw sw-platform"></i>cloudflared
+                </span>
+              
+            </div>
+          </div>
+        
+          <div class="tree-branch" data-node="w3de92f1cc05">
+            <div class="tnode tnode-host ">
+              <span class="tnode-head">
+                <span class="pill warn">worker</span>
+                <span class="pill warn">drain</span>
+              </span>
+              <span class="tnode-title" title="aichat-worker-1754823887">aichat-worker-1754823887</span>
+              <span class="tnode-sub">
+                <b data-f="tasks">3</b> tasks · 3 vCPU · 3.8 GB
+              </span>
+              <span class="tnode-meters">
+                <span title="node CPU utilisation">cpu <b data-f="cpu">12%</b></span>
+                <span title="node memory utilisation">mem <b data-f="mem">19%</b></span>
+              </span>
+            </div>
+
+            <!-- data-sig matches the signature the poller computes, so the first
+                 tick on an unchanged cluster rebuilds nothing at all. -->
+            <div class="slots" data-slots
+                 data-sig="api-prod|prod;cadvisor|observe;node-exporter|observe;">
+              
+                <span class="slot slot-prod" tabindex="0"
+                      title="app_api-prod — task api-pr0kd93j on aichat-worker-1754823887">
+                  <i class="sw sw-prod"></i>api-prod
+                </span>
+              
+                <span class="slot slot-observe" tabindex="0"
+                      title="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754823887">
+                  <i class="sw sw-observe"></i>cadvisor
+                </span>
+              
+                <span class="slot slot-observe" tabindex="0"
+                      title="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754823887">
+                  <i class="sw sw-observe"></i>node-exporter
+                </span>
+              
+            </div>
+          </div>
+        
+      </div>
+    </div>
+  </div>
+</section>
 
 <div class="grid-2">
   <section class="panel">
@@ -5154,190 +5616,10 @@ textarea { resize: vertical; min-height: 260px; }
 </div>
 
 
+
 <form method="post" action="#" data-preview>
   <input type="hidden" name="csrf" value="preview">
 
-  
-  <section class="panel">
-    <div class="panel-head">
-      <h2>Identity</h2>
-      <span class="spacer"></span>
-      
-      <span class="eyebrow">0 of 2 editable</span>
-    </div>
-
-    
-    <div class="setting-row">
-      <label for="set-APP_NAME">
-        <span class="mono">APP_NAME</span>
-      </label>
-
-      
-        <input id="set-APP_NAME" type="text" value="aichat" readonly>
-      
-
-      <p class="why">
-        
-          <strong>Set at boot.</strong>
-          
-        
-        Namespaces the Hetzner label the autoscaler is allowed to delete, the worker hostname prefix and every hostname. Changing it would orphan the current workers. Rebuild the cluster instead.
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-ROOT_DOMAIN">
-        <span class="mono">ROOT_DOMAIN</span>
-      </label>
-
-      
-        <input id="set-ROOT_DOMAIN" type="text" value="acme.dev" readonly>
-      
-
-      <p class="why">
-        
-          <strong>Set at boot.</strong>
-          
-        
-        Baked into Grafana&#39;s root URL and your tunnel hostnames.
-        
-      </p>
-    </div>
-    
-  </section>
-  
-  <section class="panel">
-    <div class="panel-head">
-      <h2>Hetzner</h2>
-      <span class="spacer"></span>
-      
-      <span class="eyebrow">5 of 6 editable</span>
-    </div>
-
-    
-    <div class="setting-row">
-      <label for="set-HCLOUD_LOCATION">
-        <span class="mono">HCLOUD_LOCATION</span>
-      </label>
-
-      
-        <input id="set-HCLOUD_LOCATION" type="text" name="value__HCLOUD_LOCATION" value="hel1">
-        <input type="hidden" name="key" value="HCLOUD_LOCATION">
-      
-
-      <p class="why">
-        
-        Applies to workers created from now on.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-HCLOUD_NETWORK_NAME">
-        <span class="mono">HCLOUD_NETWORK_NAME</span>
-      </label>
-
-      
-        <input id="set-HCLOUD_NETWORK_NAME" type="text" name="value__HCLOUD_NETWORK_NAME" value="prod-net">
-        <input type="hidden" name="key" value="HCLOUD_NETWORK_NAME">
-      
-
-      <p class="why">
-        
-        Must already exist in Hetzner.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-HCLOUD_SSH_KEY_NAME">
-        <span class="mono">HCLOUD_SSH_KEY_NAME</span>
-      </label>
-
-      
-        <input id="set-HCLOUD_SSH_KEY_NAME" type="text" name="value__HCLOUD_SSH_KEY_NAME" value="my-laptop">
-        <input type="hidden" name="key" value="HCLOUD_SSH_KEY_NAME">
-      
-
-      <p class="why">
-        
-        Installed on workers created from now on.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-WORKER_IMAGE">
-        <span class="mono">WORKER_IMAGE</span>
-      </label>
-
-      
-        <input id="set-WORKER_IMAGE" type="text" name="value__WORKER_IMAGE" value="ubuntu-24.04">
-        <input type="hidden" name="key" value="WORKER_IMAGE">
-      
-
-      <p class="why">
-        
-        Applies to workers created from now on.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-WORKER_TYPE">
-        <span class="mono">WORKER_TYPE</span>
-      </label>
-
-      
-        <input id="set-WORKER_TYPE" type="text" name="value__WORKER_TYPE" value="cpx21">
-        <input type="hidden" name="key" value="WORKER_TYPE">
-      
-
-      <p class="why">
-        
-        Applies to workers created from now on. How many replicas it holds is read from the Hetzner catalogue, so there is nothing to keep in sync — a bigger type simply means fewer, larger nodes.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-HCLOUD_TOKEN">
-        <span class="mono">HCLOUD_TOKEN</span>
-      </label>
-
-      
-        <span class="secret-val">
-          <span class="mono masked" data-secret-text="hcl_9f2bc41d77aa0e35">••••••••••••</span>
-          <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
-        </span>
-      
-
-      <p class="why">
-        
-          <strong>Docker secret.</strong>
-          
-            Swarm secrets are immutable and a service's reference is fixed at deploy time, so
-            changing this is a versioned-secret rotation, not an edit — do it in
-            <code>master-cloud-init.yaml</code> and re-run bootstrap.
-          
-        
-        Lets the autoscaler create and delete servers.
-        
-      </p>
-    </div>
-    
-  </section>
   
   <section class="panel">
     <div class="panel-head">
@@ -5743,231 +6025,6 @@ textarea { resize: vertical; min-height: 260px; }
         Follows production between manager-only and worker-only placement, so the master runs no app at all once workers exist. It is never scaled. Blank to leave staging alone.
         
           <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-  </section>
-  
-  <section class="panel">
-    <div class="panel-head">
-      <h2>Application</h2>
-      <span class="spacer"></span>
-      
-      <span class="eyebrow">2 of 2 editable</span>
-    </div>
-
-    
-    <div class="setting-row">
-      <label for="set-APP_PORT">
-        <span class="mono">APP_PORT</span>
-      </label>
-
-      
-        <input id="set-APP_PORT" type="text" name="value__APP_PORT" value="8080">
-        <input type="hidden" name="key" value="APP_PORT">
-      
-
-      <p class="why">
-        
-        The port your app listens on. Feeds the healthcheck, the Prometheus scrape label and both tunnel targets. Change it only alongside the app itself — a wrong value fails the healthcheck and rolls back.
-        
-          <em>Saving redeploys the app stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-APP_METRICS_PATH">
-        <span class="mono">APP_METRICS_PATH</span>
-      </label>
-
-      
-        <input id="set-APP_METRICS_PATH" type="text" name="value__APP_METRICS_PATH" value="/metrics">
-        <input type="hidden" name="key" value="APP_METRICS_PATH">
-      
-
-      <p class="why">
-        
-        Where the app exposes Prometheus metrics. If this is wrong the latency signal disappears and the autoscaler falls back to CPU.
-        
-          <em>Saving redeploys the app stack.</em>
-        
-      </p>
-    </div>
-    
-  </section>
-  
-  <section class="panel">
-    <div class="panel-head">
-      <h2>Access</h2>
-      <span class="spacer"></span>
-      
-      <span class="eyebrow">1 of 7 editable</span>
-    </div>
-
-    
-    <div class="setting-row">
-      <label for="set-ADMIN_USER">
-        <span class="mono">ADMIN_USER</span>
-      </label>
-
-      
-        <input id="set-ADMIN_USER" type="text" value="admin" readonly>
-      
-
-      <p class="why">
-        
-          <strong>Docker secret.</strong>
-          
-            Swarm secrets are immutable and a service's reference is fixed at deploy time, so
-            changing this is a versioned-secret rotation, not an edit — do it in
-            <code>master-cloud-init.yaml</code> and re-run bootstrap.
-          
-        
-        Stored as a docker secret alongside the password.
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-ADMIN_PASSWORD">
-        <span class="mono">ADMIN_PASSWORD</span>
-      </label>
-
-      
-        <span class="secret-val">
-          <span class="mono masked" data-secret-text="hunter2hunter2">••••••••••••</span>
-          <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
-        </span>
-      
-
-      <p class="why">
-        
-          <strong>Docker secret.</strong>
-          
-            Swarm secrets are immutable and a service's reference is fixed at deploy time, so
-            changing this is a versioned-secret rotation, not an edit — do it in
-            <code>master-cloud-init.yaml</code> and re-run bootstrap.
-          
-        
-        The key to this panel.
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-GRAFANA_ADMIN_USER">
-        <span class="mono">GRAFANA_ADMIN_USER</span>
-      </label>
-
-      
-        <input id="set-GRAFANA_ADMIN_USER" type="text" name="value__GRAFANA_ADMIN_USER" value="admin">
-        <input type="hidden" name="key" value="GRAFANA_ADMIN_USER">
-      
-
-      <p class="why">
-        
-        Grafana only applies this on first start.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-GRAFANA_ADMIN_PASSWORD">
-        <span class="mono">GRAFANA_ADMIN_PASSWORD</span>
-      </label>
-
-      
-        <span class="secret-val">
-          <span class="mono masked" data-secret-text="s3cr3t-grafana">••••••••••••</span>
-          <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
-        </span>
-      
-
-      <p class="why">
-        
-          <strong>Docker secret.</strong>
-          
-            Swarm secrets are immutable and a service's reference is fixed at deploy time, so
-            changing this is a versioned-secret rotation, not an edit — do it in
-            <code>master-cloud-init.yaml</code> and re-run bootstrap.
-          
-        
-        
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-ALERT_WEBHOOK_URL">
-        <span class="mono">ALERT_WEBHOOK_URL</span>
-      </label>
-
-      
-        <input id="set-ALERT_WEBHOOK_URL" type="text" value="https://hooks.slack.com/services/T0/B0/xY" readonly>
-      
-
-      <p class="why">
-        
-          <strong>Docker secret.</strong>
-          
-            Swarm secrets are immutable and a service's reference is fixed at deploy time, so
-            changing this is a versioned-secret rotation, not an edit — do it in
-            <code>master-cloud-init.yaml</code> and re-run bootstrap.
-          
-        
-        Where Alertmanager sends everything.
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-CF_TUNNEL_TOKEN">
-        <span class="mono">CF_TUNNEL_TOKEN</span>
-      </label>
-
-      
-        <span class="secret-val">
-          <span class="mono masked" data-secret-text="eyJhIjoiN2Y0MGQ5YTIi">••••••••••••</span>
-          <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
-        </span>
-      
-
-      <p class="why">
-        
-          <strong>Docker secret.</strong>
-          
-            Swarm secrets are immutable and a service's reference is fixed at deploy time, so
-            changing this is a versioned-secret rotation, not an edit — do it in
-            <code>master-cloud-init.yaml</code> and re-run bootstrap.
-          
-        
-        Rotating this means re-issuing the connector token in Cloudflare.
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-CI_SSH_PUBLIC_KEY">
-        <span class="mono">CI_SSH_PUBLIC_KEY</span>
-      </label>
-
-      
-        <span class="secret-val">
-          <span class="mono masked" data-secret-text="ssh-ed25519 AAAAC3Nza...">••••••••••••</span>
-          <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
-        </span>
-      
-
-      <p class="why">
-        
-          <strong>Set at boot.</strong>
-          
-        
-        The deploy user is created at boot. Edit authorized_keys on the master.
         
       </p>
     </div>
@@ -6350,416 +6407,6 @@ textarea { resize: vertical; min-height: 260px; }
   
   <section class="panel">
     <div class="panel-head">
-      <h2>Scaling</h2>
-      <span class="spacer"></span>
-      
-      <span class="eyebrow">21 of 21 editable</span>
-    </div>
-
-    
-    <div class="setting-row">
-      <label for="set-SLO_P95_MS">
-        <span class="mono">SLO_P95_MS</span>
-      </label>
-
-      
-        <input id="set-SLO_P95_MS" type="text" name="value__SLO_P95_MS" value="500">
-        <input type="hidden" name="key" value="SLO_P95_MS">
-      
-
-      <p class="why">
-        
-        The whole policy. Everything else derives from it.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-SCALE_UP_P95_RATIO">
-        <span class="mono">SCALE_UP_P95_RATIO</span>
-      </label>
-
-      
-        <input id="set-SCALE_UP_P95_RATIO" type="text" name="value__SCALE_UP_P95_RATIO" value="0.8">
-        <input type="hidden" name="key" value="SCALE_UP_P95_RATIO">
-      
-
-      <p class="why">
-        
-        Act at this fraction of the SLO, before users feel it.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-SCALE_DOWN_P95_RATIO">
-        <span class="mono">SCALE_DOWN_P95_RATIO</span>
-      </label>
-
-      
-        <input id="set-SCALE_DOWN_P95_RATIO" type="text" name="value__SCALE_DOWN_P95_RATIO" value="0.4">
-        <input type="hidden" name="key" value="SCALE_DOWN_P95_RATIO">
-      
-
-      <p class="why">
-        
-        
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-SCALE_UP_CPU">
-        <span class="mono">SCALE_UP_CPU</span>
-      </label>
-
-      
-        <input id="set-SCALE_UP_CPU" type="text" name="value__SCALE_UP_CPU" value="70">
-        <input type="hidden" name="key" value="SCALE_UP_CPU">
-      
-
-      <p class="why">
-        
-        Percent of one replica&#39;s own limit, not node CPU.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-SCALE_DOWN_CPU">
-        <span class="mono">SCALE_DOWN_CPU</span>
-      </label>
-
-      
-        <input id="set-SCALE_DOWN_CPU" type="text" name="value__SCALE_DOWN_CPU" value="30">
-        <input type="hidden" name="key" value="SCALE_DOWN_CPU">
-      
-
-      <p class="why">
-        
-        
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-NODE_PRESSURE_PCT">
-        <span class="mono">NODE_PRESSURE_PCT</span>
-      </label>
-
-      
-        <input id="set-NODE_PRESSURE_PCT" type="text" name="value__NODE_PRESSURE_PCT" value="80">
-        <input type="hidden" name="key" value="NODE_PRESSURE_PCT">
-      
-
-      <p class="why">
-        
-        Placement guard, never a trigger: above this the autoscaler asks for one host more than the capacity arithmetic alone would.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-MIN_REPLICAS">
-        <span class="mono">MIN_REPLICAS</span>
-      </label>
-
-      
-        <input id="set-MIN_REPLICAS" type="text" name="value__MIN_REPLICAS" value="2">
-        <input type="hidden" name="key" value="MIN_REPLICAS">
-      
-
-      <p class="why">
-        
-        Two is the production floor: with one, a crash is an outage and a rolling update has nowhere to shift traffic.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-MAX_REPLICAS">
-        <span class="mono">MAX_REPLICAS</span>
-      </label>
-
-      
-        <input id="set-MAX_REPLICAS" type="text" name="value__MAX_REPLICAS" value="12">
-        <input type="hidden" name="key" value="MAX_REPLICAS">
-      
-
-      <p class="why">
-        
-        The ReplicaCeiling alert compares against this.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-MIN_WORKERS">
-        <span class="mono">MIN_WORKERS</span>
-      </label>
-
-      
-        <input id="set-MIN_WORKERS" type="text" name="value__MIN_WORKERS" value="1">
-        <input type="hidden" name="key" value="MIN_WORKERS">
-      
-
-      <p class="why">
-        
-        A HOST count, and the master is host #1. 1 means no Hetzner workers at all — the master runs the app and nothing is billed. 2 or more means the master never runs application traffic.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-MAX_WORKERS">
-        <span class="mono">MAX_WORKERS</span>
-      </label>
-
-      
-        <input id="set-MAX_WORKERS" type="text" name="value__MAX_WORKERS" value="6">
-        <input type="hidden" name="key" value="MAX_WORKERS">
-      
-
-      <p class="why">
-        
-        A budget cap, not a capacity plan. Also a host count, so 6 means the master plus up to 5 Hetzner workers.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-SUSTAIN_UP_SECONDS">
-        <span class="mono">SUSTAIN_UP_SECONDS</span>
-      </label>
-
-      
-        <input id="set-SUSTAIN_UP_SECONDS" type="text" name="value__SUSTAIN_UP_SECONDS" value="90">
-        <input type="hidden" name="key" value="SUSTAIN_UP_SECONDS">
-      
-
-      <p class="why">
-        
-        Up fast.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-SUSTAIN_DOWN_SECONDS">
-        <span class="mono">SUSTAIN_DOWN_SECONDS</span>
-      </label>
-
-      
-        <input id="set-SUSTAIN_DOWN_SECONDS" type="text" name="value__SUSTAIN_DOWN_SECONDS" value="900">
-        <input type="hidden" name="key" value="SUSTAIN_DOWN_SECONDS">
-      
-
-      <p class="why">
-        
-        Down slow. Never make these symmetric.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-SCALE_UP_FACTOR">
-        <span class="mono">SCALE_UP_FACTOR</span>
-      </label>
-
-      
-        <input id="set-SCALE_UP_FACTOR" type="text" name="value__SCALE_UP_FACTOR" value="0.5">
-        <input type="hidden" name="key" value="SCALE_UP_FACTOR">
-      
-
-      <p class="why">
-        
-        +50% of current, minimum +1. One at a time cannot track a spike.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-COOLDOWN_UP_SECONDS">
-        <span class="mono">COOLDOWN_UP_SECONDS</span>
-      </label>
-
-      
-        <input id="set-COOLDOWN_UP_SECONDS" type="text" name="value__COOLDOWN_UP_SECONDS" value="300">
-        <input type="hidden" name="key" value="COOLDOWN_UP_SECONDS">
-      
-
-      <p class="why">
-        
-        Must exceed node boot + image pull + JVM warmup, or the loop provisions again while the last node is still warming and badly overshoots.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-COOLDOWN_DOWN_SECONDS">
-        <span class="mono">COOLDOWN_DOWN_SECONDS</span>
-      </label>
-
-      
-        <input id="set-COOLDOWN_DOWN_SECONDS" type="text" name="value__COOLDOWN_DOWN_SECONDS" value="900">
-        <input type="hidden" name="key" value="COOLDOWN_DOWN_SECONDS">
-      
-
-      <p class="why">
-        
-        
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-REPLICA_COOLDOWN_SECONDS">
-        <span class="mono">REPLICA_COOLDOWN_SECONDS</span>
-      </label>
-
-      
-        <input id="set-REPLICA_COOLDOWN_SECONDS" type="text" name="value__REPLICA_COOLDOWN_SECONDS" value="60">
-        <input type="hidden" name="key" value="REPLICA_COOLDOWN_SECONDS">
-      
-
-      <p class="why">
-        
-        
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-SCHEDULE_FLOOR">
-        <span class="mono">SCHEDULE_FLOOR</span>
-      </label>
-
-      
-        <input id="set-SCHEDULE_FLOOR" type="text" name="value__SCHEDULE_FLOOR" value="">
-        <input type="hidden" name="key" value="SCHEDULE_FLOOR">
-      
-
-      <p class="why">
-        
-        UTC, `HH:MM-HH:MM=N`, comma separated. Blank disables it.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-DRY_RUN">
-        <span class="mono">DRY_RUN</span>
-      </label>
-
-      
-        <input id="set-DRY_RUN" type="text" name="value__DRY_RUN" value="false">
-        <input type="hidden" name="key" value="DRY_RUN">
-      
-
-      <p class="why">
-        
-        `true` makes the autoscaler log every action without taking it.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-APP_CPU_LIMIT">
-        <span class="mono">APP_CPU_LIMIT</span>
-      </label>
-
-      
-        <input id="set-APP_CPU_LIMIT" type="text" name="value__APP_CPU_LIMIT" value="1.0">
-        <input type="hidden" name="key" value="APP_CPU_LIMIT">
-      
-
-      <p class="why">
-        
-        The denominator for CPU-per-replica. It MUST match the cpus limit on api-prod in stacks/app.yml or the signal silently misreports.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-APP_SERVICE">
-        <span class="mono">APP_SERVICE</span>
-      </label>
-
-      
-        <input id="set-APP_SERVICE" type="text" name="value__APP_SERVICE" value="app_api-prod">
-        <input type="hidden" name="key" value="APP_SERVICE">
-      
-
-      <p class="why">
-        
-        The service the autoscaler scales.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-APP_SERVICE_STAGING">
-        <span class="mono">APP_SERVICE_STAGING</span>
-      </label>
-
-      
-        <input id="set-APP_SERVICE_STAGING" type="text" name="value__APP_SERVICE_STAGING" value="app_api-staging">
-        <input type="hidden" name="key" value="APP_SERVICE_STAGING">
-      
-
-      <p class="why">
-        
-        Follows production between manager-only and worker-only placement, so the master runs no app at all once workers exist. It is never scaled. Blank to leave staging alone.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-  </section>
-  
-  <section class="panel">
-    <div class="panel-head">
       <h2>Application</h2>
       <span class="spacer"></span>
       
@@ -6991,7 +6638,19 @@ textarea { resize: vertical; min-height: 260px; }
       the app stack always goes through the safe path that preserves replicas and image.
     </span>
   </div>
-</form></section>
+</form>
+
+
+
+<div class="banner">
+  <div>
+    <strong>Scaling</strong> lives
+    on the <a href="#view-autoscaler">Autoscaler</a> page, next to the
+    signals it drives — SLO, replica and host
+    bounds, sustain windows and cooldowns.
+  </div>
+</div>
+</section>
 
       <section data-view="login" hidden>
         <div class="page-head">
@@ -7218,6 +6877,140 @@ textarea { resize: vertical; min-height: 260px; }
     var btn = form.querySelector("button[type=submit]") || form.querySelector("button");
     if (btn) { flashButton(btn, "Preview only"); }
   });
+
+  // --- cluster map: keep it current -----------------------------------------
+  // Rendered server-side first, so the section is complete and correct with JS
+  // off; this only refreshes it in place.
+  //
+  // The timer only exists while someone is actually looking. Two conditions,
+  // both required: the browser tab is visible, AND the map is scrolled into
+  // view. A background tab polling a Docker socket every five seconds forever
+  // is pure waste, and so is polling a section sitting below the fold.
+  var TOPO_MS = 5000;
+
+  function pct(v) { return v === null || v === undefined ? "—" : Math.round(v) + "%"; }
+
+  // Signature of a node's task list. Cheap way to know whether the blocks need
+  // rebuilding at all — on a quiet cluster they never do, so a tick touches
+  // nothing and there is no flicker.
+  function sig(tasks) {
+    var s = "";
+    for (var i = 0; i < tasks.length; i++) { s += tasks[i].name + "|" + tasks[i].key + ";"; }
+    return s;
+  }
+
+  function buildSlot(t) {
+    var el = document.createElement("span");
+    el.className = "slot slot-" + t.key;
+    el.tabIndex = 0;
+    el.title = t.service + " — task " + t.id;
+    var dot = document.createElement("i");
+    dot.className = "sw sw-" + t.key;
+    el.appendChild(dot);
+    // textContent, never innerHTML: service names come from the daemon and are
+    // not this file's to trust with markup.
+    el.appendChild(document.createTextNode(t.name));
+    return el;
+  }
+
+  function paintTopology(data) {
+    var host = document.querySelector("[data-topo-rows]");
+    if (!host || !data || !data.nodes) { return; }
+
+    var rows = host.querySelectorAll(".tree-branch");
+    if (rows.length !== data.nodes.length) { location.reload(); return; }
+
+    // root of the tree
+    var total = 0;
+    for (var k = 0; k < data.nodes.length; k++) { total += data.nodes[k].tasks_total; }
+    var setRoot = function (sel, text) {
+      var el = host.querySelector(".tnode-root " + sel);
+      if (el && el.textContent !== text) { el.textContent = text; }
+    };
+    setRoot('[data-f="hosts"]', String(data.nodes.length));
+    setRoot('[data-f="total"]', String(total));
+
+    for (var i = 0; i < data.nodes.length; i++) {
+      var n = data.nodes[i];
+      var row = host.querySelector('[data-node="' + n.id + '"]');
+      if (!row) { location.reload(); return; }   // fleet changed shape
+
+      var set = function (sel, text) {
+        var el = row.querySelector(sel);
+        if (el && el.textContent !== text) { el.textContent = text; }
+      };
+      set('[data-f="tasks"]', String(n.tasks_total));
+      set('[data-f="cpu"]', pct(n.cpu_pct));
+      set('[data-f="mem"]', pct(n.mem_pct));
+
+      var slots = row.querySelector("[data-slots]");
+      if (!slots) { continue; }
+      var next = sig(n.tasks);
+      if (slots.getAttribute("data-sig") === next) { continue; }   // unchanged
+      slots.setAttribute("data-sig", next);
+
+      var frag = document.createDocumentFragment();
+      if (!n.tasks.length) {
+        var empty = document.createElement("span");
+        empty.className = "slot is-empty";
+        empty.textContent = "no running tasks";
+        frag.appendChild(empty);
+      } else {
+        for (var j = 0; j < n.tasks.length; j++) { frag.appendChild(buildSlot(n.tasks[j])); }
+      }
+      slots.replaceChildren(frag);
+    }
+  }
+
+  function markLive(state) {
+    var el = document.querySelector("[data-topo-live]");
+    if (!el) { return; }
+    el.classList.toggle("is-stale", state === "stale");
+    el.classList.toggle("is-idle", state === "paused");
+    el.lastChild.nodeValue = state;
+  }
+
+  var topo = document.querySelector("[data-topology]");
+  if (topo && window.fetch) {
+    var timer = null;
+    // When we can observe visibility, assume NOT on screen until the observer
+    // says otherwise — so a load that lands with the map below the fold makes
+    // no request at all. Without observer support, fall back to "visible".
+    var onScreen = !window.IntersectionObserver;
+    var everRan = false;
+
+    var fetchOnce = function () {
+      fetch("/api/topology", { headers: { "Accept": "application/json" },
+                               credentials: "same-origin" })
+        .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+        .then(function (d) { paintTopology(d); markLive("live"); })
+        .catch(function () { markLive("stale"); });  // preview build, or logged out
+    };
+
+    var sync = function () {
+      if (onScreen && !document.hidden) {
+        if (timer !== null) { return; }
+        // The server rendered this markup moments ago, so the first start has
+        // nothing to catch up on. Every later resume does.
+        if (everRan) { fetchOnce(); } else { everRan = true; }
+        markLive("live");
+        timer = setInterval(fetchOnce, TOPO_MS);
+      } else if (timer !== null) {
+        clearInterval(timer);                // stop the timer, not just its body
+        timer = null;
+        markLive("paused");
+      }
+    };
+
+    if (window.IntersectionObserver) {
+      new IntersectionObserver(function (entries) {
+        onScreen = entries[0].isIntersecting;
+        sync();
+      }, { rootMargin: "120px" }).observe(topo);
+    }
+    document.addEventListener("visibilitychange", sync);
+    sync();
+  }
 })();
 </script>
 <script>

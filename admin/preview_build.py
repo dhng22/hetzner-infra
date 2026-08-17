@@ -100,8 +100,13 @@ def main():
             alerts=fixtures.alerts(),
             grouped=[(c, grouped[c]) for c in catalog.CATEGORIES if c in grouped],
             nodes=fixtures.nodes(),
+            topo=fixtures.topology(),
             a=fixtures.autoscaler_state(),
-            groups=panel._settings_groups(),
+            # Two disjoint sets, exactly as the live routes pass them — one
+            # shared `groups` here would put the whole form on both pages.
+            groups=panel._settings_groups(skip=panel.AUTOSCALER_GROUPS),
+            scaling_groups=panel._settings_groups(only=panel.AUTOSCALER_GROUPS),
+            elsewhere=panel.AUTOSCALER_GROUPS,
             # chrome
             nav=panel.NAV,
             cluster_name=os.environ["APP_NAME"],

@@ -401,3 +401,173 @@ textarea { resize: vertical; min-height: 260px; }
   backdrop-filter: blur(8px);
   border: 1px solid var(--line); border-radius: var(--r-lg);
 }
+
+/* --- cluster map (Overview) --------------------------------------------------
+   One horizontal stacked bar per node: bar length = running tasks relative to
+   the busiest node, segments = which kind of workload occupies it.
+
+   The four series hues are a categorical palette validated against BOTH
+   surfaces (OKLCH lightness band, chroma floor, protan/deutan separation,
+   normal-vision floor, WCAG contrast). They deliberately avoid the panel's
+   reserved colours: --ok/--warn/--bad carry status and --accent carries
+   interaction, so none of them may also mean "series 3". Anything past the four
+   folds into a neutral "platform" grey rather than a fifth invented hue.
+
+   Do not re-order these without re-running the validator: the order IS the
+   check. blue/orange/violet/magenta passes; swapping magenta next to orange
+   fails the normal-vision floor in both modes.
+   -------------------------------------------------------------------------- */
+   Follows this file's existing convention: :root carries the DARK values and
+   the light ones arrive via the media query and the explicit toggles, so the
+   two sets stay in the same places as every other token.
+
+   The dark column is the same four hues re-stepped for the dark surface, not a
+   second palette. Each column was validated against its own surface
+   (#ffffff / #16212a).
+   -------------------------------------------------------------------------- */
+:root {
+  --s-prod:     #3987e5;   /* blue    */
+  --s-staging:  #d95926;   /* orange  */
+  --s-data:     #9085e9;   /* violet  */
+  --s-observe:  #d55181;   /* magenta */
+  --s-platform: #7d919c;   /* neutral tail, not a categorical hue */
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --s-prod: #2a78d6; --s-staging: #eb6834; --s-data: #4a3aa7;
+    --s-observe: #e87ba4; --s-platform: #8497a1;
+  }
+}
+:root[data-theme="light"], body.theme-light {
+  --s-prod: #2a78d6; --s-staging: #eb6834; --s-data: #4a3aa7;
+  --s-observe: #e87ba4; --s-platform: #8497a1;
+}
+:root[data-theme="dark"], body.theme-dark {
+  --s-prod: #3987e5; --s-staging: #d95926; --s-data: #9085e9;
+  --s-observe: #d55181; --s-platform: #7d919c;
+}
+
+.panel-intro { margin: 0 16px 12px; color: var(--text-mute); font-size: 13px; max-width: 74ch; }
+
+.live { display: inline-flex; align-items: center; gap: 6px; font-size: 11px;
+  text-transform: uppercase; letter-spacing: .08em; font-weight: 650;
+  color: var(--text-mute); }
+.live i { width: 7px; height: 7px; border-radius: 50%; background: var(--ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
+.live.is-stale i { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent); }
+.live.is-idle  i { background: var(--text-mute); box-shadow: none; animation: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .live i { animation: livepulse 2.4s ease-in-out infinite; }
+  @keyframes livepulse { 0%, 100% { opacity: 1 } 50% { opacity: .45 } }
+}
+
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 0 16px 12px; }
+.legend-item { display: inline-flex; align-items: center; gap: 7px;
+  font-size: 12.5px; color: var(--text-mute); }
+.sw { width: 10px; height: 10px; border-radius: 3px; flex: none;
+  background: var(--s-platform); }
+.sw-prod     { background: var(--s-prod); }
+.sw-staging  { background: var(--s-staging); }
+.sw-data     { background: var(--s-data); }
+.sw-observe  { background: var(--s-observe); }
+.sw-platform { background: var(--s-platform); }
+
+/* --- the tree ---------------------------------------------------------------
+   Root (cluster) at the top, hosts on the next level, their tasks hanging below
+   each host. Connectors are drawn with pseudo-elements rather than SVG so every
+   node stays real DOM: the pills, tooltips and focus rings keep working, text
+   stays selectable, and the whole thing reflows instead of needing layout maths
+   on resize.
+   -------------------------------------------------------------------------- */
+.tree-scroll { overflow-x: auto; padding: 4px 16px 18px; }
+.tree { display: inline-flex; flex-direction: column; align-items: center; min-width: 100%; }
+
+.tree-top { display: flex; justify-content: center; }
+
+.tree-kids { display: flex; align-items: flex-start; justify-content: center; }
+
+/* Each branch draws its own half of the horizontal bus plus the vertical drop
+   into its own card. The first and last trim their outer half so the bus stops
+   at the outermost children instead of running off into space. */
+.tree-branch { position: relative; padding: 26px 9px 0; display: flex;
+  flex-direction: column; align-items: center; }
+.tree-branch::before, .tree-branch::after {
+  content: ""; position: absolute; top: 0; height: 26px; width: 50%;
+  border-top: 1px solid var(--line);
+}
+.tree-branch::before { right: 50%; border-right: 1px solid var(--line); }
+.tree-branch::after  { left: 50%; }
+.tree-branch:first-child::before { border-top-color: transparent; border-top-left-radius: 0; }
+.tree-branch:last-child::after   { border-top-color: transparent; }
+/* a lone host has no bus, just a straight drop */
+.tree-branch:only-child::before { border-top-color: transparent; }
+.tree-branch:only-child::after  { border-top-color: transparent; }
+
+/* the stub from the root card down into the bus */
+.tree-top .tnode-root { position: relative; }
+.tree-top .tnode-root::after {
+  content: ""; position: absolute; left: 50%; top: 100%; width: 1px; height: 26px;
+  background: var(--line);
+}
+
+/* --- the boxes ------------------------------------------------------------ */
+.tnode {
+  display: flex; flex-direction: column; gap: 3px;
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--surface-2); padding: 9px 12px; min-width: 168px;
+  text-align: left;
+}
+.tnode-root { background: var(--surface); border-color: var(--accent);
+  align-items: center; text-align: center; }
+.tnode-host.is-manager { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.tnode-head { display: flex; gap: 6px; flex-wrap: wrap; }
+.tnode-title { font: 600 13px/1.35 var(--mono); overflow-wrap: anywhere; }
+.tnode-sub { font-size: 12px; color: var(--text-mute); }
+.tnode-sub b { color: var(--text); font-family: var(--mono); font-weight: 600; }
+.tnode-meters { display: flex; gap: 12px; font-size: 12px; color: var(--text-mute); }
+.tnode-meters b { color: var(--text); font-family: var(--mono); font-weight: 600; }
+
+/* Tasks hang off a single spine dropped from the host card's left edge, one
+   tick per task — the file-tree read, which is what keeps 14 of them legible
+   where a horizontal row of 14 would not be.
+
+   The spine and the drop share an x of 0 so there is no jog between them, and
+   it stops at the last task's tick rather than running past the final item. */
+.slots { position: relative; align-self: stretch;
+  display: flex; flex-direction: column; align-items: flex-start;
+  gap: 5px; margin-top: 20px; padding-left: 18px; }
+.slots::before { content: ""; position: absolute; left: 0; top: -20px; width: 1px;
+  height: calc(100% - 13px + 20px); background: var(--line); }
+.slots > .slot { position: relative; }
+.slots > .slot::before { content: ""; position: absolute; right: 100%; top: 50%;
+  width: 18px; height: 1px; background: var(--line); }
+.slot {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 9px 5px 7px; min-height: 26px;
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--surface-2); color: var(--text);
+  font: 500 12px/1 var(--mono); white-space: nowrap;
+  transition: transform .12s ease, border-color .12s ease;
+}
+.slot .sw { width: 8px; height: 8px; border-radius: 2px; }
+.slot:hover, .slot:focus-visible {
+  transform: translateY(-1px); border-color: var(--accent); outline: none;
+}
+.slot.is-empty { color: var(--text-mute); font-style: italic; border-style: dashed; }
+
+/* Tint per band. Kept low so the mono label stays the loudest thing in the
+   block; the dot is the saturated mark. */
+.slot-prod     { background: color-mix(in srgb, var(--s-prod) 14%, var(--surface));
+                 border-color: color-mix(in srgb, var(--s-prod) 34%, transparent); }
+.slot-staging  { background: color-mix(in srgb, var(--s-staging) 14%, var(--surface));
+                 border-color: color-mix(in srgb, var(--s-staging) 34%, transparent); }
+.slot-data     { background: color-mix(in srgb, var(--s-data) 14%, var(--surface));
+                 border-color: color-mix(in srgb, var(--s-data) 34%, transparent); }
+.slot-observe  { background: color-mix(in srgb, var(--s-observe) 14%, var(--surface));
+                 border-color: color-mix(in srgb, var(--s-observe) 34%, transparent); }
+.slot-platform { background: color-mix(in srgb, var(--s-platform) 14%, var(--surface));
+                 border-color: color-mix(in srgb, var(--s-platform) 34%, transparent); }
+
+@media (max-width: 720px) {
+  .topo-facts { margin-left: 0; gap: 10px; }
+}

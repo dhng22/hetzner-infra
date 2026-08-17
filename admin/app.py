@@ -275,7 +275,22 @@ def deploy_hook(key, env_name):
 @auth.login_required
 def overview():
     return render_template("page_overview.html", section="overview",
-                           s=data.summary(), apps=data.apps(), alerts=data.alerts())
+                           s=data.summary(), apps=data.apps(), alerts=data.alerts(),
+                           topo=data.topology())
+
+
+@app.get("/api/topology")
+@auth.login_required
+def api_topology():
+    """
+    Live feed for the cluster map on the Overview page.
+
+    Read-only and session-authenticated like every other page — it exposes
+    service names and task counts, which is the same thing the page already
+    renders, so there is nothing extra to leak. The page renders server-side
+    first and this only refreshes it, so the view still works with JS off.
+    """
+    return jsonify(data.topology())
 
 
 @app.get("/apps")
@@ -513,7 +528,8 @@ def cluster():
 @auth.login_required
 def autoscaler():
     return render_template("page_autoscaler.html", section="autoscaler",
-                           a=data.autoscaler_state(), groups=_settings_groups(["Scaling"]))
+                           a=data.autoscaler_state(),
+                           scaling_groups=_settings_groups(only=AUTOSCALER_GROUPS))
 
 
 @app.get("/alerts")
@@ -526,7 +542,8 @@ def alerts():
 @auth.login_required
 def settings():
     return render_template("page_settings.html", section="settings",
-                           groups=_settings_groups())
+                           groups=_settings_groups(skip=AUTOSCALER_GROUPS),
+                           elsewhere=AUTOSCALER_GROUPS)
 
 
 @app.post("/settings")
@@ -566,11 +583,20 @@ def save_settings():
     return redirect(url_for("settings"))
 
 
-def _settings_groups(only=None):
+#: Groups the Autoscaler page owns. They are edited there, next to the live
+#: signals they govern, and Settings links across instead of rendering a second
+#: copy of the same form — two forms posting the same keys is a page where the
+#: value you are looking at may already be stale.
+AUTOSCALER_GROUPS = ["Scaling"]
+
+
+def _settings_groups(only=None, skip=None):
     values = _infra_values()
     out = []
     for title, keys in settings_def.GROUPS:
         if only and title not in only:
+            continue
+        if skip and title in skip:
             continue
         rows = []
         for k in keys:

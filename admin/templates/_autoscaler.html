@@ -89,4 +89,7 @@
   </div>
 </div>
 
-{% include "_settings_form.html" %}
+{# Scoped with `with`, not by relying on a page-level `groups`: the preview
+   renders every view into one document from a single context, so a shared
+   variable name would silently give this page the whole Settings form. #}
+{% with groups = scaling_groups %}{% include "_settings_form.html" %}{% endwith %}

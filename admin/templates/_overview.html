@@ -45,6 +45,80 @@
 <div class="banner ok"><div>All services are reporting healthy.</div></div>
 {% endif %}
 
+<section class="panel" id="topology" data-topology>
+  <div class="panel-head">
+    <h2>Cluster map</h2>
+    <span class="spacer"></span>
+    <span class="live" data-topo-live><i></i>live</span>
+    <a class="btn btn-sm" href="{{ section_href({'key': 'cluster'}) }}">Nodes</a>
+  </div>
+
+  <p class="panel-intro">
+    Every node, and every task running on it — one block per task, so three
+    replicas of a service are three blocks. The master is host&nbsp;#1: while no
+    worker exists it carries the API itself, and once workers appear it should
+    carry none.
+  </p>
+
+  <!-- Colour groups the blocks; the name on each block is what identifies it. -->
+  <div class="legend" data-topo-legend>
+    {% for b in topo.bands %}
+      <span class="legend-item"><i class="sw sw-{{ b.key }}"></i>{{ b.band }}</span>
+    {% endfor %}
+  </div>
+
+  <!-- A wide fleet scrolls inside this box rather than making the page scroll
+       sideways. -->
+  <div class="tree-scroll">
+    <div class="tree" data-topo-rows>
+      <div class="tree-top">
+        <div class="tnode tnode-root">
+          <span class="tnode-title">{{ cluster_name }}</span>
+          <span class="tnode-sub">
+            <b data-f="hosts">{{ topo.nodes|length }}</b> host{{ '' if topo.nodes|length == 1 else 's' }}
+            · <b data-f="total">{{ topo.nodes|sum(attribute='tasks_total') }}</b> tasks
+          </span>
+        </div>
+      </div>
+
+      <div class="tree-kids">
+        {% for n in topo.nodes %}
+          <div class="tree-branch" data-node="{{ n.id }}">
+            <div class="tnode tnode-host {{ 'is-manager' if n.role == 'manager' }}">
+              <span class="tnode-head">
+                <span class="pill {{ 'accent' if n.role == 'manager' else n.tone }}">{{ n.role }}</span>
+                {% if n.availability != 'active' %}<span class="pill warn">{{ n.availability }}</span>{% endif %}
+              </span>
+              <span class="tnode-title" title="{{ n.hostname }}">{{ n.hostname }}</span>
+              <span class="tnode-sub">
+                <b data-f="tasks">{{ n.tasks_total }}</b> tasks · {{ n.cpus }} vCPU · {{ n.memory_gb }} GB
+              </span>
+              <span class="tnode-meters">
+                <span title="node CPU utilisation">cpu <b data-f="cpu">{% if n.cpu_pct is not none %}{{ n.cpu_pct|round|int }}%{% else %}—{% endif %}</b></span>
+                <span title="node memory utilisation">mem <b data-f="mem">{% if n.mem_pct is not none %}{{ n.mem_pct|round|int }}%{% else %}—{% endif %}</b></span>
+              </span>
+            </div>
+
+            <!-- data-sig matches the signature the poller computes, so the first
+                 tick on an unchanged cluster rebuilds nothing at all. -->
+            <div class="slots" data-slots
+                 data-sig="{% for t in n.tasks %}{{ t.name }}|{{ t.key }};{% endfor %}">
+              {% for t in n.tasks %}
+                <span class="slot slot-{{ t.key }}" tabindex="0"
+                      title="{{ t.service }} — task {{ t.id }} on {{ n.hostname }}">
+                  <i class="sw sw-{{ t.key }}"></i>{{ t.name }}
+                </span>
+              {% else %}
+                <span class="slot is-empty">no running tasks</span>
+              {% endfor %}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</section>
+
 <div class="grid-2">
   <section class="panel">
     <div class="panel-head">

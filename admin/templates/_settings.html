@@ -17,3 +17,17 @@
 </div>
 
 {% include "_settings_form.html" %}
+
+{# The scaling knobs are edited on the Autoscaler page, beside the live signals
+   they govern. Rendering them here as well would mean two forms writing the
+   same keys, where whichever page you left open is showing a stale value. #}
+{% if elsewhere %}
+<div class="banner">
+  <div>
+    <strong>{{ elsewhere|join(', ') }}</strong> {{ 'lives' if elsewhere|length == 1 else 'live' }}
+    on the <a href="{{ section_href({'key': 'autoscaler'}) }}">Autoscaler</a> page, next to the
+    signals {{ 'it drives' if elsewhere|length == 1 else 'they drive' }} — SLO, replica and host
+    bounds, sustain windows and cooldowns.
+  </div>
+</div>
+{% endif %}
