@@ -10,6 +10,10 @@
 # The endpoint waits for Swarm to converge and answers 502 if the update rolled
 # back, so a bad image fails this workflow instead of quietly reverting. That
 # only works if you let curl's failure propagate — see the notes below.
+#
+# Deploying is opt-in: with no PANEL_URL / deploy token set, the deploy step
+# skips with a warning and the run stays green. Once they are set, every deploy
+# failure is fatal again.
 # =============================================================================
 
 name: Build & Deploy
@@ -92,6 +96,19 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$ENVIRONMENT" = "staging" ]; then TOKEN="$TOKEN_STAGING"; fi
+
+          # Deploying is opt-in. Until the panel secrets exist there is no endpoint to
+          # call, and an unset PANEL_URL means "not wired up yet", not "the deploy broke".
+          # Without this the first push from a fresh repo goes red with an HTTP 000 that
+          # blames Swarm for a request that was never made.
+          #
+          # This is the ONLY early exit. Once PANEL_URL and the environment's token are
+          # both set, everything below is fatal on failure: a rolled-back deploy must
+          # never report green.
+          if [ -z "$PANEL_URL" ] || [ -z "$TOKEN" ]; then
+            echo "::warning::Deploy skipped — PANEL_URL or the $ENVIRONMENT deploy token is not set. The image was built and pushed: $IMAGE"
+            exit 0
+          fi
 
           echo "Deploying $IMAGE to $ENVIRONMENT"
 
