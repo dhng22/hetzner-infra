@@ -277,6 +277,19 @@ write_files:
       ufw default allow outgoing
       ufw allow 22/tcp
       ufw allow from 10.0.0.0/8
+
+      # The tunnel connector reaches the admin panel at MASTER_PRIVATE_IP:3000,
+      # and `from 10.0.0.0/8` above does NOT cover that. cloudflared is a
+      # container: its packets leave through docker_gwbridge and arrive with a
+      # 172.x source, not a 10.x one. Host-mode publishing installs no DNAT
+      # rule, so unlike an ingress-mode port this is real INPUT traffic that ufw
+      # evaluates — and drops.
+      #
+      # The symptom is a liar. The panel answers 200 on 127.0.0.1 and its
+      # healthcheck passes, the service reads 1/1, cloudflared reads 1/1, and
+      # Cloudflare returns 502 for a hostname whose route is correct.
+      ufw allow in on docker_gwbridge to any port 3000 proto tcp
+
       ufw --force enable
 
       # --- docker -------------------------------------------------------------
