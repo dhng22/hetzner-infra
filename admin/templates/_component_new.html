@@ -1,0 +1,70 @@
+<div class="page-head">
+  <div>
+    <div class="eyebrow"><a href="{{ section_href({'key': 'components'}) }}">Components</a></div>
+    <h1>New {{ cls.LABEL|lower }}</h1>
+    <p class="hint">{{ cls.BLURB }}</p>
+  </div>
+  <div class="seg" role="group" aria-label="Component type">
+    {% for key, other in types.items() %}
+    <a href="{{ new_href(key) }}" {% if key == type_name %}aria-current="true"{% endif %}>{{ other.LABEL }}</a>
+    {% endfor %}
+  </div>
+</div>
+
+{% if problems %}
+<div class="banner bad">
+  <div>
+    <strong>Not created.</strong>
+    <ul class="tight">{% for p in problems %}<li>{{ p }}</li>{% endfor %}</ul>
+  </div>
+</div>
+{% endif %}
+
+<form method="post" action="{{ create_href() }}" {% if preview %}data-preview{% endif %}>
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+  <input type="hidden" name="type" value="{{ type_name }}">
+
+  <section class="panel">
+    <div class="panel-head"><h2>Identity</h2></div>
+    <div class="panel-body">
+      <div class="field">
+        <label for="f-name">Name</label>
+        <input id="f-name" name="name" type="text" required autofocus
+               pattern="[a-z][a-z0-9-]{1,31}" value="{{ name or '' }}"
+               placeholder="{{ 'api' if type_name == 'app' else 'cache' }}">
+        <p class="hint">
+          Lowercase letters, digits and dashes. This becomes the stack name, the
+          service name (<code>&lt;name&gt;_{{ type_name }}</code>) and the DNS name other
+          components reach it by, so it is not renameable afterwards — create a new
+          one and delete this if you change your mind.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Configuration</h2></div>
+    <div class="panel-body">
+      <div class="grid-2">
+        {% for f in cls.fields() %}
+          {% set value = values.get(f.name, f.default) if values else f.default %}
+          {% include "_field.html" %}
+        {% endfor %}
+      </div>
+    </div>
+    <div class="panel-note">
+      Reservations are not optional. Swarm subtracts them when it places a task, and
+      they are the only thing the autoscaler measures node capacity with — a component
+      with none looks free and gets packed on top of the metrics database.
+    </div>
+  </section>
+
+  <div class="sticky-save">
+    <button class="btn btn-primary" type="submit">Create</button>
+    <label class="check">
+      <input type="checkbox" name="deploy_now" value="1" checked>
+      <span>Deploy it straight away</span>
+    </label>
+    <a class="btn" href="{{ section_href({'key': 'components'}) }}">Cancel</a>
+  </div>
+</form>

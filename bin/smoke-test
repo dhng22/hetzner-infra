@@ -35,7 +35,11 @@ check() { # check <label> <command...>
 
 [ -f "$INFRA_ENV" ] || { echo "no $INFRA_ENV — run this on the master"; exit 1; }
 set -a; . "$INFRA_ENV"; set +a
-APP_STACK="${STACK_NAME:-app}"
+# Components are discovered, not listed. Anything the autoscaler manages carries
+# infra.workload=app; anything the panel created carries infra.component.
+APP_SERVICES="$(docker service ls --filter label=infra.workload=app --format '{{.Name}}' 2>/dev/null)"
+COMPONENT_SERVICES="$(docker service ls --format '{{.Name}}' 2>/dev/null \
+                      | grep -vE '^(monitoring|ingress|admin)_' || true)"
 
 # ---------------------------------------------------------------------------
 head_ "host"
@@ -49,9 +53,15 @@ head_ "images and stacks"
 for img in "${APP_NAME}/autoscaler:latest" "${APP_NAME}/admin:latest"; do
   if docker image inspect "$img" >/dev/null 2>&1; then ok "image built: $img"; else bad "image built: $img"; fi
 done
-for stack in monitoring "$APP_STACK" admin; do
+for stack in monitoring ingress admin; do
   if docker stack ls --format '{{.Name}}' | grep -qx "$stack"; then ok "stack deployed: $stack"; else bad "stack deployed: $stack"; fi
 done
+# The edge network is created by bootstrap, not by a stack, precisely so that
+# removing a component cannot take the tunnel's route to everything else with it.
+if docker network inspect edge >/dev/null 2>&1; then ok "edge network exists"; else bad "edge network exists" "components cannot be deployed and the tunnel can reach nothing"; fi
+if [ -z "$COMPONENT_SERVICES" ]; then
+  skip "components deployed" "none created yet — a valid state for a fresh cluster"
+fi
 
 # ---------------------------------------------------------------------------
 head_ "services converged"
@@ -72,56 +82,84 @@ done < <(docker service ls --format '{{.Name}} {{.Replicas}}')
 head_ "placement mode"
 READY_WORKERS="$(docker node ls --format '{{.Hostname}} {{.Status}} {{.ManagerStatus}}' \
                  | awk '$3 == "" && $2 == "Ready"' | wc -l | tr -d ' ')"
-PINNED=0
-docker service inspect "${APP_STACK}_api-prod" \
-  --format '{{range .Spec.TaskTemplate.Placement.Constraints}}{{println .}}{{end}}' 2>/dev/null \
-  | tr -d ' ' | grep -qx 'node.role==worker' && PINNED=1
 
-MGR_TASKS="$(docker service ps "${APP_STACK}_api-prod" \
-             --filter desired-state=running --format '{{.Node}}' 2>/dev/null \
-             | grep -cx "$(hostname)" || true)"
-
-if [ "$PINNED" = "1" ] && [ "$READY_WORKERS" = "0" ]; then
-  bad "app is placeable" \
-      "pinned to node.role==worker with no ready worker — every task is unplaceable. The autoscaler should fail back within a loop; check its logs."
-elif [ "$PINNED" = "1" ]; then
-  ok "worker mode: $READY_WORKERS ready worker(s), app pinned to them"
-  if [ "${MGR_TASKS:-0}" != "0" ]; then
-    bad "master carries no app replicas" \
-        "$MGR_TASKS api-prod task(s) still on the master while pinned to workers — a handover did not finish"
-  else
-    ok "master carries no app replicas"
-  fi
+if [ -z "$APP_SERVICES" ]; then
+  skip "placement" "no service carries infra.workload=app, so there is nothing to place"
 else
-  if [ "$READY_WORKERS" != "0" ]; then
-    skip "manager mode with $READY_WORKERS worker(s) present" "mid-handover, or MIN_WORKERS raised; re-run shortly"
+  PINNED_LIST=""; UNPINNED_LIST=""
+  for svc in $APP_SERVICES; do
+    if docker service inspect "$svc" \
+         --format '{{range .Spec.TaskTemplate.Placement.Constraints}}{{println .}}{{end}}' 2>/dev/null \
+         | tr -d ' ' | grep -qx 'node.role==worker'; then
+      PINNED_LIST="$PINNED_LIST $svc"
+    else
+      UNPINNED_LIST="$UNPINNED_LIST $svc"
+    fi
+  done
+
+  if [ -n "$PINNED_LIST" ] && [ "$READY_WORKERS" = "0" ]; then
+    bad "applications are placeable" \
+        "pinned to node.role==worker with no ready worker —$PINNED_LIST cannot be placed at all. The autoscaler fails back within a loop; check its logs."
+  elif [ -n "$PINNED_LIST" ] && [ -n "$UNPINNED_LIST" ]; then
+    skip "placement is settled" "mid-handover: pinned$PINNED_LIST / unpinned$UNPINNED_LIST — re-run shortly"
+  elif [ -n "$PINNED_LIST" ]; then
+    ok "worker mode: $READY_WORKERS ready worker(s), every application pinned to them"
+    STRAY=0
+    for svc in $APP_SERVICES; do
+      n="$(docker service ps "$svc" --filter desired-state=running --format '{{.Node}}' 2>/dev/null \
+           | grep -cx "$(hostname)" || true)"
+      [ "${n:-0}" != "0" ] && STRAY=$((STRAY + n))
+    done
+    if [ "$STRAY" != "0" ]; then
+      bad "master carries no application replicas" \
+          "$STRAY task(s) still on the master while pinned to workers — a handover did not finish"
+    else
+      ok "master carries no application replicas"
+    fi
   else
-    ok "manager mode: no workers, master runs the app (scale-to-zero resting state)"
-  fi
-  if [ "${MGR_TASKS:-0}" = "0" ] && [ "$READY_WORKERS" = "0" ]; then
-    bad "master is running api-prod" "no api-prod task on the master and no workers exist — nothing is serving"
+    if [ "$READY_WORKERS" != "0" ]; then
+      skip "manager mode with $READY_WORKERS worker(s) present" "mid-handover, or MIN_WORKERS raised; re-run shortly"
+    else
+      ok "manager mode: no workers, the master runs everything (scale-to-zero resting state)"
+    fi
   fi
 fi
 
-# Capacity is measured from Swarm reservations now, so the thing worth checking
-# is that the reservations exist at all. Without them Swarm sees an idle box and
-# the autoscaler believes in room that is not there.
-if docker service inspect "${APP_STACK}_api-prod" \
-     --format '{{.Spec.TaskTemplate.Resources.Reservations.NanoCPUs}}' 2>/dev/null \
-     | grep -qE '^[1-9]'; then
-  ok "api-prod declares a CPU reservation (the autoscaler's capacity unit)"
-else
-  bad "api-prod declares a CPU reservation" \
-      "without one the autoscaler cannot size a node and falls back to APP_CPU_LIMIT"
-fi
-for g in monitoring_victoriametrics monitoring_loki "${APP_STACK}_redis-prod"; do
+# Capacity is measured from Swarm reservations, so the thing worth checking is
+# that they exist at all. Without them Swarm sees an idle box and the autoscaler
+# believes in room that is not there.
+for svc in $APP_SERVICES; do
+  if docker service inspect "$svc" \
+       --format '{{.Spec.TaskTemplate.Resources.Reservations.NanoCPUs}}' 2>/dev/null \
+       | grep -qE '^[1-9]'; then
+    ok "$svc declares a CPU reservation (the autoscaler's capacity unit)"
+  else
+    bad "$svc declares a CPU reservation" \
+        "the autoscaler cannot see it and will pack replicas on top of it"
+  fi
+done
+
+# The infrastructure's own reservations are what stop application replicas being
+# scheduled on top of the metrics database.
+for g in monitoring_victoriametrics monitoring_loki admin_ui; do
   if docker service inspect "$g" \
        --format '{{.Spec.TaskTemplate.Resources.Reservations.MemoryBytes}}' 2>/dev/null \
        | grep -qE '^[1-9]'; then
-    ok "$g reserves memory (keeps app replicas off the master's headroom)"
+    ok "$g reserves memory (keeps application replicas off the master's headroom)"
   else
     bad "$g reserves memory" \
         "the autoscaler will over-count the master and place replicas on top of it"
+  fi
+done
+
+# A stateful service that ended up labelled as an application would be moved to
+# a worker and deleted with it. This is the check that catches it before that.
+for svc in $APP_SERVICES; do
+  if docker service inspect "$svc" \
+       --format '{{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{.Type}}{{end}}' 2>/dev/null \
+       | grep -q volume; then
+    bad "$svc has no volume" \
+        "it is labelled infra.workload=app AND mounts a volume — it will be moved onto workers that are later deleted"
   fi
 done
 
@@ -175,30 +213,76 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-head_ "application config"
-for env in prod staging; do
-  f="$INFRA_DIR/config/app-$env.env"
-  if [ -s "$f" ] && grep -q '^MONGO_URI=' "$f"; then ok "config/app-$env.env seeded"; else bad "config/app-$env.env seeded"; fi
-done
-# The password the server enforces must be the one clients are given.
-for env in prod staging; do
-  want="$(grep -m1 '^REDIS_PASSWORD=' "$INFRA_DIR/config/app-$env.env" 2>/dev/null | cut -d= -f2-)"
-  got="$(docker service inspect "${APP_STACK}_redis-$env" \
-        --format '{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{println .}}{{end}}' 2>/dev/null \
-        | grep '^REDIS_PASSWORD=' | cut -d= -f2-)"
-  if [ -n "$want" ] && [ "$want" = "$got" ]; then
-    ok "redis-$env password matches the app's ($env)"
-  else
-    bad "redis-$env password matches the app's ($env)" "server and clients have drifted"
-  fi
-done
+head_ "components"
+if [ ! -d "$INFRA_DIR/components" ]; then
+  bad "components directory exists" "bootstrap did not create $INFRA_DIR/components"
+elif [ -z "$(ls -A "$INFRA_DIR/components" 2>/dev/null)" ]; then
+  skip "components created" "none yet — create one in the panel or with 'component create'"
+else
+  for dir in "$INFRA_DIR/components"/*/; do
+    name="$(basename "$dir")"
+    [ -f "$dir/component.json" ] || continue
+
+    # A spec that will not render is a component that cannot be deployed, and
+    # nothing else in the system notices until you press a button.
+    if out="$("$INFRA_DIR/bin/component" render "$name" 2>&1 >/dev/null)"; then
+      ok "$name renders"
+    else
+      bad "$name renders" "$(echo "$out" | tail -2)"
+    fi
+
+    # Credentials must not be world-readable. write_atomic chmods before the
+    # rename so this can only fail if something else wrote the file.
+    for f in env secret.env; do
+      [ -f "$dir/$f" ] || continue
+      mode="$(stat -c '%a' "$dir/$f" 2>/dev/null || stat -f '%Lp' "$dir/$f" 2>/dev/null)"
+      if [ "$mode" = "600" ]; then
+        ok "$name/$f is 0600"
+      else
+        bad "$name/$f is 0600" "found $mode — a database password is readable by other users"
+      fi
+    done
+
+    type="$(python3 -c "import json;print(json.load(open('$dir/component.json'))['type'])" 2>/dev/null)"
+    svc="${name}_${type}"
+    if ! docker service inspect "$svc" >/dev/null 2>&1; then
+      skip "$name is deployed" "spec exists but $svc is not running — run 'component deploy $name'"
+      continue
+    fi
+
+    # The password the server enforces must be the one the panel shows you.
+    # It goes through `sh -c`, so an unexpanded $REDIS_PASSWORD in the argv is
+    # the specific failure worth naming: the server would enforce the literal
+    # string while every client got the real one.
+    if [ "$type" = "redis" ]; then
+      want="$(grep -m1 '^REDIS_PASSWORD=' "$dir/secret.env" 2>/dev/null | cut -d= -f2-)"
+      got="$(docker service inspect "$svc" \
+             --format '{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{println .}}{{end}}' 2>/dev/null \
+             | grep '^REDIS_PASSWORD=' | cut -d= -f2-)"
+      if [ -n "$want" ] && [ "$want" = "$got" ]; then
+        ok "$name: the running server has the password the panel shows"
+      else
+        bad "$name: the running server has the password the panel shows" \
+            "redeploy it — the file and the service have drifted"
+      fi
+      if docker service inspect "$svc" \
+           --format '{{range .Spec.TaskTemplate.ContainerSpec.Args}}{{println .}}{{end}}' 2>/dev/null \
+           | grep -q 'exec redis-server'; then
+        ok "$name expands its password through a shell"
+      else
+        bad "$name expands its password through a shell" \
+            "without 'sh -c' the server enforces the literal string \$REDIS_PASSWORD"
+      fi
+    fi
+  done
+fi
 
 # ---------------------------------------------------------------------------
 head_ "monitoring"
 vm() { docker run --rm --network monitoring curlimages/curl:8.10.1 -fsS "$@" 2>/dev/null; }
 if q="$(vm "http://victoriametrics:8428/api/v1/query?query=up" )"; then
   ok "victoriametrics answers queries"
-  for metric in autoscaler_last_loop_timestamp_seconds autoscaler_max_replicas node_cpu_seconds_total; do
+  for metric in autoscaler_last_loop_timestamp_seconds autoscaler_managed_services node_cpu_seconds_total; do
     if vm "http://victoriametrics:8428/api/v1/query?query=${metric}" | grep -q '"result":\[{'; then
       ok "  metric present: $metric"
     else
@@ -224,30 +308,30 @@ if vm "http://loki:3100/ready" >/dev/null; then ok "loki is ready"; else bad "lo
 head_ "deploy paths (read-only)"
 # Validate the env files the generator consumes: malformed lines are dropped
 # silently at deploy time, so catching them here is the point.
-for env in prod staging; do
-  f="$INFRA_DIR/config/app-$env.env"
+for f in "$INFRA_DIR"/components/*/env; do
+  [ -f "$f" ] || continue
   problems="$(awk -v FS='=' '
     /^[[:space:]]*(#|$)/ { next }
     !/=/ { print "  line " NR ": no \"=\" -> ignored at deploy: " $0; next }
     $1 !~ /^[A-Za-z_][A-Za-z0-9_]*$/ { print "  line " NR ": invalid name: " $1 }
-    $1 == "REDIS_EXTERNAL_PORT" && $2 !~ /^[0-9]+$/ { print "  line " NR ": REDIS_EXTERNAL_PORT is not a port: " $2 }
   ' "$f" 2>/dev/null)"
-  if [ -z "$problems" ]; then ok "app-$env.env parses cleanly"; else bad "app-$env.env parses cleanly" "$problems"; fi
+  if [ -z "$problems" ]; then ok "$(basename "$(dirname "$f")")/env parses cleanly"; else bad "$(basename "$(dirname "$f")")/env parses cleanly" "$problems"; fi
 done
 
-if [ -x "$INFRA_DIR/bin/app-env" ]; then ok "bin/app-env is executable"; else bad "bin/app-env is executable"; fi
+if [ -x "$INFRA_DIR/bin/component" ]; then ok "bin/component is executable"; else bad "bin/component is executable"; fi
 if [ -x "$INFRA_DIR/bin/stack-deploy" ]; then ok "bin/stack-deploy is executable"; else bad "bin/stack-deploy is executable"; fi
 if [ -x "$INFRA_DIR/bin/panel-hostops" ]; then ok "bin/panel-hostops is executable"; else bad "bin/panel-hostops is executable"; fi
 
 # The webhook must reject a bad token even when everything else is healthy.
-HOOK="http://127.0.0.1:3000/hooks/deploy/app/staging"
+HOOK_COMPONENT="$(ls "$INFRA_DIR/components" 2>/dev/null | head -1)"
+HOOK="http://127.0.0.1:3000/hooks/deploy/${HOOK_COMPONENT:-none}"
 code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$HOOK" -H 'X-Deploy-Token: definitely-wrong' -H 'Content-Type: application/json' -d '{"image":"x:1"}')"
 [ "$code" = "401" ] && ok "webhook rejects a bad token (401)" || bad "webhook rejects a bad token" "got $code"
 
 TOKEN="$(python3 -c "
 import json
 try:
-    print(json.load(open('$INFRA_DIR/state/deploy-tokens.json'))['app']['staging'])
+    print(json.load(open('$INFRA_DIR/state/deploy-tokens.json')).get('${HOOK_COMPONENT}', ''))
 except Exception:
     print('')
 " 2>/dev/null)"
@@ -261,21 +345,38 @@ fi
 # ---------------------------------------------------------------------------
 if [ "$DEEP" = "1" ]; then
   head_ "deep checks (these write)"
-  # A no-op deploy: same config, same image, same replica count. Proves the
-  # whole path works without changing what is running.
-  before_img="$(docker service inspect "${APP_STACK}_api-prod" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}')"
-  before_rep="$(docker service inspect "${APP_STACK}_api-prod" --format '{{.Spec.Mode.Replicated.Replicas}}')"
-  if out="$("$INFRA_DIR/bin/app-env" deploy 2>&1)"; then ok "app-env deploy succeeded"; else bad "app-env deploy" "$(echo "$out" | tail -3)"; fi
-  after_img="$(docker service inspect "${APP_STACK}_api-prod" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}')"
-  after_rep="$(docker service inspect "${APP_STACK}_api-prod" --format '{{.Spec.Mode.Replicated.Replicas}}')"
-  [ "$before_img" = "$after_img" ] && ok "redeploy preserved the image" || bad "redeploy preserved the image" "$before_img -> $after_img"
-  [ "$before_rep" = "$after_rep" ] && ok "redeploy preserved the replica count ($after_rep)" || bad "redeploy preserved replicas" "$before_rep -> $after_rep"
+  # A no-op deploy of one component: same spec, same image, same replica count.
+  # Proves the whole path works without changing what is running — and proves
+  # the live-state pinning, which is the thing that silently rolls production
+  # back when it breaks.
+  TARGET="$(docker service ls --filter label=infra.workload=app --format '{{.Name}}' | head -1)"
+  if [ -z "$TARGET" ]; then
+    skip "no-op redeploy" "no application component to redeploy"
+  else
+    COMPONENT="${TARGET%%_*}"
+    before_img="$(docker service inspect "$TARGET" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}')"
+    before_rep="$(docker service inspect "$TARGET" --format '{{.Spec.Mode.Replicated.Replicas}}')"
+    before_pin="$(docker service inspect "$TARGET" --format '{{range .Spec.TaskTemplate.Placement.Constraints}}{{println .}}{{end}}' | tr -d ' \n')"
+    if out="$("$INFRA_DIR/bin/component" deploy "$COMPONENT" 2>&1)"; then
+      ok "component deploy $COMPONENT succeeded"
+    else
+      bad "component deploy $COMPONENT" "$(echo "$out" | tail -3)"
+    fi
+    after_img="$(docker service inspect "$TARGET" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}')"
+    after_rep="$(docker service inspect "$TARGET" --format '{{.Spec.Mode.Replicated.Replicas}}')"
+    after_pin="$(docker service inspect "$TARGET" --format '{{range .Spec.TaskTemplate.Placement.Constraints}}{{println .}}{{end}}' | tr -d ' \n')"
+    [ "$before_img" = "$after_img" ] && ok "redeploy preserved the image" || bad "redeploy preserved the image" "$before_img -> $after_img"
+    [ "$before_rep" = "$after_rep" ] && ok "redeploy preserved the replica count ($after_rep)" || bad "redeploy preserved replicas" "$before_rep -> $after_rep"
+    [ "$before_pin" = "$after_pin" ] && ok "redeploy preserved the placement pin" || bad "redeploy preserved the placement pin" "$before_pin -> $after_pin"
+  fi
 
   if out="$("$INFRA_DIR/bin/stack-deploy" monitoring 2>&1)"; then ok "stack-deploy monitoring"; else bad "stack-deploy monitoring" "$(echo "$out" | tail -3)"; fi
-  if "$INFRA_DIR/bin/stack-deploy" app >/dev/null 2>&1; then
-    bad "stack-deploy refuses the app stack" "it should redirect you to app-env"
+  # Components are not infrastructure stacks and must not be routable through
+  # the path that re-applies a file wholesale.
+  if "$INFRA_DIR/bin/stack-deploy" "${COMPONENT:-anything}" >/dev/null 2>&1; then
+    bad "stack-deploy refuses a component" "it should redirect you to 'component deploy'"
   else
-    ok "stack-deploy refuses the app stack"
+    ok "stack-deploy refuses a component"
   fi
 else
   head_ "deep checks"

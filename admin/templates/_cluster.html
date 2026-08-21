@@ -24,7 +24,7 @@
   </div>
   <div class="tile">
     <span class="k">Total memory</span>
-    <span class="v">{{ nodes|sum(attribute='memory_gb')|round(1) }}<small style="font-size:14px"> GB</small></span>
+    <span class="v">{{ nodes|sum(attribute='memory_gb')|round(1) }}<small> GB</small></span>
     <span class="m">across every node</span>
   </div>
 </div>
@@ -59,5 +59,67 @@
     A worker in <code>drain</code> is being removed: its tasks have been rescheduled and the
     server is deleted once they have all left, plus a grace period for the tunnel connector
     to release its edge connections.
+  </div>
+</section>
+
+<div class="page-head section-gap">
+  <div>
+    <h1 class="sub">Infrastructure</h1>
+    <p>The three stacks that come up before anything else exists. They are shown read-only:
+       they have no spec file and no delete button, because they are the thing that runs
+       your components. Redeploying one re-applies its file and nothing else.</p>
+  </div>
+</div>
+
+{% for category, group in system %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>{{ category }}</h2>
+    <span class="spacer"></span>
+    <span class="muted">{{ group|length }}</span>
+  </div>
+  <div class="rows">
+    {% for entry in group %}
+    {% set access = system_access(entry) %}
+    <div class="row {{ entry.tone }}">
+      <span class="stripe"></span>
+      <span>
+        <span class="row-title">{{ entry.display }}</span>
+        <span class="row-sub">{{ entry.blurb }}</span>
+      </span>
+      <span class="row-metric hide-sm">
+        <span class="k">Tasks</span>
+        <span class="v num">{{ entry.svc.running }}/{{ entry.svc.desired }}</span>
+      </span>
+      {% if access and access.reachable %}
+      <a class="btn btn-sm" href="{{ access.url }}" target="_blank" rel="noopener">Open</a>
+      {% elif access %}
+      <span class="pill mute plain mono" title="{{ access.note }}">{{ access.url }}</span>
+      {% endif %}
+      <span class="pill {{ entry.tone }}">{{ entry.svc.state }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endfor %}
+
+<section class="panel">
+  <div class="panel-head"><h2>Redeploy a stack</h2></div>
+  <div class="panel-body">
+    <div class="btn-row">
+      {% for stack in ['monitoring', 'ingress', 'admin'] %}
+      <form method="post" action="{{ stack_href() }}" {% if preview %}data-preview{% endif %}
+            data-confirm="Re-apply the {{ stack }} stack file?">
+        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="stack" value="{{ stack }}">
+        <button class="btn" type="submit">{{ stack }}</button>
+      </form>
+      {% endfor %}
+    </div>
+    <p class="hint">
+      Safe to run at any time: these stacks hold no state anything else owns. Your components
+      are not stacks in this sense and are not touched — each one deploys itself, reading its
+      live image and replica count back first.
+    </p>
   </div>
 </section>

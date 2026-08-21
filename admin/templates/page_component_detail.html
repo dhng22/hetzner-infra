@@ -1,0 +1,4 @@
+{% extends "base.html" %}
+{% block title %}{{ component.name }} · {{ cluster_name }}{% endblock %}
+{% block crumb %}{{ cluster_name }} · components · {{ component.name }}{% endblock %}
+{% block main %}{% include "_component_detail.html" %}{% endblock %}

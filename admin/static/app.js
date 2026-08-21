@@ -83,21 +83,28 @@
     flashButton(btn, ok ? "Copied" : "Press Ctrl+C");
   }
 
-  function addVarRow(panel) {
-    var grid = panel.querySelector("[data-kv]");
-    if (!grid) { return; }
-    var key = document.createElement("input");
-    key.type = "text";
-    key.name = "key";
-    key.className = "k-in";
-    key.placeholder = "NEW_VARIABLE";
-    key.setAttribute("aria-label", "Variable name");
+  // --- environment editor ---------------------------------------------------
+  // Two views of one form: a row per variable, or the whole thing as text so a
+  // .env can be pasted in one go. They are never both live — switching converts
+  // the edits across and disables the view that just left the screen, so the
+  // form submits exactly what was on it. The server does the same conversion
+  // (envstore.parse_bulk), so the rules have to match; keep them in step.
 
-    var value = document.createElement("input");
-    value.type = "text";
-    value.name = "value";
-    value.placeholder = "value";
-    value.setAttribute("aria-label", "Value");
+  function addVarRow(grid, key, value) {
+    var k = document.createElement("input");
+    k.type = "text";
+    k.name = "key";
+    k.className = "k-in";
+    k.placeholder = "NEW_VARIABLE";
+    k.setAttribute("aria-label", "Variable name");
+    k.value = key || "";
+
+    var v = document.createElement("input");
+    v.type = "text";
+    v.name = "value";
+    v.placeholder = "value";
+    v.setAttribute("aria-label", "Value");
+    v.value = value || "";
 
     var remove = document.createElement("button");
     remove.type = "button";
@@ -105,10 +112,70 @@
     remove.setAttribute("data-remove-var", "");
     remove.textContent = "Remove";
 
-    grid.appendChild(key);
-    grid.appendChild(value);
+    grid.appendChild(k);
+    grid.appendChild(v);
     grid.appendChild(remove);
-    key.focus();
+    return k;
+  }
+
+  function envParts(panel) {
+    if (!panel) { return null; }
+    var grid = panel.querySelector("[data-kv]");
+    var area = panel.querySelector("textarea[name=bulk]");
+    return grid && area ? { grid: grid, area: area } : null;
+  }
+
+  function rowsToText(grid) {
+    var out = [];
+    grid.querySelectorAll('input[name="key"]').forEach(function (k) {
+      var key = k.value.trim();
+      var value = k.nextElementSibling;
+      if (key) { out.push(key + "=" + (value ? value.value : "")); }
+    });
+    return out.length ? out.join("\n") + "\n" : "";
+  }
+
+  function textToRows(grid, text) {
+    // Everything but the two column headings, which are plain divs.
+    grid.querySelectorAll("input, [data-remove-var]").forEach(function (el) {
+      el.remove();
+    });
+    text.split(/\r\n|\r|\n/).forEach(function (raw) {
+      var line = raw.trim();
+      if (!line || line.charAt(0) === "#") { return; }
+      if (line.indexOf("export ") === 0) { line = line.slice(7).replace(/^\s+/, ""); }
+      var eq = line.indexOf("=");
+      // A line with no '=' is kept as a name with no value rather than dropped,
+      // so a mistyped paste is visible instead of quietly missing. Saving it
+      // fails on the server's name check, which says what is wrong with it.
+      if (eq === -1) { addVarRow(grid, line, ""); return; }
+      addVarRow(grid, line.slice(0, eq).trim(), line.slice(eq + 1).trim());
+    });
+  }
+
+  function setEnvMode(panel, mode) {
+    var parts = envParts(panel);
+    if (!parts) { return; }
+    var text = mode === "text";
+
+    if (text) { parts.area.value = rowsToText(parts.grid); }
+    else { textToRows(parts.grid, parts.area.value); }
+
+    // hidden AND disabled, on both sides. Hidden is for the eye; disabled is
+    // what keeps the browser from submitting the view you are not looking at,
+    // which is the whole reason the two can never disagree.
+    parts.grid.hidden = text;
+    parts.grid.querySelectorAll("input").forEach(function (i) { i.disabled = text; });
+    parts.area.hidden = !text;
+    parts.area.disabled = !text;
+
+    panel.querySelectorAll("[data-mode-only]").forEach(function (el) {
+      el.hidden = el.getAttribute("data-mode-only") !== mode;
+    });
+    panel.querySelectorAll("[data-env-mode]").forEach(function (b) {
+      b.setAttribute("aria-pressed", String(b.getAttribute("data-env-mode") === mode));
+    });
+    try { localStorage.setItem("panel-env-mode", mode); } catch (e) { /* private mode */ }
   }
 
   // --- one listener --------------------------------------------------------
@@ -143,7 +210,14 @@
 
     if ((el = ev.target.closest("[data-add-var]"))) {
       ev.preventDefault();
-      addVarRow(el.closest("section, [data-panel]"));
+      var addTo = el.closest("section, [data-panel]").querySelector("[data-kv]");
+      if (addTo) { addVarRow(addTo).focus(); }
+      return;
+    }
+
+    if ((el = ev.target.closest("[data-env-mode]"))) {
+      ev.preventDefault();
+      setEnvMode(el.closest("section, [data-panel]"), el.getAttribute("data-env-mode"));
       return;
     }
 
@@ -176,6 +250,19 @@
     }
   });
 
+  // --- destructive actions --------------------------------------------------
+  // A form carrying data-confirm asks before it submits. Deliberately native
+  // confirm(): the panel has no modal, and a hand-rolled one that fails open on
+  // a JS error would be worse than the browser's.
+  document.addEventListener("submit", function (ev) {
+    var form = ev.target.closest("form[data-confirm]");
+    if (!form) { return; }
+    if (!window.confirm(form.getAttribute("data-confirm"))) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+  }, true);
+
   // Preview builds have no server. Say so instead of appearing to do nothing.
   document.addEventListener("submit", function (ev) {
     var form = ev.target.closest("form[data-preview]");
@@ -184,6 +271,16 @@
     var btn = form.querySelector("button[type=submit]") || form.querySelector("button");
     if (btn) { flashButton(btn, "Preview only"); }
   });
+
+  // Which view you last used, remembered per browser. The preview renders this
+  // partial once per app, hence querySelectorAll rather than a single lookup.
+  try {
+    if (localStorage.getItem("panel-env-mode") === "text") {
+      document.querySelectorAll("[data-env-modes]").forEach(function (g) {
+        setEnvMode(g.closest("section, [data-panel]"), "text");
+      });
+    }
+  } catch (e) { /* private mode */ }
 
   // --- cluster map: keep it current -----------------------------------------
   // Rendered server-side first, so the section is complete and correct with JS

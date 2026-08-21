@@ -45,16 +45,26 @@
 
     <main>
       <section data-view="overview">{% include "_overview.html" %}</section>
-      <section data-view="apps" hidden>{% include "_apps.html" %}</section>
+      <section data-view="components" hidden>{% include "_components.html" %}</section>
 
       {% for d in details %}
-      <section data-view="app-{{ d.app_entry.key }}-{{ d.env_name }}" hidden>
-        {% with app_entry = d.app_entry, env_name = d.env_name, svc = d.svc,
-                tab = d.tab, editable = d.editable, pairs = d.pairs, logs = d.logs,
-                creds = d.creds, access = d.access, webhook = d.webhook,
-                deployments = d.deployments, registries = d.registries,
-                firewall = d.firewall %}
-          {% include "_app_detail.html" %}
+      <section data-view="component-{{ d.component.name }}" hidden>
+        {% with component = d.component, view = d.view, tabs = d.tabs, tab = d.tab,
+                fields = d.fields, env_pairs = d.env_pairs, logs = d.logs,
+                creds = d.creds, firewall = d.firewall, webhook = d.webhook,
+                deployments = d.deployments, registries = d.registries %}
+          {% include "_component_detail.html" %}
+        {% endwith %}
+      </section>
+      {% endfor %}
+
+      {% for f in new_forms %}
+      <section data-view="new-{{ f.type_name }}" hidden>
+        {# f["values"], not f.values — Jinja resolves the attribute first and
+           dict.values is a method, which is a genuinely confusing failure. #}
+        {% with cls = f.cls, type_name = f.type_name, values = f["values"],
+                problems = f.problems, name = f.name %}
+          {% include "_component_new.html" %}
         {% endwith %}
       </section>
       {% endfor %}
@@ -72,7 +82,7 @@
                set once in <code>master-cloud-init.yaml</code>.</p>
           </div>
         </div>
-        <div class="login-card" style="margin:0">
+        <div class="login-card">
           <div class="brand" style="padding:0">
             <div class="brand-mark" aria-hidden="true">{{ cluster_name[:2]|upper }}</div>
             <div>
@@ -81,15 +91,15 @@
             </div>
           </div>
           <h1>Sign in</h1>
-          <p>This panel can redeploy production and read every application credential.</p>
+          <p>This panel can deploy anything in the cluster and read every credential in it.</p>
           <form class="stack" onsubmit="return false">
             <div class="field">
               <label for="pv-user">Username</label>
-              <input id="pv-user" type="text" value="admin" style="font-family:var(--ui)">
+              <input id="pv-user" type="text" value="admin">
             </div>
             <div class="field">
               <label for="pv-pass">Password</label>
-              <input id="pv-pass" type="password" value="hunter2hunter2" style="font-family:var(--ui)">
+              <input id="pv-pass" type="password" value="hunter2hunter2">
             </div>
             <button class="btn btn-primary" type="submit" style="width:100%; justify-content:center">Sign in</button>
           </form>
@@ -121,7 +131,9 @@
     if (!found) { return show("overview"); }
     document.querySelectorAll("[data-nav]").forEach(function (a) {
       var key = a.getAttribute("data-nav");
-      var on = key === name || (name.indexOf("app-") === 0 && key === "apps");
+      var on = key === name || (key === "components"
+                                && (name.indexOf("component-") === 0
+                                    || name.indexOf("new-") === 0));
       if (on) { a.setAttribute("aria-current", "page"); }
       else { a.removeAttribute("aria-current"); }
     });

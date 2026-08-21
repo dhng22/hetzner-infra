@@ -2,97 +2,124 @@
 """
 Two-tier autoscaler for Docker Swarm on Hetzner Cloud.
 
+WHAT IT SCALES IS DISCOVERED, NOT CONFIGURED
+--------------------------------------------
+There is no APP_SERVICE. Every service carrying the deploy label
+`infra.workload=app` is an application workload: this loop owns its placement,
+counts it when sizing the fleet, and — if it also carries `autoscale.enabled` —
+owns its replica count. Its whole policy (SLO, replica bounds, sustain windows,
+thresholds) travels with it as `autoscale.*` labels on that same service, so a
+second application is a component someone created, not an edit to this file, the
+monitoring stack and infra.env.
+
+Anything without that label is OVERHEAD: never pinned, never scaled, and its
+reservations are simply subtracted from whatever node it sits on. That is the
+correct default, and it is why creating a Redis needs no change here at all.
+The failure modes are asymmetric on purpose — a forgotten label leaves an app on
+the master, correctly accounted and visible; a label on a stateful service would
+move a volume onto a worker that later gets deleted.
+
 POLICY
 ------
 Load is absorbed in two stages, cheapest first:
 
-  1. REPLICAS. Adding a task to existing capacity takes seconds. The desired
-     replica count is driven by p95 latency against your SLO, with
+  1. REPLICAS. Adding a task to existing capacity takes seconds. Each service's
+     desired count is driven by its own p95 latency against its own SLO, with
      CPU-per-replica as the secondary signal.
-  2. NODES. Only when the replicas we want will not fit on the capacity we
-     have. Provisioning takes ~2 minutes including JVM warmup.
+  2. NODES. Only when what we want will not fit on the capacity we have.
+     Provisioning takes ~2 minutes including application warmup.
 
-Coming down, the order reverses: shed replicas first, remove the node later
-and slowly.
+Coming down, the order reverses: shed replicas first, remove the node later and
+slowly.
+
+WANT, HOSTS, ADMITTED — three numbers, not one
+----------------------------------------------
+  want      what each service's signals ask for.
+  hosts     derived from the UNCAPPED total of those wants. This is what makes
+            the fleet grow toward real demand.
+  admitted  what is actually written to Swarm this loop, capped at what the
+            currently eligible nodes can hold.
+
+Collapsing want and admitted into one variable deadlocks with several services:
+each gets capped to fit, the total never exceeds capacity, and no worker is ever
+bought. Admission caps GROWTH only — it never scales anything down. Shrinking is
+tier 1's job and the node-removal path's job.
 
 THE MASTER IS HOST #1
 ---------------------
 Hosts are counted including the master, so the floor of MIN_WORKERS=1 is free:
-one host means the master, and no Hetzner server is billed. The app therefore
-lives in one of two places, and exactly one of them at a time:
+one host means the master, and no Hetzner server is billed. Applications live in
+one of two places, and exactly one at a time:
 
-  MANAGER MODE   one host. The app services carry no role constraint and run on
-                 the master alongside monitoring, Redis and the panel. Nothing
-                 is billed.
-  WORKER MODE    two or more hosts. Every host is a Hetzner worker, the app
-                 services carry `node.role == worker`, and the master goes back
-                 to being a pure control plane carrying no replicas at all.
+  MANAGER MODE   one host. App services carry no role constraint and run on the
+                 master alongside monitoring, the databases and the panel.
+  WORKER MODE    two or more hosts. Every app service carries
+                 `node.role == worker` and the master goes back to being a pure
+                 control plane carrying no application replicas at all.
 
 CAPACITY IS MEASURED, NOT CONFIGURED
 ------------------------------------
-There is no REPLICAS_PER_WORKER and no manager-capacity constant. How many
-replicas a node holds is computed from that node's advertised CPU and RAM minus
-what Swarm has already reserved on it, divided by one replica's own reservation
-read from the live service spec. A new worker's capacity comes from the Hetzner
-server-type catalogue minus the per-node reservations of the `mode: global`
-services. Resize the master, change a limit, switch WORKER_TYPE — the arithmetic
-follows without a config edit, and there is no constant that can drift.
+No REPLICAS_PER_WORKER, no manager-capacity constant, no headroom constant. Every
+quantity is a (cpu, memory) vector in nanocores and bytes:
 
-Existing nodes are filled before new ones are ordered: hosts_needed() sums what
-the current workers can still take and turns only the shortfall into servers. A
-half-empty 4 vCPU worker is used up before a second one is bought.
+  a node's free capacity  = what it advertises, minus the reservations of every
+                            task on it that is NOT an app workload
+  demand                  = sum over app services of replicas x that service's
+                            own reservation
+  a new worker            = the Hetzner catalogue entry for WORKER_TYPE, minus
+                            the per-node reservations of the `mode: global`
+                            services
 
-The autoscaler owns that constraint at runtime, the same way it owns the
-replica count — stacks/app.yml sets neither. `_placement_mode()` reads the live
-spec every loop and `_set_placement_mode()` moves it with `docker service
-update --constraint-add/--constraint-rm`, which edits the constraint list and
-nothing else while honouring the service's own update_config (start-first,
-parallelism 1, monitor 90s, rollback on failure).
+Integers throughout: summing 0.05 + 0.10 + 0.05 as floats and then comparing
+demand <= free is how a packing loop acquires a one-replica flap nobody can
+reproduce.
 
-THE HANDOVER MUST NEVER LEAVE A GAP. Both directions are ordered so that a
-healthy replica is serving at every instant:
+The unit is the RESERVATION, not the limit, because reservations are what
+Swarm's scheduler actually subtracts when placing a task.
+
+ONE PACKER, USED THREE TIMES
+----------------------------
+`place()` — first-fit over a round-robin item stream — answers admission, fleet
+sizing and node removal. Two algorithms that disagree by one replica are a loop
+that buys a worker and immediately deletes it. Its output is a pure function of
+(labels, live specs, node inventory, counts), which is the whole anti-oscillation
+argument.
+
+THE HANDOVER MUST NEVER LEAVE A GAP
+-----------------------------------
+Both directions are ordered so a healthy replica is serving at every instant:
 
   scaling out (manager -> workers)
-    1. create workers, and hold the replica count at what the MANAGER can
-       serve while they boot. The master keeps serving throughout.
-    2. wait until the workers are `ready` AND their measured capacity covers
-       every replica. Flipping early would strand tasks on nodes that cannot
-       take them.
-    3. only then add the constraint. start-first replaces the master's tasks
-       one at a time, new-before-old, onto the workers.
+    1. create workers, holding replicas at what the MASTER can serve while they
+       boot. The master keeps serving throughout.
+    2. wait until workers are `ready` AND can hold every app replica.
+    3. only then add the constraint. start-first replaces the master's tasks one
+       at a time, new-before-old.
 
   scaling in (workers -> manager)
-    1. remove the constraint FIRST, while the last worker is still up and
-       serving. The master becomes eligible and picks up tasks.
-    2. wait until a replica is actually RUNNING on the master.
+    1. release the constraint FIRST, while the last worker is still serving.
+    2. wait until a replica of EVERY app service is running on the master.
     3. only then drain and delete the last worker.
 
-Reversing either order is what produces the outage: flip-then-provision leaves
-tasks pending, and delete-then-flip leaves nothing serving. Every step is
-re-derived from live state each loop, so a crash mid-handover is resumed rather
-than left half-applied. If every worker disappears at once while in worker
-mode, the next loop flips straight back to manager mode — the failure path and
-the scale-down path are the same code.
+Reversing either order produces the outage. Every step is re-derived from live
+state each loop, so a crash mid-handover resumes rather than half-applying.
 
-cloudflared is the one exception: it stays `mode: global` with no constraint,
-so the master always has a registered connector. That is deliberate. It is
-ingress plumbing, not application load, and having it already live on both
-sides of a handover is what stops the tunnel going dark while replicas move.
+cloudflared is the one exception: `mode: global`, no constraint, so the master
+always has a registered connector and the tunnel never gaps mid-handover.
 
 WHY THESE SIGNALS
 -----------------
-p95 latency is what your users experience; node CPU is not. Node CPU averages
-in the log driver, the exporters, cloudflared and staging, none of which
-should influence production capacity. CPU-per-replica (from cadvisor, scoped
-to the production service) is the resource-bound backstop, and raw node CPU is
-used only to decide whether another replica can physically fit.
+p95 latency is what your users feel; node CPU is not. Node CPU averages in the
+log driver, the exporters, the tunnel connector and every other component, none
+of which should influence one application's capacity. CPU-per-replica is the
+resource-bound backstop, and raw node CPU is used only to decide whether another
+replica can physically fit.
 
 WHY THE COOLDOWNS ARE ASYMMETRIC
 --------------------------------
 Scaling up late costs user-visible latency. Scaling down late costs pennies.
-COOLDOWN_UP must exceed provision time plus JVM warmup, or the loop will
-provision again while the last node is still warming and badly overshoot. That
-is the most common way an autoscaler burns money.
+COOLDOWN_UP must exceed provision time plus warmup, or the loop provisions again
+while the last node is still warming and badly overshoots.
 
 STATELESS BY DESIGN. Cooldowns derive from Hetzner creation timestamps and
 sustain windows from VictoriaMetrics subqueries, so restarting this container
@@ -101,12 +128,14 @@ the server and a grown disk can never shrink.
 """
 
 import logging
+import math
 import os
 import re
 import signal
 import subprocess
 import sys
 import time
+from collections import namedtuple
 from datetime import datetime, timezone
 
 import docker
@@ -120,8 +149,11 @@ from hcloud.ssh_keys import SSHKey
 from prometheus_client import Counter, Gauge, start_http_server
 
 # ---------------------------------------------------------------------------
-# config
+# config — cluster-wide only
 # ---------------------------------------------------------------------------
+# Nothing here names an application, and nothing here is a scaling threshold.
+# Those belong to the service they apply to, as labels. What is left is the
+# fleet: how many machines may exist, of what kind, and how eagerly.
 
 
 def _env(key, default=None, cast=str):
@@ -142,54 +174,23 @@ def _secret(name):
 
 
 CLUSTER = _env("APP_NAME", "app")
-APP_ENV = _env("APP_ENV", "prod")  # which app the latency signal reads from
 VM_URL = _env("VM_URL", "http://victoriametrics:8428")
-
-# --- the service we scale -------------------------------------------------
-APP_SERVICE = _env("APP_SERVICE", "app_api-prod")
-# Staging rides the same placement mode so that "the master runs no app" is
-# true of the whole app stack, not just production. It is never scaled — one
-# capped replica — so it follows, it does not drive. Blank disables the follow.
-APP_SERVICE_STAGING = _env("APP_SERVICE_STAGING", "app_api-staging")
-APP_CPU_LIMIT = _env("APP_CPU_LIMIT", "1.0", float)   # must match the stack file
-MIN_REPLICAS = _env("MIN_REPLICAS", "2", int)
-MAX_REPLICAS = _env("MAX_REPLICAS", "12", int)
 
 # --- hosts ----------------------------------------------------------------
 # HOSTS, not Hetzner servers. The master counts as host #1:
 #
-#   MIN_WORKERS = 1  ->  the master alone runs the app, zero servers billed
+#   MIN_WORKERS = 1  ->  the master alone runs your components, zero servers billed
 #   hosts     >= 2   ->  that many Hetzner workers exist and the master runs none
-#
-# so the floor of 1 is free. Set MIN_WORKERS = 2 if you would rather the master
-# never ran application traffic; the master is then never a host at all.
-#
-# There is no REPLICAS_PER_WORKER and no manager capacity constant. How many
-# replicas a node holds is measured from that node's real CPU and RAM minus what
-# Swarm has already reserved on it — see node_app_capacity(). A constant would
-# only ever be a guess about hardware the autoscaler can read directly.
 MIN_WORKERS = _env("MIN_WORKERS", "1", int)
 MAX_WORKERS = _env("MAX_WORKERS", "6", int)
 
-# --- signals: latency first, CPU-per-replica second -----------------------
-SLO_P95_MS = _env("SLO_P95_MS", "500", float)      # your target. THE number.
-SCALE_UP_P95_RATIO = _env("SCALE_UP_P95_RATIO", "0.8", float)   # act at 80% of SLO
-SCALE_DOWN_P95_RATIO = _env("SCALE_DOWN_P95_RATIO", "0.4", float)
-SCALE_UP_CPU = _env("SCALE_UP_CPU", "70", float)   # % of a replica's CPU limit
-SCALE_DOWN_CPU = _env("SCALE_DOWN_CPU", "30", float)
-# Placement guard, not a trigger. If a worker is this loaded on either CPU or
+# Placement guard, not a trigger. If a node is this loaded on either CPU or
 # memory, another replica will not fit on it, so a node is required.
 NODE_PRESSURE_PCT = _env("NODE_PRESSURE_PCT", "80", float)
 
-# Up fast, down slow. Never make these symmetric.
-SUSTAIN_UP = _env("SUSTAIN_UP_SECONDS", "90", int)
-SUSTAIN_DOWN = _env("SUSTAIN_DOWN_SECONDS", "900", int)
-# COOLDOWN_UP >= node boot + image pull + JVM warmup, or you will overshoot.
+# COOLDOWN_UP >= node boot + image pull + app warmup, or you will overshoot.
 COOLDOWN_UP = _env("COOLDOWN_UP_SECONDS", "300", int)
 COOLDOWN_DOWN = _env("COOLDOWN_DOWN_SECONDS", "900", int)
-REPLICA_COOLDOWN = _env("REPLICA_COOLDOWN_SECONDS", "60", int)
-# Step up proportionally: +1 at a time cannot keep pace with a real spike.
-SCALE_UP_FACTOR = _env("SCALE_UP_FACTOR", "0.5", float)
 
 SCHEDULE_FLOOR = _env("SCHEDULE_FLOOR", "")
 LOOP_SECONDS = _env("LOOP_SECONDS", "60", int)
@@ -206,6 +207,7 @@ USERDATA_PATH = _env("WORKER_USERDATA_PATH", "/etc/infra/worker-cloud-init.yaml"
 
 ORPHAN_GRACE_SECONDS = 900
 POST_DRAIN_GRACE = _env("POST_DRAIN_GRACE_SECONDS", "45", int)
+HANDOVER_STALL_SECONDS = 900
 
 logging.basicConfig(
     level=logging.INFO,
@@ -225,82 +227,291 @@ if MAX_WORKERS < MIN_WORKERS:
                 MAX_WORKERS, MIN_WORKERS, MIN_WORKERS)
     MAX_WORKERS = MIN_WORKERS
 
+
+# ---------------------------------------------------------------------------
+# labels: the contract with whatever created the component
+# ---------------------------------------------------------------------------
+
+WORKLOAD_LABEL = "infra.workload"
+WORKLOAD_APP = "app"
+COMPONENT_LABEL = "infra.component"
+
+_warned = set()
+
+
+def warn_once(key, message, *args):
+    """
+    Log a policy complaint once per distinct value, not once per loop.
+
+    Keyed on the offending value rather than the field, so a bad label is
+    reported once a day instead of 1440 times — but CHANGING it to a different
+    bad value reports again.
+    """
+    if key in _warned:
+        return
+    if len(_warned) > 5000:            # a pathological spec must not leak memory
+        _warned.clear()
+    _warned.add(key)
+    log.warning(message, *args)
+
+
+def _label_num(labels, key, default, cast, lo, hi, service):
+    raw = labels.get(key)
+    if raw is None:
+        return default
+    try:
+        value = cast(raw)
+    except (TypeError, ValueError):
+        M_ERRORS.labels(stage="policy").inc()
+        warn_once((service, key, raw), "%s: %s=%r is not a number; using %s",
+                  service, key, raw, default)
+        return default
+    if not (lo <= value <= hi):
+        M_ERRORS.labels(stage="policy").inc()
+        warn_once((service, key, raw), "%s: %s=%s is outside %s..%s; using %s",
+                  service, key, value, lo, hi, default)
+        return default
+    return value
+
+
+def _label_bool(labels, key, default=False):
+    raw = labels.get(key)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
+Policy = namedtuple("Policy", [
+    "autoscale", "min_replicas", "max_replicas", "slo_ms", "up_ratio", "down_ratio",
+    "up_cpu", "down_cpu", "sustain_up", "sustain_down", "up_factor", "cooldown",
+    "priority", "histogram", "unit",
+])
+
+
+def policy_from_labels(service_name, labels, spec_replicas):
+    """
+    A service's scaling policy, read from its own deploy labels.
+
+    NEVER RAISES. This is the boundary between operator input and the loop, so
+    every field falls back to a default and complains rather than taking the
+    cluster down with a typo.
+
+    A service with `infra.workload=app` and no `autoscale.enabled` is a
+    fixed-replica application: still discovered, still pinned with the others,
+    still counted in demand, never scaled. Its bounds are its live replica count
+    read fresh each loop, so scaling it by hand is respected rather than fought.
+    """
+    try:
+        enabled = _label_bool(labels, "autoscale.enabled", False)
+        if not enabled:
+            fixed = max(0, int(spec_replicas or 0))
+            return Policy(False, fixed, fixed, 500.0, 0.8, 0.4, 70.0, 30.0,
+                          90, 900, 0.5, 60, 100,
+                          "http_server_requests_seconds_bucket", "seconds")
+
+        lo = _label_num(labels, "autoscale.min_replicas", 1, int, 0, 100, service_name)
+        hi = _label_num(labels, "autoscale.max_replicas", lo, int, 0, 100, service_name)
+        if hi < lo:
+            warn_once((service_name, "bounds", f"{lo}-{hi}"),
+                      "%s: max_replicas %d is below min_replicas %d; using %d for both",
+                      service_name, hi, lo, lo)
+            hi = lo
+        if hi == lo and enabled:
+            warn_once((service_name, "noop", f"{lo}"),
+                      "%s: autoscaling is on but min == max == %d, so nothing can "
+                      "move. Set a range, or turn autoscaling off.", service_name, lo)
+
+        up_ratio = _label_num(labels, "autoscale.up_p95_ratio", 0.8, float, 0.01, 2.0, service_name)
+        down_ratio = _label_num(labels, "autoscale.down_p95_ratio", 0.4, float, 0.01, 2.0, service_name)
+        up_cpu = _label_num(labels, "autoscale.up_cpu_pct", 70.0, float, 1.0, 200.0, service_name)
+        down_cpu = _label_num(labels, "autoscale.down_cpu_pct", 30.0, float, 1.0, 200.0, service_name)
+        # Repairing only one side would produce a config nobody wrote, so a
+        # crossed pair reverts both.
+        if down_ratio >= up_ratio:
+            warn_once((service_name, "ratios", f"{up_ratio}/{down_ratio}"),
+                      "%s: scale-down p95 ratio %.2f is not below scale-up %.2f; "
+                      "using the defaults for both", service_name, down_ratio, up_ratio)
+            up_ratio, down_ratio = 0.8, 0.4
+        if down_cpu >= up_cpu:
+            warn_once((service_name, "cpus", f"{up_cpu}/{down_cpu}"),
+                      "%s: scale-down CPU %.0f%% is not below scale-up %.0f%%; "
+                      "using the defaults for both", service_name, down_cpu, up_cpu)
+            up_cpu, down_cpu = 70.0, 30.0
+
+        sustain_up = _label_num(labels, "autoscale.sustain_up_seconds", 90, int, 30, 3600, service_name)
+        sustain_down = _label_num(labels, "autoscale.sustain_down_seconds", 900, int, 60, 86400, service_name)
+        if sustain_down < sustain_up:
+            warn_once((service_name, "sustain", f"{sustain_up}/{sustain_down}"),
+                      "%s: sustain_down %ds is shorter than sustain_up %ds, which "
+                      "inverts the up-fast/down-slow asymmetry this loop relies on",
+                      service_name, sustain_down, sustain_up)
+
+        histogram = labels.get("autoscale.p95_histogram") or "http_server_requests_seconds_bucket"
+        if not re.match(r"^[a-zA-Z_:][a-zA-Z0-9_:]*$", histogram):
+            warn_once((service_name, "metric", histogram),
+                      "%s: %r is not a metric name; using the default",
+                      service_name, histogram)
+            histogram = "http_server_requests_seconds_bucket"
+        unit = labels.get("autoscale.p95_unit", "seconds")
+        if unit not in ("seconds", "milliseconds"):
+            unit = "seconds"
+
+        return Policy(
+            True, lo, hi,
+            _label_num(labels, "autoscale.slo_p95_ms", 500.0, float, 1.0, 600000.0, service_name),
+            up_ratio, down_ratio, up_cpu, down_cpu, sustain_up, sustain_down,
+            _label_num(labels, "autoscale.up_factor", 0.5, float, 0.01, 4.0, service_name),
+            _label_num(labels, "autoscale.cooldown_seconds", 60, int, 0, 3600, service_name),
+            _label_num(labels, "autoscale.priority", 100, int, 0, 1000, service_name),
+            histogram, unit,
+        )
+    except Exception as exc:  # noqa: BLE001
+        M_ERRORS.labels(stage="policy").inc()
+        log.warning("%s: could not read the scaling policy (%s); treating it as fixed",
+                    service_name, exc)
+        fixed = max(0, int(spec_replicas or 0))
+        return Policy(False, fixed, fixed, 500.0, 0.8, 0.4, 70.0, 30.0, 90, 900,
+                      0.5, 60, 100, "http_server_requests_seconds_bucket", "seconds")
+
+
+# ---------------------------------------------------------------------------
+# resources — integers, never floats
+# ---------------------------------------------------------------------------
+
+class Res(namedtuple("Res", ["cpu", "mem"])):
+    """(nanocores, bytes). Integers so the packer cannot acquire a rounding flap."""
+
+    __slots__ = ()
+
+    def __add__(self, other):
+        return Res(self.cpu + other.cpu, self.mem + other.mem)
+
+    def __sub__(self, other):
+        """Clamped at zero: negative free capacity is not a thing."""
+        return Res(max(0, self.cpu - other.cpu), max(0, self.mem - other.mem))
+
+    def fits_in(self, free):
+        return self.cpu <= free.cpu and self.mem <= free.mem
+
+    @property
+    def cores(self):
+        return self.cpu / 1e9
+
+    @property
+    def mb(self):
+        return self.mem // (1024 * 1024)
+
+    def __str__(self):
+        return f"{self.cores:.2f} CPU / {self.mb}MB"
+
+
+ZERO = Res(0, 0)
+#: What a service with no reservations at all is charged. It is a lie either
+#: way — Swarm will pack it anywhere — but a documented floor keeps it visible
+#: in the arithmetic instead of making the node look free.
+UNRESERVED_FLOOR = Res(int(0.1 * 1e9), 128 * 1024 * 1024)
+
+
+def _reservations(spec_resources):
+    res = (spec_resources or {}).get("Reservations") or {}
+    return Res(int(res.get("NanoCPUs", 0) or 0), int(res.get("MemoryBytes", 0) or 0))
+
+
+def _limits(spec_resources):
+    lim = (spec_resources or {}).get("Limits") or {}
+    return Res(int(lim.get("NanoCPUs", 0) or 0), int(lim.get("MemoryBytes", 0) or 0))
+
+
 # ---------------------------------------------------------------------------
 # metrics about ourselves
 # ---------------------------------------------------------------------------
+# THE RULE THAT KEEPS THE ALERTS WORKING: gauges an alert JOINS on stay
+# unlabeled and cluster-scoped; only genuinely per-service quantities gain a
+# `service` label.
+#
+# AppStrandedWithoutWorkers is `autoscaler_placement_worker_mode == 1 and
+# autoscaler_current_workers < 1` — a set operation on the empty label
+# signature. The moment one side gains a label it matches nothing and goes
+# silent, which is exactly the class of failure that made NoHealthyReplicas
+# dead for months. So the cluster gauge stays, and a labeled twin is added
+# alongside it for per-service visibility.
 
-# TWO DIFFERENT NUMBERS, and alerts depend on the difference.
-#   ..._current_workers  Hetzner servers only. Goes to 0 at the free floor, which
-#                        is what AppStrandedWithoutWorkers keys on.
-#   ..._current_hosts    those plus the master as host #1, so never below 1. This
-#                        is what the MAX_WORKERS ceiling is expressed in.
-# Collapsing them made the stranded alert unfireable, because hosts is never < 1.
 M_CURRENT = Gauge("autoscaler_current_workers", "Hetzner worker servers in the swarm")
-M_HOSTS = Gauge("autoscaler_current_hosts", "Hosts running the app, master included")
-M_DESIRED = Gauge("autoscaler_desired_workers", "Worker count the autoscaler wants")
-M_MAX = Gauge("autoscaler_max_workers", "Configured ceiling")
-M_MIN = Gauge("autoscaler_effective_min_workers", "Floor in force right now")
+M_HOSTS = Gauge("autoscaler_current_hosts", "Hosts running applications, master included")
+M_DESIRED = Gauge("autoscaler_desired_workers", "Host count the autoscaler wants")
+M_MAX = Gauge("autoscaler_max_workers", "Configured host ceiling")
+M_MIN = Gauge("autoscaler_effective_min_workers", "Host floor in force right now")
 M_CPU = Gauge("autoscaler_cluster_cpu_percent", "Mean worker CPU utilisation")
 M_MEM = Gauge("autoscaler_cluster_mem_percent", "Mean worker memory utilisation")
-M_P95 = Gauge("autoscaler_app_p95_ms", "Production p95 latency in milliseconds")
-M_REPLICAS = Gauge("autoscaler_current_replicas", "Replicas of the scaled service")
-M_REPLICAS_WANT = Gauge("autoscaler_desired_replicas", "Replicas the autoscaler wants")
-# Exported so alerts compare against the running config instead of a literal.
-# ReplicaCeiling used to hardcode 12; raising MAX_REPLICAS left it firing at the
-# old number with nothing to indicate the threshold had gone stale.
-M_REPLICAS_MAX = Gauge("autoscaler_max_replicas", "Configured replica ceiling")
-M_MGR_CAPACITY = Gauge("autoscaler_manager_replica_capacity",
-                       "Replicas the master can hold, measured from its free resources")
-M_WORKER_CAPACITY = Gauge("autoscaler_worker_replica_capacity",
-                          "Replicas one new worker of WORKER_TYPE would hold")
-# 0 = manager mode (app runs on the master, zero workers)
-# 1 = worker mode  (app pinned to workers, master carries none)
+M_MANAGED = Gauge("autoscaler_managed_services", "Services carrying infra.workload=app")
 M_MODE = Gauge("autoscaler_placement_worker_mode",
-               "1 when the app is pinned to worker nodes, 0 when it runs on the manager")
-M_CPU_REPLICA = Gauge("autoscaler_cpu_per_replica_percent", "Mean CPU per replica, % of limit")
-M_SLO = Gauge("autoscaler_slo_p95_ms", "Configured p95 SLO")
+               "1 when ANY application is pinned to worker nodes, 0 when none is")
+M_MIXED = Gauge("autoscaler_placement_mixed",
+                "1 when applications disagree about placement — a handover in flight")
+M_DEMAND_CPU = Gauge("autoscaler_demand_cpu_cores", "CPU reserved by all application replicas")
+M_DEMAND_MEM = Gauge("autoscaler_demand_memory_bytes", "Memory reserved by all application replicas")
+M_MGR_CPU = Gauge("autoscaler_manager_free_cpu_cores", "CPU free for applications on the master")
+M_MGR_MEM = Gauge("autoscaler_manager_free_memory_bytes", "Memory free for applications on the master")
+M_POOL_CPU = Gauge("autoscaler_worker_pool_free_cpu_cores", "CPU free for applications across ready workers")
+M_POOL_MEM = Gauge("autoscaler_worker_pool_free_memory_bytes", "Memory free for applications across ready workers")
+M_NEW_CPU = Gauge("autoscaler_new_worker_free_cpu_cores", "CPU a new worker would offer applications")
+M_NEW_MEM = Gauge("autoscaler_new_worker_free_memory_bytes", "Memory a new worker would offer applications")
 M_LOOP = Gauge("autoscaler_last_loop_timestamp_seconds", "Unix time of last completed loop")
 M_EVENTS = Counter("autoscaler_scale_events_total", "Scaling actions taken", ["direction"])
 M_ERRORS = Counter("autoscaler_errors_total", "Errors encountered", ["stage"])
+
+_SVC = ["service"]
+S_P95 = Gauge("autoscaler_service_p95_ms", "p95 latency in milliseconds", _SVC)
+S_SLO = Gauge("autoscaler_service_slo_p95_ms", "Configured p95 SLO", _SVC)
+S_CURRENT = Gauge("autoscaler_service_current_replicas", "Replicas in the live spec", _SVC)
+S_DESIRED = Gauge("autoscaler_service_desired_replicas", "Replicas the signals asked for", _SVC)
+S_ADMITTED = Gauge("autoscaler_service_admitted_replicas", "Replicas that fit and were applied", _SVC)
+S_RUNNING = Gauge("autoscaler_service_running_replicas", "Tasks actually running", _SVC)
+S_PENDING = Gauge("autoscaler_service_pending_replicas", "Tasks wanted but not placed", _SVC)
+S_MIN = Gauge("autoscaler_service_min_replicas", "Configured replica floor", _SVC)
+S_MAX = Gauge("autoscaler_service_max_replicas", "Configured replica ceiling", _SVC)
+S_AUTO = Gauge("autoscaler_service_autoscale_enabled", "1 when the replica count is driven by signals", _SVC)
+S_CPU = Gauge("autoscaler_service_cpu_per_replica_percent", "Mean CPU per replica, % of limit", _SVC)
+S_PINNED = Gauge("autoscaler_service_worker_mode", "1 when this service is pinned to workers", _SVC)
+S_STARVED = Gauge("autoscaler_service_min_unsatisfied", "1 when the cluster cannot host the minimum", _SVC)
+S_UNPLACEABLE = Gauge("autoscaler_service_unplaceable", "1 when one replica exceeds any possible node", _SVC)
+S_COST_CPU = Gauge("autoscaler_service_replica_cost_cpu_cores", "CPU one replica reserves", _SVC)
+S_COST_MEM = Gauge("autoscaler_service_replica_cost_memory_bytes", "Memory one replica reserves", _SVC)
+
+_PER_SERVICE = [S_P95, S_SLO, S_CURRENT, S_DESIRED, S_ADMITTED, S_RUNNING, S_PENDING,
+                S_MIN, S_MAX, S_AUTO, S_CPU, S_PINNED, S_STARVED, S_UNPLACEABLE,
+                S_COST_CPU, S_COST_MEM]
+_exported_services = set()
 
 hcloud = Client(token=HCLOUD_TOKEN)
 dkr = docker.DockerClient(base_url="unix:///var/run/docker.sock")
 
 _running = True
 _last_scale_down = time.time()  # conservative: wait one cooldown after a restart
-_last_replica_change = 0.0
-# When we first started waiting for the master to pick up a replica so the last
-# worker can go. Only used to escalate a wait that has become a stall.
+_last_replica_change = {}       # service name -> unix time
 _manager_wait_since = None
-HANDOVER_STALL_SECONDS = 900
-# Remembered so the measured capacity is explained when it CHANGES, not every
-# 60 seconds. It is the number every scaling decision rests on, so it belongs in
-# the log — but only once per shape of cluster.
 _capacity_note = None
 
 
-def note_capacity(manager_capacity, worker_caps, new_worker_cap, cost):
-    global _capacity_note
-    shape = (manager_capacity, tuple(worker_caps), new_worker_cap)
-    if shape == _capacity_note:
-        return
-    _capacity_note = shape
-    cpu, mem = cost
-    log.info(
-        "measured capacity: one replica reserves %.2f CPU / %dMB · master holds "
-        "%d · existing workers hold %s · a new %s would hold %s",
-        cpu, mem // (1024 * 1024) if mem else 0, manager_capacity,
-        "+".join(str(c) for c in worker_caps) or "none",
-        WORKER_TYPE,
-        new_worker_cap if new_worker_cap is not None else "unknown (assuming 1)",
-    )
-    if manager_capacity < MIN_REPLICAS and MIN_WORKERS == 1:
-        log.warning(
-            "the master can only hold %d replica(s) but MIN_REPLICAS=%d, so the "
-            "cluster can never return to the free host-1 state. Give the master "
-            "more CPU/RAM, lower MIN_REPLICAS, or shrink the app's reservations.",
-            manager_capacity, MIN_REPLICAS,
-        )
+def forget_vanished(current_names):
+    """
+    Drop metric children for services that no longer exist.
+
+    prometheus_client keeps a labeled child forever once created, so a deleted
+    component would leave `autoscaler_service_running_replicas{service="gone"}=3`
+    sitting at its last value, alerting or — worse — suppressing an alert
+    indefinitely. Removed one child at a time rather than clear()-and-re-set,
+    because a scrape landing between those two sees the series missing, and for
+    these rules a missing series is a page.
+    """
+    for name in _exported_services - current_names:
+        for gauge in _PER_SERVICE:
+            try:
+                gauge.remove(name)
+            except KeyError:
+                pass
+    _exported_services.intersection_update(current_names)
+    _exported_services.update(current_names)
 
 
 def _stop(signum, _frame):
@@ -320,12 +531,9 @@ signal.signal(signal.SIGINT, _stop)
 def vm_query(expr):
     """Instant query against VictoriaMetrics. Returns float or None."""
     try:
-        resp = requests.get(
-            f"{VM_URL}/api/v1/query", params={"query": expr}, timeout=15
-        )
+        resp = requests.get(f"{VM_URL}/api/v1/query", params={"query": expr}, timeout=15)
         resp.raise_for_status()
-        payload = resp.json()
-        results = payload.get("data", {}).get("result", [])
+        results = resp.json().get("data", {}).get("result", [])
         if not results:
             return None
         return float(results[0]["value"][1])
@@ -335,57 +543,64 @@ def vm_query(expr):
         return None
 
 
+def vm_query_map(expr, label="service"):
+    """
+    One query, many series. Returns {label value: float}.
+
+    Every per-service signal is aggregated `by (service)` and read through this
+    rather than issued once per service. Ten components x six queries at a 15s
+    timeout does not fit in a 60s loop, and AutoscalerStalled fires at 300s.
+    """
+    out = {}
+    try:
+        resp = requests.get(f"{VM_URL}/api/v1/query", params={"query": expr}, timeout=15)
+        resp.raise_for_status()
+        for row in resp.json().get("data", {}).get("result", []):
+            key = row.get("metric", {}).get(label)
+            if key:
+                out[key] = float(row["value"][1])
+    except Exception as exc:  # noqa: BLE001
+        M_ERRORS.labels(stage="query").inc()
+        log.warning("grouped query failed (%s): %s", expr[:60], exc)
+    return out
+
+
 _SEL = 'node_role="worker"'
-_SVC = f'container_label_com_docker_swarm_service_name="{APP_SERVICE}"'
-
-# PRIMARY: what users actually feel. Production only — staging latency is
-# irrelevant to production capacity.
-P95_EXPR = (
-    "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket"
-    f'{{env="{APP_ENV}"}}[2m])) by (le)) * 1000'
-)
-
-# SECONDARY: mean CPU of one production replica as a percentage of the limit
-# it was given. Scoped to the service, so exporters, cloudflared and staging
-# cannot contaminate it.
-CPU_REPLICA_EXPR = (
-    f'avg(rate(container_cpu_usage_seconds_total{{{_SVC}}}[3m]))'
-    f' / {APP_CPU_LIMIT} * 100'
-)
-
-# PLACEMENT GUARD ONLY: is there physical room for another replica? Never used
-# as a scaling trigger — it averages in everything running on the box.
-CPU_EXPR = (
-    f'100 - (avg(rate(node_cpu_seconds_total{{mode="idle",{_SEL}}}[5m])) * 100)'
-)
-MEM_EXPR = (
-    f'avg(100 * (1 - node_memory_MemAvailable_bytes{{{_SEL}}}'
-    f' / node_memory_MemTotal_bytes{{{_SEL}}}))'
-)
-
-# The same guard for the manager, used ONLY when the worker fleet is empty.
-# With zero workers the worker-scoped queries above return no series at all, so
-# without this there is nothing to notice that the box carrying the replicas is
-# full. It stays a guard, never a trigger: the manager's baseline includes
-# VictoriaMetrics, Loki, Grafana, Redis and the panel, so its absolute number
-# is meaningless as a measure of app load — only its headroom matters.
 _MGR = 'node_role="manager"'
-MGR_CPU_EXPR = (
-    f'100 - (avg(rate(node_cpu_seconds_total{{mode="idle",{_MGR}}}[5m])) * 100)'
-)
-MGR_MEM_EXPR = (
-    f'avg(100 * (1 - node_memory_MemAvailable_bytes{{{_MGR}}}'
-    f' / node_memory_MemTotal_bytes{{{_MGR}}}))'
-)
+
+# PLACEMENT GUARD ONLY: is there physical room for another replica? Never a
+# scaling trigger — it averages in everything running on the box.
+CPU_EXPR = f'100 - (avg(rate(node_cpu_seconds_total{{mode="idle",{_SEL}}}[5m])) * 100)'
+MEM_EXPR = (f'avg(100 * (1 - node_memory_MemAvailable_bytes{{{_SEL}}}'
+            f' / node_memory_MemTotal_bytes{{{_SEL}}}))')
+# The same guard for the manager, used ONLY when the worker fleet is empty: with
+# zero workers the worker-scoped queries return no series at all, so without
+# this there is nothing to notice that the box carrying the replicas is full.
+MGR_CPU_EXPR = f'100 - (avg(rate(node_cpu_seconds_total{{mode="idle",{_MGR}}}[5m])) * 100)'
+MGR_MEM_EXPR = (f'avg(100 * (1 - node_memory_MemAvailable_bytes{{{_MGR}}}'
+                f' / node_memory_MemTotal_bytes{{{_MGR}}}))')
+
+# CPU per replica, for every scraped service at once. Divided by each service's
+# own limit locally, which is what finally removes APP_CPU_LIMIT.
+_CPU_LABEL = "container_label_com_docker_swarm_service_name"
+CPU_BY_SERVICE = (f'avg by ({_CPU_LABEL}) (rate(container_cpu_usage_seconds_total'
+                  f'{{{_CPU_LABEL}!=""}}[3m]))')
+
+
+def p95_expr(histogram, unit):
+    """p95 by service, in milliseconds. `service` is written by vmagent."""
+    scale = 1000 if unit == "seconds" else 1
+    return (f"histogram_quantile(0.95, sum by (service, le) "
+            f"(rate({histogram}[2m]))) * {scale}")
 
 
 def sustained(expr, window, aggregate):
     """
-    Was `expr` continuously above (min_over_time) or below (max_over_time)
-    for the whole window? Uses a subquery so no local state is needed.
+    Was `expr` continuously above (min_over_time) or below (max_over_time) for
+    the whole window? A subquery, so no local state is needed.
     """
     step = max(15, window // 12)
-    return vm_query(f"{aggregate}(({expr})[{window}s:{step}s])")
+    return f"{aggregate}(({expr})[{window}s:{step}s])"
 
 
 # ---------------------------------------------------------------------------
@@ -393,152 +608,31 @@ def sustained(expr, window, aggregate):
 # ---------------------------------------------------------------------------
 
 def swarm_workers():
-    return [
-        n for n in dkr.nodes.list()
-        if n.attrs.get("Spec", {}).get("Role") == "worker"
-    ]
+    return [n for n in dkr.nodes.list()
+            if n.attrs.get("Spec", {}).get("Role") == "worker"]
 
 
 def swarm_ready_workers():
-    return [
-        n for n in swarm_workers()
-        if n.attrs.get("Status", {}).get("State") == "ready"
-        and n.attrs.get("Spec", {}).get("Availability") == "active"
-    ]
+    return [n for n in swarm_workers()
+            if n.attrs.get("Status", {}).get("State") == "ready"
+            and n.attrs.get("Spec", {}).get("Availability") == "active"]
 
 
 def hetzner_workers():
-    return hcloud.servers.get_all(
-        label_selector=f"cluster=={CLUSTER},role==swarm-worker"
-    )
+    return hcloud.servers.get_all(label_selector=f"cluster=={CLUSTER},role==swarm-worker")
 
 
 def provisioning_workers():
     """
     Servers that exist and are being paid for but have not joined the swarm as
-    ready yet — roughly two minutes of boot, cloud-init, docker install and
-    image pull.
+    ready yet — roughly two minutes of boot, cloud-init, docker and image pull.
 
-    These MUST count towards the fleet size. Sizing decisions off
-    swarm_ready_workers() alone means a booting worker is invisible, so every
-    loop during that window sees the same shortfall and orders more capacity
-    for it. That overshoots the ceiling outright: the ceiling arithmetic is
-    also written against the ready count, so `MAX_WORKERS - current` stays
-    generous while servers pile up. COOLDOWN_UP used to paper over this by
-    accident, and stopped doing so once an empty fleet became the normal
-    resting state — there is no longer a first-worker case that skips the
-    cooldown, so every scale-out starts from zero servers.
+    These MUST count towards the fleet. Sizing off swarm_ready_workers() alone
+    makes a booting worker invisible, so every loop during that window sees the
+    same shortfall and orders more capacity for it, sailing past the ceiling.
     """
     ready = {n.attrs["Description"]["Hostname"] for n in swarm_ready_workers()}
     return [s for s in hetzner_workers() if s.name not in ready]
-
-
-def get_service():
-    try:
-        return dkr.services.get(APP_SERVICE)
-    except Exception as exc:  # noqa: BLE001
-        M_ERRORS.labels(stage="service").inc()
-        log.error("cannot find service %s: %s", APP_SERVICE, exc)
-        return None
-
-
-def current_replicas(service):
-    return (
-        service.attrs["Spec"]["Mode"].get("Replicated", {}).get("Replicas", 0)
-    )
-
-
-# ---------------------------------------------------------------------------
-# placement mode: who is allowed to run the app right now
-# ---------------------------------------------------------------------------
-
-WORKER_CONSTRAINT = "node.role==worker"
-# Swarm normalises whitespace differently across versions and the stack file
-# once wrote it spaced out, so recognise any spelling rather than only ours.
-_WORKER_PIN = re.compile(r"^\s*node\.role\s*==\s*worker\s*$")
-
-MODE_MANAGER = "manager"
-MODE_WORKER = "worker"
-
-
-def managed_services():
-    """The app services whose placement this autoscaler owns, prod first."""
-    names = [APP_SERVICE]
-    if APP_SERVICE_STAGING and APP_SERVICE_STAGING != APP_SERVICE:
-        names.append(APP_SERVICE_STAGING)
-    return names
-
-
-def _constraints(service):
-    try:
-        return (
-            service.attrs["Spec"]["TaskTemplate"].get("Placement", {})
-            .get("Constraints") or []
-        )
-    except (KeyError, TypeError):
-        return []
-
-
-def placement_mode(service):
-    """MODE_WORKER if the live spec pins tasks to workers, else MODE_MANAGER."""
-    if service is None:
-        return None
-    return MODE_WORKER if any(
-        _WORKER_PIN.match(c) for c in _constraints(service)
-    ) else MODE_MANAGER
-
-
-def update_in_progress(service):
-    """
-    Is Swarm still rolling this service? Issuing a second constraint change on
-    top of an in-flight one restarts the rollout from the beginning, which with
-    monitor: 90s per task means it may never finish.
-    """
-    state = (service.attrs.get("UpdateStatus") or {}).get("State")
-    return state in ("updating", "rollback_started")
-
-
-def _service_update_constraint(name, add):
-    """`docker service update --constraint-add/rm` on one service, detached.
-
-    Detached on purpose. Blocking would hold the loop for parallelism x
-    monitor (90s) x replicas — long enough for AutoscalerStalled to fire — and
-    there is nothing to wait for synchronously: the next loop reads the live
-    state and carries on from wherever the rollout got to.
-    """
-    flag = "--constraint-add" if add else "--constraint-rm"
-    cmd = ["docker", "service", "update", "--detach=true",
-           flag, WORKER_CONSTRAINT, name]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"{' '.join(cmd)} failed ({proc.returncode}): "
-            f"{(proc.stderr or proc.stdout).strip()[:400]}"
-        )
-
-
-def set_placement_mode(mode, reason):
-    """
-    Move every managed app service into `mode`. Idempotent: services already in
-    the target mode are skipped, so a crash mid-handover is simply resumed.
-    """
-    add = mode is MODE_WORKER
-    for name in managed_services():
-        try:
-            service = dkr.services.get(name)
-        except Exception as exc:  # noqa: BLE001
-            # Staging may legitimately not exist; production not existing is
-            # already reported by get_service().
-            log.warning("cannot read %s for placement change: %s", name, exc)
-            continue
-        if placement_mode(service) == mode:
-            continue
-        if DRY_RUN:
-            log.info("[dry-run] would move %s to %s mode (%s)", name, mode, reason)
-            continue
-        _service_update_constraint(name, add=add)
-        M_EVENTS.labels(direction=f"placement-{mode}").inc()
-        log.info("moving %s to %s mode: %s", name, mode, reason)
 
 
 def manager_node_id():
@@ -546,7 +640,6 @@ def manager_node_id():
 
 
 def get_manager_node():
-    """The swarm node object for this master, or None."""
     try:
         for node in dkr.nodes.list():
             if node.attrs.get("Spec", {}).get("Role") == "manager":
@@ -556,105 +649,176 @@ def get_manager_node():
     return None
 
 
+def index_tasks():
+    """
+    {node id: [task]} in ONE API call.
+
+    node_reserved() used to be called per node, so a six-worker fleet issued
+    seven task listings every loop. Everything below reads from this index.
+    """
+    by_node = {}
+    for task in dkr.api.tasks(filters={"desired-state": "running"}):
+        node_id = task.get("NodeID")
+        if node_id:
+            by_node.setdefault(node_id, []).append(task)
+    return by_node
+
+
+# ---------------------------------------------------------------------------
+# discovery
+# ---------------------------------------------------------------------------
+
+Workload = namedtuple("Workload", [
+    "name", "id", "policy", "spec_replicas", "cost", "cpu_limit", "pinned",
+    "rolling", "component",
+])
+
+WORKER_CONSTRAINT = "node.role==worker"
+# Swarm normalises whitespace differently across versions, so recognise any
+# spelling rather than only ours.
+_WORKER_PIN = re.compile(r"^\s*node\.role\s*==\s*worker\s*$")
+
+MODE_MANAGER = "manager"
+MODE_WORKER = "worker"
+
+
+def _constraints(service):
+    try:
+        return (service.attrs["Spec"]["TaskTemplate"].get("Placement", {})
+                .get("Constraints") or [])
+    except (KeyError, TypeError):
+        return []
+
+
+def is_pinned(service):
+    return any(_WORKER_PIN.match(c) for c in _constraints(service))
+
+
+def update_in_progress(service):
+    """
+    Is Swarm still rolling this service? Issuing a second constraint change on
+    top of an in-flight one restarts the rollout from the beginning.
+    """
+    state = (service.attrs.get("UpdateStatus") or {}).get("State")
+    return state in ("updating", "rollback_started")
+
+
+def discover_workloads():
+    """
+    ([Workload], all_services, ok).
+
+    `ok` is False when the API call itself failed, and the difference matters
+    enormously: an error must never be read as "there is no demand" and delete
+    the fleet, while an honest empty result IS the normal state of a cluster
+    nobody has created a component on yet, and must scale to the floor cleanly.
+    """
+    try:
+        services = dkr.services.list()
+    except Exception as exc:  # noqa: BLE001
+        M_ERRORS.labels(stage="discovery").inc()
+        log.error("cannot list services: %s", exc)
+        return [], [], False
+
+    workloads = []
+    for service in services:
+        spec = service.attrs.get("Spec", {})
+        labels = spec.get("Labels") or {}
+        if labels.get(WORKLOAD_LABEL) != WORKLOAD_APP:
+            continue
+        try:
+            task_tpl = spec.get("TaskTemplate", {}) or {}
+            resources = task_tpl.get("Resources")
+            replicas = (spec.get("Mode", {}).get("Replicated") or {}).get("Replicas", 0)
+            cost = _reservations(resources)
+            if cost == ZERO:
+                M_ERRORS.labels(stage="policy").inc()
+                warn_once((service.name, "noreservation"),
+                          "%s carries no resource reservation. Swarm will pack it "
+                          "anywhere and the capacity model cannot see it; charging "
+                          "%s so it is at least visible.", service.name, UNRESERVED_FLOOR)
+                cost = UNRESERVED_FLOOR
+            mounts = (task_tpl.get("ContainerSpec") or {}).get("Mounts") or []
+            if any(m.get("Type") == "volume" for m in mounts):
+                M_ERRORS.labels(stage="policy").inc()
+                warn_once((service.name, "volume"),
+                          "%s is labelled %s=%s but mounts a volume. It will be "
+                          "moved onto workers that are later deleted, and the data "
+                          "goes with them. Drop the label, or drop the volume.",
+                          service.name, WORKLOAD_LABEL, WORKLOAD_APP)
+            limit = _limits(resources)
+            cpu_limit = limit.cores or cost.cores or 1.0
+            workloads.append(Workload(
+                name=service.name, id=service.id,
+                policy=policy_from_labels(service.name, labels, replicas),
+                spec_replicas=replicas, cost=cost, cpu_limit=cpu_limit,
+                pinned=is_pinned(service), rolling=update_in_progress(service),
+                component=labels.get(COMPONENT_LABEL, service.name.split("_")[0]),
+            ))
+        except Exception as exc:  # noqa: BLE001
+            M_ERRORS.labels(stage="discovery").inc()
+            log.warning("skipping %s this loop: %s", service.name, exc)
+
+    workloads.sort(key=lambda w: (w.policy.priority, w.name))
+    return workloads, services, True
+
+
 # ---------------------------------------------------------------------------
 # CAPACITY — measured, never configured
 # ---------------------------------------------------------------------------
-# Everything below answers one question: how many more app replicas will
-# actually fit? It is derived from what Swarm already knows, so there is no
-# REPLICAS_PER_WORKER to keep in sync with WORKER_TYPE and no headroom constant
-# to keep in sync with the monitoring stack. Resize the master, add a service,
-# change a reservation, switch worker type — the arithmetic follows on its own.
-#
-# The unit is one app replica's RESERVATION, not its limit. Reservations are
-# what Swarm's scheduler actually subtracts when placing a task, so they are the
-# only number that predicts whether placement succeeds. Limits are a ceiling on
-# what a running task may burst to and would over-count every node.
-
-
-def _reservations(spec_resources):
-    """(cpu_cores, mem_bytes) reserved by a TaskTemplate's Resources block."""
-    res = (spec_resources or {}).get("Reservations") or {}
-    return (res.get("NanoCPUs", 0) / 1e9, res.get("MemoryBytes", 0))
-
-
-def app_replica_cost(service):
-    """
-    What one replica of the scaled service reserves, read from the live spec.
-
-    Deliberately not configured. stacks/app.yml already states it, and a second
-    copy in infra.env would be one more pair of numbers that silently drift
-    apart — the exact failure APP_CPU_LIMIT has to be warned about.
-    """
-    cpu, mem = _reservations(
-        service.attrs.get("Spec", {}).get("TaskTemplate", {}).get("Resources"))
-    if cpu <= 0 and mem <= 0:
-        # No reservations on the service: Swarm will pack it anywhere, so the
-        # honest answer is that we cannot predict placement. Fall back to the
-        # CPU limit, which at least bounds it.
-        return max(APP_CPU_LIMIT, 0.01), 0
-    return max(cpu, 0.01), mem
-
 
 def node_resources(node):
-    """(cpu_cores, mem_bytes) this node advertises to the swarm."""
     res = node.attrs.get("Description", {}).get("Resources", {}) or {}
-    return (res.get("NanoCPUs", 0) / 1e9, res.get("MemoryBytes", 0))
+    return Res(int(res.get("NanoCPUs", 0) or 0), int(res.get("MemoryBytes", 0) or 0))
 
 
-def node_reserved(node_id, exclude_service=None):
+def node_free_for_apps(node, tasks, app_ids):
     """
-    (cpu, mem) already reserved on a node by running tasks.
+    Room on this node for application workload.
 
-    `exclude_service` leaves the scaled service out, which is what turns this
-    into "how much room is there for the app in total" rather than "how much is
-    left over right now".
+    Overhead is defined NEGATIVELY — everything that is not an app task — which
+    is both simpler than the old exclude-one-service-id and more correct,
+    because it absorbs whatever new kind of component gets invented next.
+
+    App tasks already running here are deliberately NOT subtracted: this is
+    "total room for apps", and the demand side counts every replica including
+    the ones already placed. The two sides never double-count, and because
+    demand comes from desired counts rather than live tasks, a start-first
+    rollout briefly doubling a footprint cannot inflate it.
     """
-    cpu = mem = 0.0
-    try:
-        tasks = dkr.api.tasks(filters={"node": node_id, "desired-state": "running"})
-    except Exception as exc:  # noqa: BLE001
-        log.warning("cannot list tasks on node %s: %s", node_id[:12], exc)
-        return 0.0, 0.0
+    total = node_resources(node)
+    if total.cpu <= 0:
+        return ZERO
+    overhead = ZERO
     for task in tasks:
-        if exclude_service and task.get("ServiceID") == exclude_service:
+        if task.get("ServiceID") in app_ids:
             continue
-        c, m = _reservations(task.get("Spec", {}).get("Resources"))
-        cpu += c
-        mem += m
-    return cpu, mem
+        overhead = overhead + _reservations(task.get("Spec", {}).get("Resources"))
+    return total - overhead
 
 
-def node_app_capacity(node, cost, app_service_id=None):
+def global_service_reservations(services):
     """
-    How many app replicas this node could hold in total.
+    (cpu, mem) that lands on EVERY node just for being in the cluster.
 
-    Total resources minus everything that is NOT the app, divided by one
-    replica's reservation. On the master that subtraction is the whole
-    monitoring stack, both Redis instances and the panel, which is exactly why
-    no MANAGER_HEADROOM_CPU constant is needed: the reservations in
-    stacks/monitoring.yml already say it, and they are the same numbers Swarm
-    schedules against.
+    `mode: global` services get one task per node, so their reservations are a
+    per-node tax that comes off a new worker's advertised size before any of it
+    counts as application capacity.
     """
-    total_cpu, total_mem = node_resources(node)
-    if total_cpu <= 0:
-        return 0
-    used_cpu, used_mem = node_reserved(node.id, exclude_service=app_service_id)
-    cost_cpu, cost_mem = cost
-    by_cpu = int(max(0.0, total_cpu - used_cpu) // cost_cpu)
-    if cost_mem > 0 and total_mem > 0:
-        return min(by_cpu, int(max(0, total_mem - used_mem) // cost_mem))
-    return by_cpu
+    total = ZERO
+    for svc in services:
+        spec = svc.attrs.get("Spec", {})
+        if "Global" not in (spec.get("Mode") or {}):
+            continue
+        total = total + _reservations(spec.get("TaskTemplate", {}).get("Resources"))
+    return total
 
 
-def worker_type_capacity(cost):
+def new_worker_free(services):
     """
-    How many app replicas one NEW worker of WORKER_TYPE would hold.
+    What one NEW worker of WORKER_TYPE would offer applications, or None.
 
-    Read from the Hetzner catalogue rather than declared, then reduced by what
-    every node has to run regardless (node-exporter, cadvisor, cloudflared).
-    Returns None when the type cannot be looked up, and callers treat that as
-    "assume one replica" so a lookup failure under-provisions rather than
-    ordering a fleet.
+    None means "cannot size a new worker", and callers refuse to buy rather than
+    guessing — with heterogeneous costs, an assumed capacity means nothing.
     """
     try:
         st = hcloud.server_types.get_by_name(WORKER_TYPE)
@@ -664,77 +828,442 @@ def worker_type_capacity(cost):
     if st is None:
         log.warning("unknown WORKER_TYPE %s", WORKER_TYPE)
         return None
-    overhead_cpu, overhead_mem = global_service_reservations()
-    cost_cpu, cost_mem = cost
-    by_cpu = int(max(0.0, st.cores - overhead_cpu) // cost_cpu)
-    if cost_mem > 0:
-        total_mem = st.memory * 1024 ** 3          # hcloud reports GB
-        by_mem = int(max(0, total_mem - overhead_mem) // cost_mem)
-        return max(0, min(by_cpu, by_mem))
-    return max(0, by_cpu)
+    total = Res(int(st.cores * 1e9), int(st.memory * 1024 ** 3))   # hcloud reports GB
+    return total - global_service_reservations(services)
 
 
-def global_service_reservations():
+# --- the packer ------------------------------------------------------------
+# One algorithm, used by admission, by fleet sizing and by node removal. Two
+# algorithms that disagree by one replica are a loop that buys a worker and
+# immediately deletes it.
+
+Item = namedtuple("Item", ["service", "cost", "workers_only"])
+
+
+def demand_items(workloads, counts, pinned_names=None):
     """
-    (cpu, mem) that lands on EVERY node just for being in the cluster.
+    One item per replica, round-robin across services.
 
-    `mode: global` services get one task per node, so their reservations are a
-    per-node tax that has to come off a new worker's advertised size before it
-    is treated as app capacity.
+    Round-robin rather than service-by-service so a large application cannot
+    starve a small one, and `workers_only` per item because mid-handover
+    services legitimately disagree about where they may be placed.
     """
-    cpu = mem = 0.0
-    try:
-        for svc in dkr.services.list():
-            spec = svc.attrs.get("Spec", {})
-            if "Global" not in (spec.get("Mode") or {}):
+    per_service = []
+    for w in workloads:
+        n = counts.get(w.name, 0)
+        only = w.name in pinned_names if pinned_names is not None else w.pinned
+        per_service.append([Item(w.name, w.cost, only) for _ in range(n)])
+    items = []
+    for row in zip(*per_service) if per_service else []:
+        items.extend(row)
+    # zip() stops at the shortest; append the remainder in the same service
+    # order so the stream stays deterministic.
+    depth = min((len(p) for p in per_service), default=0)
+    for row in per_service:
+        items.extend(row[depth:])
+    # Constrained items first within the stream: placing an unpinned item on a
+    # worker when it could have used the master, and thereby starving a pinned
+    # item, is the one ordering mistake that produces pending tasks.
+    items.sort(key=lambda i: not i.workers_only)
+    return items
+
+
+Bin = namedtuple("Bin", ["key", "free", "is_manager"])
+
+
+def place(items, bins):
+    """
+    First-fit over the item stream, bins in a fixed order. Returns
+    (assignment {item index: bin key}, unplaced [item index]).
+
+    Bins are ordered largest-CPU-first with the master last, so existing
+    capacity is filled before anything new is opened — which is what "fill the
+    workers before buying another" means, expressed as an ordering rather than
+    as a special case.
+    """
+    order = sorted(bins, key=lambda b: (b.is_manager, -b.free.cpu, str(b.key)))
+    free = {b.key: b.free for b in order}
+    assignment, unplaced = {}, []
+    for index, item in enumerate(items):
+        for b in order:
+            if item.workers_only and b.is_manager:
                 continue
-            c, m = _reservations(spec.get("TaskTemplate", {}).get("Resources"))
-            cpu += c
-            mem += m
-    except Exception as exc:  # noqa: BLE001
-        log.warning("cannot read global service reservations: %s", exc)
-    return cpu, mem
+            if item.cost.fits_in(free[b.key]):
+                free[b.key] = free[b.key] - item.cost
+                assignment[index] = b.key
+                break
+        else:
+            unplaced.append(index)
+    return assignment, unplaced
 
 
-def running_replicas_on_manager():
+def admit(workloads, wants, bins, live_replicas):
     """
-    Replicas of the scaled service actually RUNNING on the master — not merely
-    assigned to it. This is the gate that makes scale-in safe: the last worker
-    is not deleted until the master is already serving traffic.
+    How many replicas of each service may actually be set this loop.
+
+    Two round-robin passes over shared bin state: minimums first, then growth.
+    Deterministic and monotone — more capacity never reduces anyone's allocation
+    — which is what stops the loop oscillating between services.
+
+    Ranking by "worst SLO breach first" is tempting and wrong: it couples the
+    allocation to a noisy signal and hands a replica back and forth every 60
+    seconds. `autoscale.priority` is the escape hatch when one app genuinely
+    matters more.
     """
-    node_id = manager_node_id()
-    if not node_id:
-        return 0
-    try:
-        tasks = dkr.api.tasks(filters={
-            "service": APP_SERVICE, "node": node_id, "desired-state": "running",
-        })
-    except Exception as exc:  # noqa: BLE001
-        log.warning("cannot list manager tasks: %s", exc)
-        return 0
-    return sum(1 for t in tasks if t.get("Status", {}).get("State") == "running")
+    order = sorted(workloads, key=lambda w: (w.policy.priority, w.name))
+    granted = {w.name: 0 for w in order}
+    starved, capped = set(), {}
+    free = {b.key: b.free for b in
+            sorted(bins, key=lambda b: (b.is_manager, -b.free.cpu, str(b.key)))}
+    bin_order = [b for b in sorted(bins, key=lambda b: (b.is_manager, -b.free.cpu, str(b.key)))]
+
+    def try_place(w):
+        for b in bin_order:
+            if w.pinned and b.is_manager:
+                continue
+            if w.cost.fits_in(free[b.key]):
+                free[b.key] = free[b.key] - w.cost
+                return True
+        return False
+
+    def rounds(target_of, on_fail):
+        active = list(order)
+        while active:
+            progressed = []
+            for w in active:
+                if granted[w.name] >= target_of(w):
+                    continue
+                if try_place(w):
+                    granted[w.name] += 1
+                    progressed.append(w)
+                else:
+                    on_fail(w)
+            active = progressed
+
+    rounds(lambda w: w.policy.min_replicas, lambda w: starved.add(w.name))
+    rounds(lambda w: max(wants.get(w.name, 0), w.policy.min_replicas),
+           lambda w: capped.setdefault(w.name, granted[w.name]))
+
+    # Admission caps GROWTH; it never scales anything down. A transient overhead
+    # spike (an infrastructure rollout doubling a reservation for 90 seconds)
+    # must not become a scale-down followed by a scale-up next loop.
+    admitted = {}
+    for w in order:
+        floor = min(live_replicas.get(w.name, 0), wants.get(w.name, 0))
+        admitted[w.name] = max(floor, granted[w.name])
+    return admitted, capped, starved
 
 
-def set_replicas(service, count):
-    """Scale the service. Swarm applies the stack's rolling-update policy."""
-    if DRY_RUN:
-        log.info("[dry-run] would set %s to %d replicas", APP_SERVICE, count)
+def servers_needed(items, worker_bins, new_free, pressured):
+    """
+    How many Hetzner servers the workers must amount to. Master excluded.
+
+    Counts the existing bins that RECEIVE something rather than however many
+    exist: "we have enough, keep what we have" reads as harmless and quietly
+    never scales down — a fleet grown to three under load would hold all three
+    until traffic fell below what the MASTER alone can take, having paid for two
+    idle servers all the way down.
+    """
+    assignment, unplaced = place(items, worker_bins)
+    used = len(set(assignment.values()))
+    if unplaced:
+        if new_free is None:
+            log.warning("cannot size a new %s; holding the fleet at %d",
+                        WORKER_TYPE, len(worker_bins))
+            return len(worker_bins)
+        remaining = [items[i] for i in unplaced]
+        extra = 0
+        while remaining:
+            extra += 1
+            _, still = place(remaining, [Bin(("new", extra), new_free, False)])
+            if len(still) == len(remaining):
+                # Nothing fit at all: a single replica is larger than any node
+                # this cluster can buy. No number of servers will ever hold it.
+                for i in still:
+                    M_ERRORS.labels(stage="capacity").inc()
+                    warn_once((remaining[i].service, "unplaceable"),
+                              "%s reserves %s, which exceeds what a whole %s offers "
+                              "(%s). No number of workers will ever place it.",
+                              remaining[i].service, remaining[i].cost, WORKER_TYPE, new_free)
+                    S_UNPLACEABLE.labels(remaining[i].service).set(1)
+                break
+            remaining = [remaining[i] for i in still]
+            if extra > MAX_WORKERS + 2:      # belt and braces against a bad cost
+                break
+        used += extra
+    if pressured:
+        used += 1
+    return used
+
+
+def hosts_needed(workloads, wants, node_pressure, manager_free, worker_bins, new_free):
+    """
+    How many HOSTS the wanted replicas require. The master is host #1, so
+    `servers = hosts - 1`.
+
+    Returns 1 when the master alone can hold everything — the free floor,
+    nothing billed. Otherwise the master stops being a placement target and the
+    workers must cover the WHOLE demand.
+    """
+    pressured = node_pressure is not None and node_pressure > NODE_PRESSURE_PCT
+
+    # "Could the master hold everything IF we unpinned?" — a hypothetical about
+    # the target state, which is why the masks are ignored here.
+    hypothetical = demand_items(workloads, wants, pinned_names=set())
+    if not pressured:
+        _, unplaced = place(hypothetical, [Bin("master", manager_free, True)])
+        if not unplaced:
+            return 1
+
+    items = demand_items(workloads, wants, pinned_names=set(w.name for w in workloads))
+    servers = servers_needed(items, worker_bins, new_free, pressured)
+    if pressured:
+        log.info("node resource pressure at %.0f%%: requesting an extra host",
+                 node_pressure)
+    return 1 + max(1, servers)
+
+
+def note_capacity(manager_free, worker_bins, new_free, workloads):
+    """Explain the numbers when they CHANGE, not every 60 seconds."""
+    global _capacity_note
+    shape = (manager_free, tuple(b.free for b in worker_bins), new_free,
+             tuple((w.name, w.cost) for w in workloads))
+    if shape == _capacity_note:
         return
-    service.scale(count)
+    _capacity_note = shape
+    log.info(
+        "measured capacity: master offers %s · %d worker(s) offer %s · a new %s "
+        "would offer %s · replicas cost %s",
+        manager_free, len(worker_bins),
+        " + ".join(str(b.free) for b in worker_bins) or "nothing",
+        WORKER_TYPE, new_free if new_free else "unknown",
+        ", ".join(f"{w.name} {w.cost}" for w in workloads) or "nothing",
+    )
+    if MIN_WORKERS == 1 and workloads:
+        floor_items = demand_items(
+            workloads, {w.name: w.policy.min_replicas for w in workloads},
+            pinned_names=set())
+        _, unplaced = place(floor_items, [Bin("master", manager_free, True)])
+        if unplaced:
+            log.warning(
+                "the master cannot hold every component's minimum (%s), so the "
+                "cluster can never return to the free host-1 state. Give it more "
+                "CPU/RAM, lower a minimum, or shrink a reservation.",
+                ", ".join(f"{w.name}x{w.policy.min_replicas}" for w in workloads),
+            )
+
+
+# ---------------------------------------------------------------------------
+# placement
+# ---------------------------------------------------------------------------
+
+def _service_update_constraint(name, add):
+    """
+    `docker service update --constraint-add/rm` on one service, detached.
+
+    Detached on purpose. Blocking would hold the loop for parallelism x monitor
+    x replicas — long enough for AutoscalerStalled to fire — and there is
+    nothing to wait for: the next loop reads live state and carries on.
+    """
+    flag = "--constraint-add" if add else "--constraint-rm"
+    cmd = ["docker", "service", "update", "--detach=true", flag, WORKER_CONSTRAINT, name]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    if proc.returncode != 0:
+        raise RuntimeError(f"{' '.join(cmd)} failed ({proc.returncode}): "
+                           f"{(proc.stderr or proc.stdout).strip()[:400]}")
+
+
+def set_service_placement(name, pinned, reason):
+    if DRY_RUN:
+        log.info("[dry-run] would move %s to %s mode (%s)", name,
+                 MODE_WORKER if pinned else MODE_MANAGER, reason)
+        return
+    _service_update_constraint(name, add=pinned)
+    M_EVENTS.labels(direction=f"placement-{MODE_WORKER if pinned else MODE_MANAGER}").inc()
+    log.info("moving %s to %s mode: %s", name,
+             MODE_WORKER if pinned else MODE_MANAGER, reason)
+
+
+def reconcile_placement(workloads, want_pinned, reason, skip_rolling=True):
+    """
+    Bring EVERY app service to the target placement, every loop.
+
+    Not just on transitions. That is the fix for the drift the old code had: it
+    read the mode from one distinguished service, so a second service that had
+    somehow lost its constraint was never reconciled — and a service created
+    while the cluster was already in worker mode was never pinned at all. Here,
+    a component that appeared thirty seconds ago is pinned on the next loop, and
+    each service is deferred or fails on its own without blocking the rest.
+    """
+    changed = []
+    for w in workloads:
+        if w.pinned == want_pinned:
+            continue
+        if skip_rolling and w.rolling:
+            log.info("deferring the placement change on %s: a rollout is in flight", w.name)
+            continue
+        try:
+            set_service_placement(w.name, want_pinned, reason)
+            changed.append(w.name)
+        except Exception as exc:  # noqa: BLE001
+            M_ERRORS.labels(stage="placement").inc()
+            log.error("could not change placement on %s: %s", w.name, exc)
+    return changed
+
+
+def manager_running_by_service(tasks_by_node, manager_id):
+    """{service id: running task count} on the master, from the single index."""
+    counts = {}
+    for task in tasks_by_node.get(manager_id, []):
+        if task.get("Status", {}).get("State") == "running":
+            sid = task.get("ServiceID")
+            counts[sid] = counts.get(sid, 0) + 1
+    return counts
+
+
+def running_and_pending(tasks_by_node, workloads):
+    """(running, pending) per service name, across the whole cluster."""
+    by_id = {w.id: w.name for w in workloads}
+    running = {w.name: 0 for w in workloads}
+    pending = {w.name: 0 for w in workloads}
+    for tasks in tasks_by_node.values():
+        for task in tasks:
+            name = by_id.get(task.get("ServiceID"))
+            if not name:
+                continue
+            state = task.get("Status", {}).get("State")
+            if state == "running":
+                running[name] += 1
+            elif state in ("pending", "rejected", "assigned", "accepted", "preparing"):
+                pending[name] += 1
+    return running, pending
+
+
+# ---------------------------------------------------------------------------
+# signals
+# ---------------------------------------------------------------------------
+
+Signals = namedtuple("Signals", ["p95", "cpu", "p95_held", "cpu_held", "p95_peak", "cpu_peak"])
+
+
+def read_signals_batch(workloads, worker_count):
+    """
+    Every service's signals, in a handful of grouped queries.
+
+    Returns ({service name: Signals}, node_pressure). Services are grouped by
+    (histogram, unit, window) so in practice this is one or two round trips
+    rather than six per component.
+    """
+    signals = {w.name: Signals(None, None, None, None, None, None) for w in workloads}
+    scalers = [w for w in workloads if w.policy.autoscale]
+
+    cpu_raw = vm_query_map(CPU_BY_SERVICE, label=_CPU_LABEL) if scalers else {}
+
+    groups = {}
+    for w in scalers:
+        groups.setdefault((w.policy.histogram, w.policy.unit), []).append(w)
+
+    p95_now, p95_held, p95_peak = {}, {}, {}
+    for (histogram, unit), members in groups.items():
+        expr = p95_expr(histogram, unit)
+        p95_now.update(vm_query_map(expr))
+        for window in {w.policy.sustain_up for w in members}:
+            p95_held.update({k: v for k, v in
+                             vm_query_map(sustained(expr, window, "min_over_time")).items()
+                             if any(w.policy.sustain_up == window and w.name == k
+                                    for w in members)})
+        for window in {w.policy.sustain_down for w in members}:
+            p95_peak.update({k: v for k, v in
+                             vm_query_map(sustained(expr, window, "max_over_time")).items()
+                             if any(w.policy.sustain_down == window and w.name == k
+                                    for w in members)})
+
+    cpu_windows_up, cpu_windows_down = {}, {}
+    for window in {w.policy.sustain_up for w in scalers}:
+        cpu_windows_up[window] = vm_query_map(
+            sustained(CPU_BY_SERVICE, window, "min_over_time"), label=_CPU_LABEL)
+    for window in {w.policy.sustain_down for w in scalers}:
+        cpu_windows_down[window] = vm_query_map(
+            sustained(CPU_BY_SERVICE, window, "max_over_time"), label=_CPU_LABEL)
+
+    for w in scalers:
+        def pct(value):
+            # Each service against its OWN limit, read from its own live spec.
+            return None if value is None else value / max(w.cpu_limit, 0.01) * 100
+
+        signals[w.name] = Signals(
+            p95=p95_now.get(w.name),
+            cpu=pct(cpu_raw.get(w.name)),
+            p95_held=p95_held.get(w.name),
+            cpu_held=pct(cpu_windows_up.get(w.policy.sustain_up, {}).get(w.name)),
+            p95_peak=p95_peak.get(w.name),
+            cpu_peak=pct(cpu_windows_down.get(w.policy.sustain_down, {}).get(w.name)),
+        )
+
+    # With an empty fleet the worker-scoped guards have no series to return, so
+    # measure the box that is actually holding the replicas instead.
+    if worker_count:
+        node_cpu, node_mem = vm_query(CPU_EXPR), vm_query(MEM_EXPR)
+    else:
+        node_cpu, node_mem = vm_query(MGR_CPU_EXPR), vm_query(MGR_MEM_EXPR)
+    if node_cpu is not None:
+        M_CPU.set(node_cpu)
+    if node_mem is not None:
+        M_MEM.set(node_mem)
+
+    # Whichever resource runs out first is the one that blocks placement.
+    pressures = [v for v in (node_cpu, node_mem) if v is not None]
+    return signals, (max(pressures) if pressures else None)
+
+
+def desired_replicas(workload, signals, current):
+    """
+    Latency first, CPU-per-replica second. Both must be SUSTAINED — a single
+    scrape above threshold is noise, not a trend.
+    """
+    policy = workload.policy
+    if not policy.autoscale:
+        return current
+
+    up_p95 = policy.slo_ms * policy.up_ratio
+    down_p95 = policy.slo_ms * policy.down_ratio
+
+    reasons = []
+    if signals.p95_held is not None and signals.p95_held > up_p95:
+        reasons.append(f"p95 held above {up_p95:.0f}ms ({signals.p95_held:.0f}ms)")
+    if signals.cpu_held is not None and signals.cpu_held > policy.up_cpu:
+        reasons.append(f"cpu/replica held above {policy.up_cpu:.0f}% ({signals.cpu_held:.0f}%)")
+
+    if reasons:
+        step = max(1, int(current * policy.up_factor))
+        want = min(policy.max_replicas, current + step)
+        if want != current:
+            log.info("%s: replicas %d -> %d: %s", workload.name, current, want,
+                     "; ".join(reasons))
+        return want
+
+    # Scale down only when BOTH signals have stayed low for the full window.
+    # `quiet_cpu` requires a non-None peak on purpose: a missing cadvisor series
+    # must hold the count, not authorise shrinking it.
+    quiet_latency = signals.p95_peak is None or signals.p95_peak < down_p95
+    quiet_cpu = signals.cpu_peak is not None and signals.cpu_peak < policy.down_cpu
+    if quiet_latency and quiet_cpu and current > policy.min_replicas:
+        log.info("%s: replicas %d -> %d: quiet for %ds (p95 peak %s, cpu/replica peak %.0f%%)",
+                 workload.name, current, current - 1, policy.sustain_down,
+                 f"{signals.p95_peak:.0f}ms" if signals.p95_peak is not None else "no traffic",
+                 signals.cpu_peak)
+        return current - 1
+
+    return current
+
+
+def set_replicas(name, count):
+    if DRY_RUN:
+        log.info("[dry-run] would set %s to %d replicas", name, count)
+        return
+    dkr.services.get(name).scale(count)
     M_EVENTS.labels(direction=f"replicas-{'up' if count else 'down'}").inc()
-    log.info("scaled %s to %d replicas", APP_SERVICE, count)
-
-
-def worker_join_token():
-    return dkr.swarm.attrs["JoinTokens"]["Worker"]
-
-
-def manager_private_ip():
-    info = dkr.info()
-    addr = info.get("Swarm", {}).get("NodeAddr")
-    if not addr:
-        raise RuntimeError("cannot determine manager advertise address")
-    return addr
+    log.info("scaled %s to %d replicas", name, count)
 
 
 # ---------------------------------------------------------------------------
@@ -756,16 +1285,26 @@ def scheduled_floor():
         h1, m1, h2, m2, count = (int(x) for x in m.groups())
         start, end = h1 * 60 + m1, h2 * 60 + m2
         active = start <= minutes_now < end if start <= end else (
-            minutes_now >= start or minutes_now < end
-        )
+            minutes_now >= start or minutes_now < end)
         if active:
             floor = max(floor, count)
     return floor
 
 
 # ---------------------------------------------------------------------------
-# actions
+# node actions
 # ---------------------------------------------------------------------------
+
+def worker_join_token():
+    return dkr.swarm.attrs["JoinTokens"]["Worker"]
+
+
+def manager_private_ip():
+    addr = dkr.info().get("Swarm", {}).get("NodeAddr")
+    if not addr:
+        raise RuntimeError("cannot determine manager advertise address")
+    return addr
+
 
 def create_worker():
     token = worker_join_token()
@@ -804,39 +1343,55 @@ def create_worker():
     log.info("created worker %s (%s in %s)", name, WORKER_TYPE, LOCATION)
 
 
-def pick_removal_candidate(ready, worker_caps, need_replicas, spare=0):
+def pick_removal_candidate(ready, node_free, items, manager_free, tasks_by_node, app_ids):
     """
-    Which worker to drop, or None if dropping any would leave too little room.
+    Which worker to drop, or None if dropping any would leave demand unplaceable.
 
-    Newest-first (LIFO) is still the preference: the newest node is least likely
-    to hold warm state and Hetzner bills by the hour. But with a mixed fleet the
-    newest node may also be the biggest, and removing it could leave the rest
-    unable to hold the replicas — so each candidate is checked against what the
-    OTHER nodes can take, newest first, and the first one that still leaves
-    enough room wins.
+    Newest-first (LIFO): the newest node is least likely to hold warm state and
+    Hetzner bills by the hour. But each candidate is TESTED, not assumed — with
+    heterogeneous costs a sum is meaningless, since 1.0 CPU spread over four
+    nodes holds no 0.5 CPU replica if each has 0.25 free.
 
-    `spare` is capacity outside the worker fleet, which in practice means the
-    master once the worker pin has been released. Without it the LAST worker can
-    never be removed: the remaining workers total zero, that is never >= the
-    replica count, and the cluster sticks one server short of the free floor
+    `manager_free` is supplied only when every app is unpinned. Without it the
+    LAST worker is never removable — the remaining workers total nothing, that
+    never covers the demand, and the cluster sticks one server above the floor
     forever.
     """
-    caps = dict(zip((n.id for n in ready), worker_caps))
-    total = sum(worker_caps) + spare
-
     def created(node):
         return node.attrs.get("CreatedAt", "")
 
     for node in sorted(ready, key=created, reverse=True):
-        if total - caps.get(node.id, 0) >= need_replicas:
+        # A node carrying something this loop does not understand — a replicated,
+        # non-global service that is not an app workload — may be holding state.
+        # Deleting it is data loss, so skip it and say so.
+        foreign = [t for t in tasks_by_node.get(node.id, [])
+                   if t.get("ServiceID") not in app_ids
+                   and t.get("Status", {}).get("State") == "running"
+                   and not _is_global(t)]
+        if foreign:
+            warn_once((node.id, "foreign"),
+                      "not removing %s: it runs %d task(s) this autoscaler does not "
+                      "manage, which may be holding state",
+                      node.attrs["Description"]["Hostname"], len(foreign))
+            continue
+        bins = [Bin(n.id, node_free.get(n.id, ZERO), False) for n in ready if n.id != node.id]
+        if manager_free is not None:
+            bins.append(Bin("master", manager_free, True))
+        _, unplaced = place(items, bins)
+        if not unplaced:
             return node
     return None
 
 
+_GLOBAL_SERVICE_IDS = set()
+
+
+def _is_global(task):
+    return task.get("ServiceID") in _GLOBAL_SERVICE_IDS
+
+
 def tasks_on_node(node_id):
-    return [
-        t for t in dkr.api.tasks(filters={"node": node_id, "desired-state": "running"})
-    ]
+    return list(dkr.api.tasks(filters={"node": node_id, "desired-state": "running"}))
 
 
 def remove_worker(node):
@@ -862,8 +1417,8 @@ def remove_worker(node):
     else:
         log.warning("drain timed out on %s; removing anyway", hostname)
 
-    # cloudflared runs global on every worker and needs ~30s to drain its
-    # edge connections on SIGTERM. Cutting this short drops live requests.
+    # cloudflared runs global on every worker and needs ~30s to drain its edge
+    # connections on SIGTERM. Cutting this short drops live requests.
     time.sleep(POST_DRAIN_GRACE)
 
     try:
@@ -894,159 +1449,31 @@ def remove_worker(node):
 
 def reap_orphans():
     """Hetzner servers that never joined, and swarm nodes that went away."""
-    swarm_hostnames = {
-        n.attrs["Description"]["Hostname"] for n in swarm_workers()
-    }
-    for server in hetzner_workers():
+    swarm_hostnames = {n.attrs["Description"]["Hostname"] for n in swarm_workers()}
+    servers = hetzner_workers()
+    for server in servers:
         if server.name in swarm_hostnames:
             continue
         age = (datetime.now(timezone.utc) - server.created).total_seconds()
         if age < ORPHAN_GRACE_SECONDS:
             continue
-        log.warning("reaping orphan server %s (never joined, age %ds)", server.name, age)
+        log.warning("orphan server %s never joined the swarm after %.0fs; deleting",
+                    server.name, age)
         if not DRY_RUN:
             server.delete()
 
-    hetzner_names = {s.name for s in hetzner_workers()}
+    hetzner_names = {s.name for s in servers}
     for node in swarm_workers():
         hostname = node.attrs["Description"]["Hostname"]
         state = node.attrs.get("Status", {}).get("State")
         if state == "down" and hostname not in hetzner_names:
-            log.warning("removing dead swarm node %s", hostname)
-            if not DRY_RUN:
-                try:
-                    dkr.api.remove_node(node.id, force=True)
-                except Exception as exc:  # noqa: BLE001
-                    log.warning("could not remove %s: %s", hostname, exc)
-
-
-# ---------------------------------------------------------------------------
-# decision
-# ---------------------------------------------------------------------------
-
-def read_signals(worker_count):
-    """Returns (p95_ms, cpu_per_replica_pct, node_pressure_pct). Any may be None."""
-    p95 = vm_query(P95_EXPR)
-    cpu_rep = vm_query(CPU_REPLICA_EXPR)
-
-    # With an empty fleet the worker-scoped guards have no series to return, so
-    # measure the box that is actually holding the replicas instead.
-    if worker_count:
-        node_mem = vm_query(MEM_EXPR)
-        node_cpu = vm_query(CPU_EXPR)
-    else:
-        node_mem = vm_query(MGR_MEM_EXPR)
-        node_cpu = vm_query(MGR_CPU_EXPR)
-
-    if p95 is not None:
-        M_P95.set(p95)
-    if cpu_rep is not None:
-        M_CPU_REPLICA.set(cpu_rep)
-    if node_mem is not None:
-        M_MEM.set(node_mem)
-    if node_cpu is not None:
-        M_CPU.set(node_cpu)
-    M_SLO.set(SLO_P95_MS)
-
-    # Whichever resource runs out first is the one that blocks placement.
-    pressures = [v for v in (node_cpu, node_mem) if v is not None]
-    node_pressure = max(pressures) if pressures else None
-    return p95, cpu_rep, node_pressure
-
-
-def desired_replicas(current, p95, cpu_rep):
-    """
-    Latency first, CPU-per-replica second. Both must be sustained — a single
-    scrape above threshold is noise, not a trend.
-    """
-    up_p95 = SLO_P95_MS * SCALE_UP_P95_RATIO
-    down_p95 = SLO_P95_MS * SCALE_DOWN_P95_RATIO
-
-    reasons = []
-    if p95 is not None:
-        held = sustained(P95_EXPR, SUSTAIN_UP, "min_over_time")
-        if held is not None and held > up_p95:
-            reasons.append(f"p95 held above {up_p95:.0f}ms ({held:.0f}ms)")
-    if cpu_rep is not None:
-        held = sustained(CPU_REPLICA_EXPR, SUSTAIN_UP, "min_over_time")
-        if held is not None and held > SCALE_UP_CPU:
-            reasons.append(f"cpu/replica held above {SCALE_UP_CPU:.0f}% ({held:.0f}%)")
-
-    if reasons:
-        step = max(1, int(current * SCALE_UP_FACTOR))
-        want = min(MAX_REPLICAS, current + step)
-        if want != current:
-            log.info("replicas %d -> %d: %s", current, want, "; ".join(reasons))
-        return want
-
-    # Scale down only when BOTH signals have stayed low for the full window.
-    p95_peak = sustained(P95_EXPR, SUSTAIN_DOWN, "max_over_time")
-    cpu_peak = sustained(CPU_REPLICA_EXPR, SUSTAIN_DOWN, "max_over_time")
-    quiet_latency = p95_peak is None or p95_peak < down_p95
-    quiet_cpu = cpu_peak is not None and cpu_peak < SCALE_DOWN_CPU
-    if quiet_latency and quiet_cpu and current > MIN_REPLICAS:
-        log.info(
-            "replicas %d -> %d: quiet for %ds (p95 peak %s, cpu/replica peak %.0f%%)",
-            current, current - 1, SUSTAIN_DOWN,
-            f"{p95_peak:.0f}ms" if p95_peak is not None else "no traffic",
-            cpu_peak,
-        )
-        return current - 1
-
-    return current
-
-
-def hosts_needed(replicas, node_pressure, manager_capacity, worker_caps, new_worker_cap):
-    """
-    How many HOSTS this many replicas require. The master is host #1 and
-    Hetzner workers stack on top, so `servers = hosts - 1`.
-
-    Returns 1 when the master alone can hold them — the free floor, nothing
-    billed. Otherwise the master stops being a placement target entirely, the
-    workers must cover EVERY replica, and the answer is 1 + however many workers
-    that takes. A single-worker fleet is reachable: 5 replicas that fit on one
-    worker buy one worker, not two.
-
-    EXISTING WORKERS ARE FILLED BEFORE NEW ONES ARE ORDERED. `worker_caps` is
-    the per-node capacity of the workers that already exist, measured from their
-    real CPU and RAM. They are summed first, and only the shortfall is turned
-    into new servers. That is what stops the loop buying a 4 vCPU worker while 2
-    vCPU sits idle on the ones already running, and it is why heterogeneous
-    fleets work: a node is worth what it can actually hold, not an average.
-
-    Resource pressure forces one more host than the arithmetic asks for. Swarm
-    refuses to place a task that does not fit, and a queued task serves no
-    traffic.
-    """
-    pressured = node_pressure is not None and node_pressure > NODE_PRESSURE_PCT
-
-    if replicas <= manager_capacity and not pressured:
-        return 1                                   # master only, nothing billed
-
-    # Past the master's capacity: workers hold everything. Work out the FEWEST
-    # existing workers that cover the replicas, largest first, and only then
-    # buy for whatever is still short.
-    #
-    # Counting `len(worker_caps)` instead — "we have enough, keep what we have"
-    # — reads as harmless and quietly never scales down. A fleet that grew to
-    # three workers under load would hold all three until traffic fell below
-    # what the MASTER alone can take, then drop straight to zero, having paid
-    # for two idle servers all the way down.
-    servers, covered = 0, 0
-    for cap in sorted(worker_caps, reverse=True):
-        if covered >= replicas:
-            break
-        covered += cap
-        servers += 1
-    if covered < replicas:
-        per_new = new_worker_cap if new_worker_cap and new_worker_cap > 0 else 1
-        servers += -(-(replicas - covered) // per_new)   # ceil
-    if pressured:
-        servers += 1
-        log.info("node resource pressure at %.0f%%: requesting an extra host",
-                 node_pressure)
-    # We are past what the master can hold, so at least one real worker exists.
-    return 1 + max(1, servers)
+            log.warning("swarm node %s is down and its server is gone; removing", hostname)
+            if DRY_RUN:
+                continue
+            try:
+                dkr.api.remove_node(node.id, force=True)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("could not remove %s: %s", hostname, exc)
 
 
 def newest_worker_age():
@@ -1057,294 +1484,356 @@ def newest_worker_age():
     return (datetime.now(timezone.utc) - newest.created).total_seconds()
 
 
+# ---------------------------------------------------------------------------
+# the loop
+# ---------------------------------------------------------------------------
+
+def export_service_metrics(workloads, wants, admitted, signals, running, pending):
+    names = {w.name for w in workloads}
+    forget_vanished(names)
+    for w in workloads:
+        s = signals.get(w.name, Signals(None, None, None, None, None, None))
+        if s.p95 is not None:
+            S_P95.labels(w.name).set(s.p95)
+        if s.cpu is not None:
+            S_CPU.labels(w.name).set(s.cpu)
+        S_SLO.labels(w.name).set(w.policy.slo_ms)
+        S_CURRENT.labels(w.name).set(w.spec_replicas)
+        S_DESIRED.labels(w.name).set(wants.get(w.name, w.spec_replicas))
+        S_ADMITTED.labels(w.name).set(admitted.get(w.name, w.spec_replicas))
+        S_RUNNING.labels(w.name).set(running.get(w.name, 0))
+        S_PENDING.labels(w.name).set(pending.get(w.name, 0))
+        S_MIN.labels(w.name).set(w.policy.min_replicas)
+        S_MAX.labels(w.name).set(w.policy.max_replicas)
+        S_AUTO.labels(w.name).set(1 if w.policy.autoscale else 0)
+        S_PINNED.labels(w.name).set(1 if w.pinned else 0)
+        S_COST_CPU.labels(w.name).set(w.cost.cores)
+        S_COST_MEM.labels(w.name).set(w.cost.mem)
+
+
 def loop():
-    global _last_scale_down, _last_replica_change, _manager_wait_since
+    global _last_scale_down, _manager_wait_since
 
-    reap_orphans()
+    # 1. reaping is independent of everything else and runs first.
+    try:
+        reap_orphans()
+    except Exception as exc:  # noqa: BLE001
+        M_ERRORS.labels(stage="reap").inc()
+        log.warning("reaping failed: %s", exc)
 
-    service = get_service()
-    ready = swarm_ready_workers()
+    # 2. INVENTORY. Failing here is a HOLD: without it every later number is a
+    #    guess, and acting on a guess is how a cluster deletes itself.
+    try:
+        ready = swarm_ready_workers()
+        manager_node = get_manager_node()
+        manager_id = manager_node.id if manager_node else manager_node_id()
+        tasks_by_node = index_tasks()
+    except Exception as exc:  # noqa: BLE001
+        M_ERRORS.labels(stage="inventory").inc()
+        log.error("cannot read the cluster inventory; holding: %s", exc)
+        return
+
     current_workers = len(ready)
-    # HOSTS = the master (always #1) plus however many workers exist. So a
-    # floor of 1 means "master only, nothing billed", and MAX_WORKERS=6 means
-    # the master plus up to 5 Hetzner workers.
     current_hosts = 1 + current_workers
     floor = scheduled_floor()
-
     M_CURRENT.set(current_workers)
     M_HOSTS.set(current_hosts)
     M_MAX.set(MAX_WORKERS)
     M_MIN.set(floor)
-    M_REPLICAS_MAX.set(MAX_REPLICAS)
 
-    p95, cpu_rep, node_pressure = read_signals(current_workers)
+    # 3. DISCOVERY. An API error must never be read as "no demand".
+    workloads, services, ok = discover_workloads()
+    if not ok:
+        log.warning("holding at %d host(s): the service list is unreadable", current_hosts)
+        return
+    _GLOBAL_SERVICE_IDS.clear()
+    _GLOBAL_SERVICE_IDS.update(
+        s.id for s in services if "Global" in (s.attrs.get("Spec", {}).get("Mode") or {}))
+    M_MANAGED.set(len(workloads))
+    app_ids = {w.id for w in workloads}
+    pinned = {w.name for w in workloads if w.pinned}
+    any_pinned = bool(pinned)
+    all_unpinned = not any_pinned
+    M_MODE.set(1 if any_pinned else 0)
+    M_MIXED.set(1 if pinned and len(pinned) != len(workloads) else 0)
 
-    if service is None:
-        log.warning("service unavailable; holding at %d host(s)", current_hosts)
+    # 4. EMERGENCY, before anything that can fail. Worker mode with an empty
+    #    fleet means every task is unplaceable and the site is down; this is the
+    #    one path that must survive VictoriaMetrics or Hetzner being unreachable,
+    #    and in the old code it sat behind both.
+    if any_pinned and current_workers == 0:
+        M_ERRORS.labels(stage="stranded").inc()
+        log.error("applications are pinned to workers and no worker is left: %s",
+                  ", ".join(sorted(pinned)))
+        # Deliberately ignores update_in_progress: a rollout with nowhere to
+        # place tasks is not a reason to wait, it is the thing to unwedge.
+        reconcile_placement(workloads, False,
+                            "no worker is left in the swarm; failing back to the master",
+                            skip_rolling=False)
         return
 
-    replicas = current_replicas(service)
-    M_REPLICAS.set(replicas)
+    # 5. CAPACITY.
+    node_free = {}
+    for node in ([manager_node] if manager_node else []) + ready:
+        try:
+            node_free[node.id] = node_free_for_apps(
+                node, tasks_by_node.get(node.id, []), app_ids)
+        except Exception as exc:  # noqa: BLE001
+            M_ERRORS.labels(stage="capacity").inc()
+            log.warning("cannot measure %s; treating it as full: %s", node.id[:12], exc)
+            # ZERO free, not zero used. Believing in room that does not exist is
+            # how tasks end up pending.
+            node_free[node.id] = ZERO
+    manager_free = node_free.get(manager_id, ZERO)
+    worker_bins = [Bin(n.id, node_free.get(n.id, ZERO), False) for n in ready]
+    try:
+        new_free = new_worker_free(services)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("cannot size a new worker: %s", exc)
+        new_free = None
 
-    # --- measured capacity, not configured --------------------------------
-    cost = app_replica_cost(service)
-    manager_node = get_manager_node()
-    manager_capacity = (node_app_capacity(manager_node, cost, service.id)
-                        if manager_node else 0)
-    worker_caps = [node_app_capacity(n, cost, service.id) for n in ready]
-    new_worker_cap = worker_type_capacity(cost)
-    M_MGR_CAPACITY.set(manager_capacity)
-    M_WORKER_CAPACITY.set(new_worker_cap or 0)
-    note_capacity(manager_capacity, worker_caps, new_worker_cap, cost)
+    M_MGR_CPU.set(manager_free.cores)
+    M_MGR_MEM.set(manager_free.mem)
+    pool = ZERO
+    for b in worker_bins:
+        pool = pool + b.free
+    M_POOL_CPU.set(pool.cores)
+    M_POOL_MEM.set(pool.mem)
+    M_NEW_CPU.set(new_free.cores if new_free else 0)
+    M_NEW_MEM.set(new_free.mem if new_free else 0)
+    note_capacity(manager_free, worker_bins, new_free, workloads)
 
-    # --- tier 1: how many replicas do we want? ----------------------------
-    want_replicas = desired_replicas(replicas, p95, cpu_rep)
-    want_replicas = max(MIN_REPLICAS, min(MAX_REPLICAS, want_replicas))
-    M_REPLICAS_WANT.set(want_replicas)
+    running, pending = running_and_pending(tasks_by_node, workloads)
 
-    # --- tier 2: how many hosts must exist to hold them? ------------------
-    want_hosts = hosts_needed(want_replicas, node_pressure, manager_capacity,
-                              worker_caps, new_worker_cap)
+    # 6. SIGNALS + 7. TIER 1, per service, each isolated.
+    try:
+        signals, node_pressure = read_signals_batch(workloads, current_workers)
+    except Exception as exc:  # noqa: BLE001
+        M_ERRORS.labels(stage="signals").inc()
+        log.warning("signal read failed; every service holds this loop: %s", exc)
+        signals = {w.name: Signals(None, None, None, None, None, None) for w in workloads}
+        node_pressure = None
+
+    live = {w.name: w.spec_replicas for w in workloads}
+    wants = {}
+    for w in workloads:
+        try:
+            want = desired_replicas(w, signals.get(w.name), w.spec_replicas)
+        except Exception as exc:  # noqa: BLE001
+            M_ERRORS.labels(stage="signals").inc()
+            log.warning("%s holds at %d: %s", w.name, w.spec_replicas, exc)
+            want = w.spec_replicas
+        wants[w.name] = max(w.policy.min_replicas, min(w.policy.max_replicas, want))
+
+    demand = ZERO
+    for w in workloads:
+        for _ in range(wants[w.name]):
+            demand = demand + w.cost
+    M_DEMAND_CPU.set(demand.cores)
+    M_DEMAND_MEM.set(demand.mem)
+
+    # 8. SIZING, from the UNCAPPED want.
+    want_hosts = hosts_needed(workloads, wants, node_pressure, manager_free,
+                              worker_bins, new_free) if workloads else 1
     want_hosts = max(floor, min(MAX_WORKERS, want_hosts))
+    want_pinned = want_hosts > 1
     M_DESIRED.set(want_hosts)
 
-    # --- placement mode ---------------------------------------------------
-    # Where the app is allowed to run right now, read from the live spec, and
-    # where it should be. `want_hosts`, not the current count, decides the
-    # target: deriving it from what exists today would flap, because scaling in
-    # deliberately spends a few loops with the manager eligible AND a worker
-    # still up.
-    mode = placement_mode(service)
-    rolling = update_in_progress(service)
-    want_mode = MODE_MANAGER if want_hosts <= 1 else MODE_WORKER
-    M_MODE.set(1 if mode == MODE_WORKER else 0)
+    # 9. ADMISSION, against the CURRENTLY eligible nodes.
+    bins = list(worker_bins)
+    if not all_unpinned or want_hosts <= 1:
+        pass
+    if any(not w.pinned for w in workloads) or not workloads:
+        bins.append(Bin("master", manager_free, True))
+    admitted, capped, starved = admit(workloads, wants, bins, live) if workloads else ({}, {}, set())
 
-    # Emergency: worker mode with an empty fleet means every task is pending
-    # and the site is down. Whatever the desired state says, the master is the
-    # only node left that can serve. Same code path as an ordinary scale-in.
-    stranded = mode == MODE_WORKER and current_workers == 0
-    if stranded:
-        want_mode = MODE_MANAGER
+    for w in workloads:
+        S_STARVED.labels(w.name).set(1 if w.name in starved else 0)
+        if w.name in starved:
+            M_ERRORS.labels(stage="admission").inc()
+            warn_once((w.name, "starved", admitted.get(w.name)),
+                      "%s cannot reach its minimum of %d replica(s): only %d fit on "
+                      "the current nodes. The fleet is being grown; if it is already "
+                      "at MAX_WORKERS this will not resolve on its own.",
+                      w.name, w.policy.min_replicas, admitted.get(w.name, 0))
+        elif w.name in capped:
+            warn_once((w.name, "capped", capped[w.name], wants[w.name]),
+                      "capping %s at %d replica(s) (wanted %d): the eligible nodes "
+                      "have %s left and one replica needs %s",
+                      w.name, capped[w.name], wants[w.name], pool, w.cost)
 
-    # Cap replicas at what the CURRENTLY eligible nodes can actually hold. This
-    # is what keeps the scale-out handover gapless: while workers are booting
-    # the app is still manager-only, so the count stays at what the master can
-    # serve and rises after the flip, instead of queueing tasks that have
-    # nowhere to run.
-    if mode == MODE_MANAGER:
-        placeable = manager_capacity + sum(worker_caps)
-        where = f"master ({manager_capacity}) + {current_workers} worker(s)"
-    else:
-        placeable = sum(worker_caps)
-        where = f"{current_workers} worker(s)"
-    if want_replicas > placeable:
-        log.info(
-            "holding at %d replicas: %d wanted, %d fit on %s right now",
-            max(MIN_REPLICAS, placeable), want_replicas, placeable, where,
-        )
-        want_replicas = max(MIN_REPLICAS, placeable)
+    # 10. HANDOVER 1 — release the pin BEFORE shrinking the fleet.
+    if not want_pinned and any_pinned:
+        changed = reconcile_placement(
+            workloads, False,
+            f"scaling in to {want_hosts} host(s); the master takes the replicas back")
+        if changed:
+            pinned -= set(changed)
+            any_pinned = bool(pinned)
+            all_unpinned = not any_pinned
 
-    # ---------------------------------------------------------------------
-    # HANDOVER, PART 1 — hand BACK to the manager before shrinking the fleet.
-    #
-    # This runs before any node is removed, on purpose. Removing the last
-    # worker first would leave the app pinned to a role with no nodes in it.
-    # Flipping first means the master picks up tasks while that worker is
-    # still serving, and the removal below then waits for proof of it.
-    # ---------------------------------------------------------------------
-    if want_mode == MODE_MANAGER and mode == MODE_WORKER and not rolling:
-        if stranded:
-            reason = ("no worker is left in the swarm and the app is pinned to "
-                      "workers — every task is unplaceable; failing back to the master")
-            log.error("app stranded with an empty worker fleet: %s", APP_SERVICE)
-            M_ERRORS.labels(stage="stranded").inc()
-        else:
-            reason = (f"scaling in to {want_hosts} host(s); master takes the "
-                      f"replicas back (it holds {manager_capacity})")
-        try:
-            set_placement_mode(MODE_MANAGER, reason)
-            mode = MODE_MANAGER
-        except Exception as exc:  # noqa: BLE001
-            M_ERRORS.labels(stage="placement").inc()
-            log.error("could not release the worker pin: %s", exc)
-
-    # ---------------------------------------------------------------------
-    # SCALE UP: nodes first, then replicas onto them.
-    # ---------------------------------------------------------------------
-    # `owned` is what we are already paying for: ready workers plus the ones
-    # still booting. Ordering against the ready count alone re-orders the same
-    # capacity every loop for two minutes and sails past MAX_WORKERS.
+    # 11. SCALE UP nodes.
     booting = len(provisioning_workers())
     owned = current_workers + booting
-    # Only real servers are bought; the master is host #1 and already exists.
     want_servers = max(0, want_hosts - 1)
     if want_servers > owned:
         age = newest_worker_age()
         if age is not None and age < COOLDOWN_UP:
-            log.info(
-                "worker scale-up suppressed: newest is %.0fs old, cooldown %ds",
-                age, COOLDOWN_UP,
-            )
+            log.info("worker scale-up suppressed: newest is %.0fs old, cooldown %ds",
+                     age, COOLDOWN_UP)
         elif owned >= MAX_WORKERS - 1:
-            log.warning("at host ceiling %d (master + %d workers) — this is a "
-                        "budget cap, not capacity", MAX_WORKERS, MAX_WORKERS - 1)
+            log.warning("at host ceiling %d (master + %d workers) — this is a budget "
+                        "cap, not capacity", MAX_WORKERS, MAX_WORKERS - 1)
         else:
             for _ in range(min(want_servers - owned, (MAX_WORKERS - 1) - owned)):
-                create_worker()
+                try:
+                    create_worker()
+                except Exception as exc:  # noqa: BLE001
+                    M_ERRORS.labels(stage="create").inc()
+                    log.error("could not create a worker: %s", exc)
+                    break
     elif booting:
         log.info("%d worker(s) still booting; not ordering more", booting)
 
-    # ---------------------------------------------------------------------
-    # REPLICAS: applied every loop, subject to their own short cooldown.
-    # ---------------------------------------------------------------------
-    if want_replicas != replicas:
-        since = time.time() - _last_replica_change
-        if since < REPLICA_COOLDOWN:
-            log.info("replica change suppressed: %.0fs since last", since)
-        else:
-            set_replicas(service, want_replicas)
-            _last_replica_change = time.time()
-            replicas = want_replicas
+    # 12. APPLY replicas, per service, each with its own cooldown.
+    for w in workloads:
+        target = admitted.get(w.name, w.spec_replicas)
+        if target == w.spec_replicas:
+            continue
+        since = time.time() - _last_replica_change.get(w.name, 0.0)
+        if since < w.policy.cooldown:
+            log.info("%s: replica change suppressed, %.0fs since last", w.name, since)
+            continue
+        try:
+            set_replicas(w.name, target)
+            _last_replica_change[w.name] = time.time()
+        except Exception as exc:  # noqa: BLE001
+            M_ERRORS.labels(stage="scale").inc()
+            log.error("could not scale %s: %s", w.name, exc)
 
-    # ---------------------------------------------------------------------
-    # HANDOVER, PART 2 — take the app OFF the manager, once and only once the
-    # workers can hold all of it.
-    #
-    # Both conditions matter. Workers that exist but are not `ready` cannot be
-    # scheduled onto, and workers that are ready but too few would leave the
-    # remainder pending the moment the master stops being eligible. Until both
-    # hold, the master keeps serving and we simply try again next loop.
-    # ---------------------------------------------------------------------
-    if want_mode == MODE_WORKER and mode == MODE_MANAGER:
-        worker_room = sum(worker_caps)
-        if rolling:
-            log.info("deferring the move to worker mode: a rollout is in flight")
-        elif current_workers == 0:
+    # 13. HANDOVER 2 — pin to workers only once they can hold EVERYTHING.
+    if want_pinned and not all(w.pinned for w in workloads) and workloads:
+        room_items = demand_items(
+            workloads, {w.name: max(admitted.get(w.name, 0), w.spec_replicas) for w in workloads},
+            pinned_names={w.name for w in workloads})
+        _, unplaced = place(room_items, worker_bins)
+        if current_workers == 0:
             log.info("deferring the move to worker mode: no worker is ready yet")
-        elif worker_room < max(replicas, want_replicas):
-            log.info(
-                "deferring the move to worker mode: %d worker(s) hold %d, "
-                "need room for %d — master keeps serving until then",
-                current_workers, worker_room, max(replicas, want_replicas),
-            )
+        elif unplaced:
+            log.info("deferring the move to worker mode: %d worker(s) cannot yet hold "
+                     "%d replica(s) — the master keeps serving until they can",
+                     current_workers, len(room_items))
         else:
-            try:
-                set_placement_mode(
-                    MODE_WORKER,
-                    f"{current_workers} worker(s) ready with room for "
-                    f"{worker_room}; master drops to zero replicas",
-                )
-                mode = MODE_WORKER
-            except Exception as exc:  # noqa: BLE001
-                M_ERRORS.labels(stage="placement").inc()
-                log.error("could not pin the app to workers: %s", exc)
+            changed = reconcile_placement(
+                workloads, True,
+                f"{current_workers} worker(s) ready with room for every replica; "
+                f"the master drops to zero")
+            if changed:
+                pinned |= set(changed)
+                any_pinned = True
+                all_unpinned = False
 
-    # ---------------------------------------------------------------------
-    # SCALE DOWN: only after replicas have been shed, and slowly. Removing the
-    # LAST worker additionally waits for the master to be serving already.
-    # ---------------------------------------------------------------------
-    if want_servers < current_workers and want_replicas <= replicas:
+    # 14. SCALE DOWN nodes: only after replicas have been shed, and slowly.
+    if want_servers < current_workers:
         since = time.time() - _last_scale_down
         last_one = current_workers == 1
-        on_manager = running_replicas_on_manager() if last_one else 0
-        # The master counts as room only once the pin is off and it is a legal
-        # placement target again — which HANDOVER PART 1 above has already done
-        # by the time a last-worker removal is on the table.
-        spare = manager_capacity if mode == MODE_MANAGER else 0
-        candidate = pick_removal_candidate(ready, worker_caps, want_replicas, spare)
+        items = demand_items(workloads,
+                             {w.name: admitted.get(w.name, w.spec_replicas) for w in workloads},
+                             pinned_names=pinned)
+        candidate = pick_removal_candidate(
+            ready, node_free, items, manager_free if all_unpinned else None,
+            tasks_by_node, app_ids)
+        on_manager = manager_running_by_service(tasks_by_node, manager_id)
+        missing = [w.name for w in workloads
+                   if admitted.get(w.name, w.spec_replicas) >= 1
+                   and on_manager.get(w.id, 0) < 1]
+
         if since < COOLDOWN_DOWN:
             log.info("worker scale-down suppressed: %.0fs since last", since)
         elif current_hosts <= floor:
             pass
         elif candidate is None:
-            # Heterogeneous fleets: dropping the newest node is not always safe
-            # when nodes differ in size. If no single node can leave without the
-            # rest falling short of the replica count, keep them all.
-            log.info(
-                "no worker can be removed without dropping below %d replica(s) "
-                "of capacity (have %d across %d worker(s))",
-                want_replicas, sum(worker_caps), current_workers,
-            )
-        elif last_one and mode != MODE_MANAGER:
-            # Part 1 above should already have released the pin; if it could
-            # not, deleting this worker would take the site down rather than
-            # scale it to zero. Wait instead.
-            log.warning(
-                "holding the last worker: %s is still pinned to worker nodes",
-                APP_SERVICE,
-            )
-        elif last_one and on_manager < 1:
-            # The pin is off and the master is eligible, but Swarm has not
+            log.info("no worker can be removed without leaving replicas unplaceable "
+                     "(%d worker(s), demand %s)", current_workers, demand)
+        elif last_one and not all_unpinned:
+            # Handover 1 should already have released every pin; if it could not,
+            # deleting this worker takes the site down rather than scaling to zero.
+            log.warning("holding the last worker: still pinned — %s", ", ".join(sorted(pinned)))
+        elif last_one and missing:
+            # The pins are off and the master is eligible, but Swarm has not
             # started a task there yet. Deleting the worker now is the one move
-            # that produces a gap, so we wait — indefinitely if it comes to
-            # that. Keeping one worker costs a few euros a month; removing it
-            # blind costs the site, and that is never the better trade.
-            #
-            # It normally resolves within a loop or two: `spread: node.id`
-            # counts tasks of this service per node, the master has none, so it
-            # wins the next placement. If it does not resolve, something is
-            # wrong that an operator has to see.
+            # that produces a gap, so we wait — indefinitely if it comes to that.
+            # Keeping one worker costs a few euros a month; removing it blind
+            # costs the site, and that is never the better trade.
             if _manager_wait_since is None:
                 _manager_wait_since = time.time()
             waited = time.time() - _manager_wait_since
             if waited > HANDOVER_STALL_SECONDS:
                 M_ERRORS.labels(stage="handover").inc()
-                log.error(
-                    "handover stalled: %.0fs with the worker pin released and "
-                    "still no replica running on the master. The last worker "
-                    "stays until there is one. Check `docker service ps %s` for "
-                    "a task the master cannot place — usually a resource "
-                    "reservation that no longer fits.",
-                    waited, APP_SERVICE,
-                )
+                detail = ""
+                for w in workloads:
+                    if w.name not in missing:
+                        continue
+                    for task in tasks_by_node.get(manager_id, []) or []:
+                        if task.get("ServiceID") == w.id:
+                            detail = (task.get("Status", {}) or {}).get("Err", "")
+                            break
+                log.error("handover stalled: %.0fs with every pin released and still no "
+                          "replica on the master for %s. The last worker stays until "
+                          "there is one.%s", waited, ", ".join(missing),
+                          f" Swarm says: {detail}" if detail else
+                          " Check `docker service ps` for a reservation that no longer fits.")
             else:
-                log.info(
-                    "holding the last worker: no replica on the master yet "
-                    "(%.0fs, rollout %s)",
-                    waited, "in flight" if rolling else "settling",
-                )
+                log.info("holding the last worker: no replica on the master yet for %s (%.0fs)",
+                         ", ".join(missing), waited)
         else:
             _manager_wait_since = None
             if last_one:
-                log.info(
-                    "removing the last worker: master is already serving %d "
-                    "replica(s), fleet goes to zero",
-                    on_manager,
-                )
-            remove_worker(candidate)
-            _last_scale_down = time.time()
+                log.info("removing the last worker: the master is already serving every "
+                         "component, the fleet goes to zero")
+            try:
+                remove_worker(candidate)
+                _last_scale_down = time.time()
+            except Exception as exc:  # noqa: BLE001
+                M_ERRORS.labels(stage="remove").inc()
+                log.error("could not remove a worker: %s", exc)
+
+    export_service_metrics(workloads, wants, admitted, signals, running, pending)
 
     log.info(
-        "hosts %d/%d (floor %d) · replicas %d/%d · room %d (master %d, workers %s) · "
-        "placement %s%s · p95 %s · cpu/replica %s",
-        current_hosts, MAX_WORKERS, floor, replicas, want_replicas,
-        placeable, manager_capacity,
-        "+".join(str(c) for c in worker_caps) or "-",
-        mode, f" -> {want_mode}" if want_mode != mode else "",
-        f"{p95:.0f}ms" if p95 is not None else "n/a",
-        f"{cpu_rep:.0f}%" if cpu_rep is not None else "n/a",
+        "hosts %d/%d (floor %d) · %d component(s) · demand %s · master %s · workers %s · "
+        "new %s · placement %s%s",
+        current_hosts, MAX_WORKERS, floor, len(workloads), demand, manager_free,
+        " + ".join(str(b.free) for b in worker_bins) or "none",
+        new_free if new_free else "unknown",
+        "workers" if any_pinned else "master",
+        " -> workers" if want_pinned and not any_pinned else
+        " -> master" if not want_pinned and any_pinned else "",
     )
+    for w in workloads:
+        s = signals.get(w.name)
+        log.info("  %-28s %d/%d replicas (want %d) · p95 %s · cpu/replica %s · %s",
+                 w.name, running.get(w.name, 0), admitted.get(w.name, w.spec_replicas),
+                 wants.get(w.name, w.spec_replicas),
+                 f"{s.p95:.0f}ms" if s and s.p95 is not None else "n/a",
+                 f"{s.cpu:.0f}%" if s and s.cpu is not None else "n/a",
+                 "workers" if w.name in pinned else "master")
 
 
 def main():
     start_http_server(9200)
-    log.info(
-        "autoscaler up — cluster=%s service=%s slo_p95=%.0fms "
-        "hosts=%d..%d replicas=%d..%d dry_run=%s",
-        CLUSTER, APP_SERVICE, SLO_P95_MS,
-        MIN_WORKERS, MAX_WORKERS, MIN_REPLICAS, MAX_REPLICAS, DRY_RUN,
-    )
+    log.info("autoscaler up — cluster=%s hosts=%d..%d worker_type=%s dry_run=%s",
+             CLUSTER, MIN_WORKERS, MAX_WORKERS, WORKER_TYPE, DRY_RUN)
+    log.info("scaling targets are DISCOVERED: any service labelled %s=%s is managed, "
+             "and its policy comes from its own autoscale.* labels. Nothing here "
+             "names an application.", WORKLOAD_LABEL, WORKLOAD_APP)
     if MIN_WORKERS == 1:
-        log.info(
-            "host floor is 1: the master is host #1, so an idle cluster bills "
-            "no Hetzner servers at all. Per-node capacity is measured, not "
-            "configured — see the 'room' figure in each loop line."
-        )
+        log.info("host floor is 1: the master is host #1, so an idle cluster bills no "
+                 "Hetzner servers at all. Capacity is measured, not configured — see "
+                 "the 'demand' and 'master' figures in each loop line.")
     else:
-        log.info(
-            "host floor is %d: the master is never a host, so at least %d "
-            "Hetzner worker(s) always run", MIN_WORKERS, MIN_WORKERS,
-        )
+        log.info("host floor is %d: the master is never a host, so at least %d Hetzner "
+                 "worker(s) always run", MIN_WORKERS, MIN_WORKERS)
     while _running:
         started = time.time()
         try:

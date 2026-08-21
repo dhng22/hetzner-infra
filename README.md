@@ -1,52 +1,99 @@
 # Self-managing Swarm on Hetzner
 
-One master node created by hand. After that, workers and replicas scale
-themselves against a latency SLO, CI deploys itself, and monitoring picks up
-anything new without configuration.
+One master node created by hand. It boots with monitoring, ingress and a control
+panel — and nothing else. Applications and databases are components you create
+afterwards, each its own independent stack. After that, workers and replicas
+scale themselves against each component's own latency SLO, CI deploys itself,
+and monitoring picks up anything new without configuration.
 
 ## Architecture
 
 ```
-                     Cloudflare — ONE tunnel, four hostnames
+                     Cloudflare — ONE tunnel, hostnames you add
                                      │
    ┌─────────────────────────────────┴──────────────────────────────┐
    │  WORKER POOL — 0 servers at rest, autoscaled up to MAX-1        │
-   │    cloudflared (global: one connector per node)                │
-   │    api-prod    (N replicas, autoscaled)                        │
-   │    api-staging (1 replica, capped at 0.5 CPU)                  │
+   │    cloudflared   (global: one connector per node)              │
+   │    <your apps>   (N replicas each, autoscaled independently)   │
    │    node-exporter + cadvisor (global)                           │
    └─────────────────────────────────┬──────────────────────────────┘
             creates, drains          │        metrics, logs
    ┌─────────────────────────────────┴──────────────────────────────┐
    │  MASTER — manual, CPX31. HOST #1.                              │
    │    admin panel · autoscaler                                    │
-   │    VictoriaMetrics · Loki · Grafana · vmagent                  │
-   │    redis-prod · redis-staging                                  │
+   │    VictoriaMetrics · Loki · Grafana · vmagent · Alertmanager   │
    │    cloudflared                                                 │
-   │    ...and api-prod/api-staging ONLY while no worker exists     │
+   │    <your databases>  (stateful: they never move)               │
+   │    ...and your apps ONLY while no worker exists                │
    └────────────────────────────────────────────────────────────────┘
-                                     │
-                          MongoDB Atlas (prod + staging DBs)
 ```
 
 The master is **host #1**, so the resting state is one box and no Hetzner
 servers. When load outgrows what the master can hold, workers are provisioned
 for *all* the replicas and the master goes back to carrying none. How much each
-node holds is measured from its real CPU and RAM, not configured.
+node holds is measured from its real CPU and memory, not configured.
 See [Scaling policy](#scaling-policy).
 
-Networks: `edge` (cloudflared + both api services), `data-prod`,
-`data-staging` (each api to its own Redis), `monitoring`.
+Two networks, both created before any component exists: `edge` (every component
+plus cloudflared — this is how your app reaches your database, and how the
+tunnel reaches your app) and `monitoring` (the observability stack, plus
+anything being scraped).
+
+## Components
+
+Nothing of yours is baked into the cluster. A component is a name, a spec file
+and a Docker stack:
+
+```
+/opt/infra/components/api/
+  component.json   the spec — image, port, resources, scaling policy
+  env              your environment variables
+  stack.yml        what was last rendered and deployed
+```
+
+Two types ship today:
+
+| Type | What it is | Owns |
+|---|---|---|
+| `app` | a container image of yours, behind the tunnel | its environment, its replica count, its scaling policy |
+| `redis` | a password-protected Redis with a volume | its own generated password, rotatable in one click |
+
+Create them in the panel (**Components → New app**) or on the master:
+
+```bash
+component create app api --image ghcr.io/you/app:sha-abc1234 --port 8080
+component deploy api
+
+component create redis cache
+component rotate cache            # new password, redeploys only this component
+component env api set LOG_LEVEL=debug
+component remove api
+```
+
+Each becomes the Swarm stack `<name>`, with services `<name>_app` or
+`<name>_redis`. **They share nothing.** Deleting an app cannot touch a database,
+a broken image cannot take down the tunnel, and no two things write to the same
+file — which is exactly what went wrong in the design this replaced.
+
+**Databases keep their credentials to themselves.** A Redis component generates
+its password, injects it into its own service and nowhere else, and shows you
+the connection URL. Nothing is injected into your application for you; how you
+use the URL is your business. That is also why rotating is safe: nothing else
+holds a copy.
 
 ## Hostnames
+
+Routing is configured once, by hand, in the Cloudflare dashboard — the tunnel
+runs in token mode, so its ingress rules live there rather than here. The panel
+shows you the exact local target to paste for each component.
 
 Cloudflare's free Universal SSL covers `*.root` and nothing deeper, so every
 name stays at the third level and extra services take a dash:
 
 | Hostname | Tunnel target |
 |---|---|
-| `<app>.<root>` | `http://api-prod:8080` |
-| `staging-<app>.<root>` | `http://api-staging:8080` |
+| `<app>.<root>` | `http://api_app:8080` — an `app` component named `api` |
+| `staging-<app>.<root>` | `http://api-staging_app:8080` — a second component |
 | `grafana-<app>.<root>` | `http://grafana:3000` |
 | `admin-<app>.<root>` | `http://<master-private-ip>:3000` |
 
@@ -56,17 +103,40 @@ Put the last two behind Cloudflare Access. They control your cluster.
 
 Load is absorbed cheapest-first:
 
-1. **Replicas** — seconds. Driven by p95 latency against `SLO_P95_MS`, with
-   CPU-per-replica as the secondary signal.
+1. **Replicas** — seconds. Driven by each component's own p95 latency against
+   its own SLO, with CPU-per-replica as the secondary signal.
 2. **Nodes** — ~2 minutes. Only when the replicas we want will not fit.
 
 Coming down, the order reverses: shed replicas first, remove the node later.
 
-### Where the app runs — the master is host #1
+### The autoscaler is told nothing; it discovers everything
+
+There is no `APP_SERVICE` and no list of applications anywhere. Every service
+carrying the deploy label `infra.workload=app` is managed, and its policy travels
+with it on that same service:
+
+| Label | Meaning |
+|---|---|
+| `infra.workload=app` | manage this: pin it, count it, scale it |
+| `autoscale.enabled` | drive the replica count from signals (off = fixed size) |
+| `autoscale.min_replicas` / `.max_replicas` | the range it may move in |
+| `autoscale.slo_p95_ms` | THE number. Up and down thresholds are fractions of it |
+| `autoscale.up_p95_ratio` / `.down_p95_ratio` | act at 80% of the SLO; relax below 40% |
+| `autoscale.up_cpu_pct` / `.down_cpu_pct` | the secondary signal |
+| `autoscale.sustain_up_seconds` / `.sustain_down_seconds` | up fast, down slow |
+| `autoscale.priority` | who wins when two components want the same node |
+
+The panel writes them when you create or edit a component. Anything **without**
+`infra.workload=app` is overhead: never moved, never scaled, its reservations
+simply subtracted from whatever node it sits on. That is why a database needs no
+autoscaler change at all — and why a database must never carry the label, since
+it would then be moved onto a worker that later gets deleted.
+
+### Where your apps run — the master is host #1
 
 Hosts are counted **including the master**, so the floor costs nothing:
 
-| Hosts | Hetzner servers | Constraint on `api-*` | Who runs the app |
+| Hosts | Hetzner servers | Constraint on app services | Who runs them |
 |---|---|---|---|
 | 1 | none | *(none)* | the master |
 | 2+ | that many | `node.role == worker` | the workers only; master carries zero |
@@ -75,38 +145,53 @@ Hosts are counted **including the master**, so the floor costs nothing:
 means the master plus up to 5 workers. Set `MIN_WORKERS=2` if you would rather
 the master never ran application traffic.
 
-The autoscaler adds and removes that constraint itself — `stacks/app.yml`
-deliberately does not set it.
+The autoscaler adds and removes that constraint itself, and re-states whatever is
+live on every deploy — the component spec deliberately never sets it.
 
-### Capacity is measured, not configured
+### Capacity is measured in CPU and memory, not in replicas
 
-There is no `REPLICAS_PER_WORKER`. How many replicas a node holds is computed
-from **that node's real CPU and RAM, minus what Swarm has already reserved on
-it**, divided by one replica's own reservation from `stacks/app.yml`. A new
-worker's size comes from the Hetzner catalogue for `WORKER_TYPE`.
+There is no `REPLICAS_PER_WORKER`. Everything is a `(CPU, memory)` vector:
 
-With the shipped reservations:
+```
+a node's free capacity = what it advertises
+                       - the reservations of every task on it that is not an app
+demand                 = for each component, replicas x its own reservation
+a new worker           = the Hetzner catalogue entry for WORKER_TYPE
+                       - the per-node tax of the global services
+```
 
-| Node | Holds |
-|---|---|
-| master CPX31 (4 vCPU / 8 GB) | **3** replicas — after monitoring, Redis and the panel take theirs |
-| worker CPX21 (3 vCPU / 4 GB) | **5** replicas |
-| worker CPX31 (4 vCPU / 8 GB) | **7** replicas |
+Worked example, with the shipped reservations: a CPX31 master running only
+infrastructure has about **2.25 CPU / 5.9 GB** free, and a new CPX21 worker
+offers **2.8 CPU / 3.9 GB** after node-exporter, cadvisor and cloudflared take
+theirs. An app reserving 0.5 CPU / 384 MB and a second reserving 0.25 / 256 MB,
+at 3 and 5 replicas, come to 2.75 CPU — past the master, so one worker is bought
+and holds both.
 
-Resize the master, change a limit or switch worker type and the arithmetic just
-follows. Nothing to keep in sync, nothing to drift.
+"Replicas per node" cannot express that at all once two components are different
+sizes, and memory becomes the binding constraint long before CPU does on a
+four-component cluster.
 
-**Existing nodes are filled before new ones are bought.** If two workers hold 10
-between them and you want 11, it buys one more — it does not round up per node.
-That also makes mixed fleets work: a node is worth what it can actually hold, so
-a half-empty 4 vCPU worker is used up before another is ordered.
+**Existing nodes are filled before new ones are bought**, and a node is worth
+what it can actually hold — so mixed fleets work, and a half-empty 4 vCPU worker
+is used up before another is ordered.
 
-So the counts run: 2 replicas → 0 servers · 5 → 1 server · 6 → 2 servers.
+> The unit is the **reservation**, not the limit, because reservations are what
+> Swarm's scheduler actually subtracts when placing a task. The limit is burst
+> headroom on top. If replicas do contend, p95 rises and the autoscaler adds
+> capacity — which is the signal it is built on anyway.
 
-> The unit is the **reservation** (0.5 CPU), not the limit (1.0 CPU), because
-> reservations are what Swarm's scheduler actually subtracts when placing a
-> task. The limit is burst headroom on top. If replicas do contend, p95 rises
-> and the autoscaler adds capacity — which is the signal it is built on anyway.
+### Several components share the fleet without starving each other
+
+When demand exceeds what the eligible nodes can hold, the fleet is sized from
+the **uncapped** demand — so it grows — while what is actually applied this
+minute is capped. Minimums are satisfied first, then growth is handed out one
+replica at a time, round-robin. That is deterministic and monotone: more
+capacity never reduces anyone's allocation, which is what stops two components
+trading a replica back and forth every loop. `autoscale.priority` is the escape
+hatch when one genuinely matters more.
+
+Capping never scales anything **down** — shrinking is the signals' job, not the
+packer's.
 
 ### Both handovers are ordered so something is always serving
 
@@ -116,23 +201,36 @@ So the counts run: 2 replicas → 0 servers · 5 → 1 server · 6 → 2 servers
 - **In:** remove the pin *first*, while the last worker is still up → wait until
   a replica is actually running on the master → only then drain and delete it.
 
-If every worker disappears at once, the next loop puts the app back on the
-master by the same path, and `AppStrandedWithoutWorkers` fires if that recovery
-does not happen within two minutes. That emergency path applies even at
-`MIN_WORKERS=2` — an outage is worse than temporary co-tenancy.
+If every worker disappears at once, the next loop puts everything back on the
+master by the same path — and it runs at the *top* of the loop, before anything
+that can fail, so a VictoriaMetrics or Hetzner outage cannot block the recovery.
+`AppStrandedWithoutWorkers` fires if it does not happen within two minutes. The
+emergency path applies even at `MIN_WORKERS=2`: an outage is worse than
+temporary co-tenancy.
 
-| Setting | Default | Why |
-|---|---|---|
-| `SLO_P95_MS` | 500 | **The** number. Everything derives from it. Set it from your real latency distribution. |
-| `MIN_WORKERS` | 1 | A **host** count, master included. `1` = no servers billed. `2`+ = master never runs the app. |
-| `MAX_WORKERS` | 6 | Also a host count, so master + up to 5 workers. A **budget** cap. |
-| `SCALE_UP_P95_RATIO` | 0.8 | Act at 80% of SLO, before users feel it |
-| `SCALE_UP_CPU` | 70 | % of one replica's own limit — not node CPU |
-| `NODE_PRESSURE_PCT` | 80 | Placement guard: another replica will not fit |
-| `SUSTAIN_UP_SECONDS` | 90 | Up fast |
-| `SUSTAIN_DOWN_SECONDS` | 900 | Down slow. Never symmetric. |
-| `SCALE_UP_FACTOR` | 0.5 | +50% of current, min +1. One at a time cannot track a spike. |
-| `COOLDOWN_UP_SECONDS` | 300 | Must exceed boot + pull + JVM warmup, or you overshoot |
+Removing the last worker additionally waits for a replica of **every** component
+to be running on the master — indefinitely if it comes to that. Keeping one
+worker costs a few euros a month; removing it blind costs the site.
+
+Where each setting lives now — and the split is the point:
+
+| Setting | Default | Where | Why |
+|---|---|---|---|
+| `autoscale.slo_p95_ms` | 500 | the component | **The** number. Everything derives from it. Set it from your real latency distribution. |
+| `autoscale.min_replicas` / `.max_replicas` | 1 / 4 | the component | Two is the usual production floor: with one, a crash is an outage. |
+| `autoscale.up_p95_ratio` | 0.8 | the component | Act at 80% of the SLO, before users feel it |
+| `autoscale.up_cpu_pct` | 70 | the component | % of that replica's own limit — not node CPU |
+| `autoscale.sustain_up_seconds` | 90 | the component | Up fast |
+| `autoscale.sustain_down_seconds` | 900 | the component | Down slow. Never symmetric. |
+| `autoscale.up_factor` | 0.5 | the component | +50% of current, min +1. One at a time cannot track a spike. |
+| `MIN_WORKERS` | 1 | `infra.env` | A **host** count, master included. `1` = no servers billed. |
+| `MAX_WORKERS` | 6 | `infra.env` | Also a host count, so master + up to 5 workers. A **budget** cap. |
+| `NODE_PRESSURE_PCT` | 80 | `infra.env` | Placement guard: another replica will not fit |
+| `COOLDOWN_UP_SECONDS` | 300 | `infra.env` | Must exceed boot + pull + app warmup, or you overshoot |
+
+Application policy belongs to the application; fleet policy belongs to the
+cluster. A copy of an SLO in `infra.env` would be a copy that goes stale, and
+there would be no right answer once there are two applications.
 
 Why CPU is still there when the policy is latency-led: `histogram_quantile`
 over an empty bucket returns nothing. At low traffic the latency signal
@@ -144,21 +242,22 @@ to come back down.
 Your pipeline pushes an image and tells the panel to move the service to it:
 
 ```
-POST https://admin-<app>.<root>/hooks/deploy/app/prod
-     X-Deploy-Token: <from the panel, Apps -> API -> Deployments>
+POST https://admin-<app>.<root>/hooks/deploy/<component>
+     X-Deploy-Token: <from that component's Deployments tab>
      {"image": "ghcr.io/you/app:prod-9f3ac21"}
 ```
 
 A complete GitHub Actions workflow is in `docs/github-actions-deploy.yml`.
 The panel's token, endpoint and a ready-made `curl` are on the Deployments tab.
+**One token per component**, so a leaked staging token cannot reach production.
 
 Four properties you get, whatever pipeline you build:
 
 - **Zero downtime** — `order: start-first` brings the new task to healthy
   before stopping the old one.
-- **Real health gating** — `monitor: 90s` with `start_period: 60s`. Swarm's
-  default monitor is 5 seconds, shorter than JVM startup, so it would call a
-  task successful before your app finished booting.
+- **Real health gating** — `monitor` tracks the component's own startup grace.
+  Swarm's default monitor is 5 seconds, shorter than most application startups,
+  so it would call a task successful before your app finished booting.
 - **Automatic rollback** — `failure_action: rollback`.
 - **A failed deploy fails your pipeline** — the webhook blocks until Swarm has
   converged and answers `502` when it rolled back. That only holds if your
@@ -177,8 +276,8 @@ Deploys are also possible by hand, on the master:
 
 ```bash
 docker service update --with-registry-auth \
-  --image ghcr.io/you/app:prod-9f3ac21 app_api-prod
-docker service rollback app_api-prod                    # undo
+  --image ghcr.io/you/app:prod-9f3ac21 api_app
+docker service rollback api_app                         # undo
 ```
 
 `--with-registry-auth` is not optional: it ships the registry credential with
@@ -186,39 +285,47 @@ the service spec, so a worker created an hour from now can still pull.
 
 ## Before you start
 
-Five things to have open in other tabs:
+Four things to have open in other tabs:
 
 1. **Hetzner** — a private network `10.0.0.0/16`, and a **Read & Write** API token.
 2. **Cloudflare** — one Tunnel; copy the connector token. Hostnames come later.
 3. **GitHub** — a PAT with `read:packages`, for the cluster to pull your image.
-4. **MongoDB Atlas** — two databases, prod and staging.
-5. **Slack** — an incoming webhook (or a Discord one with `/slack` appended).
+4. **Slack** — an incoming webhook (or a Discord one with `/slack` appended).
    Bootstrap refuses to start without it.
+
+Anything your application itself needs — a managed database, an API key, a
+bucket — is not on this list. Those go in that component's environment after the
+cluster is up, and the cluster has no opinion about them.
 
 Optional: an SSH public key for `CI_SSH_PUBLIC_KEY` if you want a non-root
 `deploy` user on the master. The panel does not need it.
 
 ## Admin panel
 
-`admin-<app>.<root>` is a web console for the cluster: service health, node
-state, autoscaler signals, alert rules, and an environment editor per app and
-per environment. Username and password come from `master-cloud-init.yaml` —
-still the only file you fill in.
+`admin-<app>.<root>` is a web console for the cluster: create and delete
+components, edit their environment and their settings, deploy an image, rotate a
+database password, and watch node state, autoscaler signals and alert rules.
+Username and password come from `master-cloud-init.yaml` — still the only file
+you fill in.
 
 It is deliberately narrow about what it owns:
 
 | | Owner |
 |---|---|
-| Application configuration (`config/app-<env>.env`) | **the panel**, or `app-env` |
-| Service spec: placement, resources, update policy | `stacks/app.yml` — panel shows it read-only |
-| `api-prod` replica count | the autoscaler |
-| Scaling policy, Hetzner, registry, alerting | `master-cloud-init.yaml` — panel shows it read-only |
+| Components: create, configure, deploy, delete | **the panel**, or `bin/component` |
+| A component's environment and its own credentials | **the panel** |
+| Replica count at runtime, and placement | the autoscaler |
+| The running image | CI, through the deploy webhook |
+| Fleet policy, Hetzner, registry, alerting | `infra.env` — the panel edits what is safe and shows the rest read-only |
+| The three infrastructure stacks | their files; the panel can only re-apply them |
 
 That split is the whole point. A panel that lets you edit a value the next
-`docker stack deploy` silently reverts is worse than one that declines.
+deploy silently reverts is worse than one that declines — which is why a
+component's page shows its live image and replica count rather than offering to
+set them.
 
-**Treat it as a root console.** It mounts the docker socket, so it can redeploy
-production and read every application credential. Put the hostname behind
+**Treat it as a root console.** It mounts the docker socket, so it can deploy
+anything in the cluster and read every credential in it. Put the hostname behind
 Cloudflare Access; the login is one factor, Access is the second. Six failed
 attempts locks the source address out for five minutes.
 
@@ -228,145 +335,179 @@ To preview the interface without deploying anything:
 python3 admin/preview_build.py && open admin/preview/index.html
 ```
 
-## Application configuration
+## Component configuration
 
-Everything the app reads with `System.getenv` lives in `config/app-prod.env`
-and `config/app-staging.env`, edited in the panel or on the box:
+Everything an app reads from its environment lives in that component's own file,
+edited in the panel or on the box:
 
 ```bash
-app-env list prod
-app-env set FEATURE_NEW_CHECKOUT=true prod     # edits the file, then redeploys
-app-env unset FEATURE_NEW_CHECKOUT prod
-app-env deploy                                 # re-apply files, change nothing else
+component env api                       # list
+component env api set LOG_LEVEL=debug   # edits the file
+component env api unset LOG_LEVEL
+component env api edit                  # $EDITOR, whole file at once
+component deploy api                    # apply it
 ```
 
-`REDIS_PASSWORD` is injected into the API, the matching Redis, and the exporter
-from that one file, so the server and its clients can never drift apart.
-`KTOR_ENV`, `REDIS_HOST` and `REDIS_PORT` come from the stack file and are
-refused here.
+**The platform injects nothing.** Whatever is in that file is exactly what the
+container gets — no framework variables, no reserved names, no database URL
+helpfully filled in. If your app needs Redis, you copy the connection URL from
+that Redis component's Credentials page into this component's environment, and
+you decide what to call it.
 
-> **Credentials are plain env vars, not docker secrets.** `MONGO_URI` and
-> `REDIS_PASSWORD` are in these files so the panel can edit them. The cost:
-> they appear in `docker service inspect`, in the service spec on every worker
-> that runs a task, and in the container's environment. Swarm secrets cannot be
-> updated in place, so making them editable meant giving that up. If you would
-> rather have secrets back, move them to `docker secret` + the `*_FILE`
-> convention and accept that rotation is a versioned-secret dance.
+In the panel the file has two views, switched with **Rows / Text** above the
+editor: a row per variable, or the whole thing as text for pasting a `.env` in
+one go. They are the same form — switching converts what you have edited, and
+only the view on screen is submitted, so they cannot disagree about what gets
+saved. The text view takes `KEY=VALUE` per line, comments and blank lines
+dropped, a leading `export` allowed, quotes kept as part of the value, and a
+line without `=` is an error rather than a silent drop.
 
-**Always deploy through `app-env`, never a bare `docker stack deploy`.** The
-stack file is declarative over the whole stack, so a plain redeploy overwrites
-two things it does not own:
+> **A component's credentials are plain files, not docker secrets.** A Redis
+> password lives in `components/<name>/secret.env` at 0600 and is injected into
+> that one service, which means it appears in `docker service inspect` — readable
+> by anyone who is already root on the master. The trade buys one-click rotation:
+> Swarm secrets are immutable, so a rotate button on top of them is a
+> versioned-secret dance instead of a button.
 
-- **replicas** — the file says `${MIN_REPLICAS}`, so a redeploy at peak cuts
-  `api-prod` from N to 2. The autoscaler climbs back in +50% steps on a 60s
-  cooldown, so you spend minutes under capacity because you changed a log level.
-- **image** — the file says `${APP_IMAGE_PROD}`, the tag pinned at bootstrap.
-  CI has moved on. A plain redeploy rolls production back to the first-boot
-  image.
-- **placement** — the file sets no `node.role` constraint, because the
-  autoscaler moves the app between the master and the workers. A plain redeploy
-  while the app is pinned to workers drops the pin, and production replicas
-  drift back onto the master at whatever moment CI happened to ship.
+**Deploy paths, and there are exactly two:**
 
-`app-env` reads all three from the running service and pins them for the deploy.
+- `bin/stack-deploy <monitoring|ingress|admin>` — the infrastructure. Always safe
+  to re-apply; nothing else owns state in those files.
+- `bin/component deploy <name>` — one component, one stack.
+
+A component's deploy reads three things back from the running service before
+rendering, because applying the spec's copy of them is how an unrelated edit
+rolls production back:
+
+- **replicas** — the autoscaler owns the count at runtime. Applying the spec's
+  number would cut a service from N back to its configured floor at whatever
+  moment someone saved a memory limit.
+- **image** — CI moved it on with `docker service update`. The spec's copy is
+  whatever was last typed into a form.
+- **placement** — the autoscaler moves the app between master and workers by
+  adding and removing `node.role == worker`. Writing our idea of it would slam
+  placement back on every deploy.
 
 ## Things that will bite you
 
-- **`SLO_P95_MS` is the whole policy.** If your real p95 already exceeds it,
-  the scaler runs to the ceiling on day one and `ReplicaCeiling` fires. Set it
-  before first boot.
-- **`APP_CPU_LIMIT` must match `stacks/app.yml`.** It is the denominator for
-  CPU-per-replica. Change the limit in one place only and the signal silently
-  misreports.
+- **A component's SLO is the whole policy for that component.** If its real p95
+  already exceeds it, the scaler runs to the ceiling on day one and
+  `ReplicaCeiling` fires. Set it from a real latency distribution, not a wish.
+- **Reservations are mandatory, and load-bearing twice.** Swarm schedules
+  against them, *and* the autoscaler derives every capacity number from them.
+  The renderer refuses to emit a service without them, because one that looks
+  free gets packed on top of VictoriaMetrics until something is OOM-killed.
+  Understate one and the autoscaler believes in room that is not there.
+- **Never label a stateful service `infra.workload=app`.** It would be moved
+  onto a worker that is later drained and deleted, and its volume with it. The
+  autoscaler warns loudly if it sees a volume on a service it manages, and
+  `smoke-test` fails on it — but the label is yours to get right.
 - **At the floor the master IS the request path.** That is the deal for not
   paying for an idle worker: while no workers exist, losing the master costs
-  uptime and not just monitoring. Set `MIN_WORKERS=2` if that trade is wrong
-  for you.
-- **Do not put a `node.role` constraint on `api-prod` or `api-staging`.** The
-  autoscaler owns it. Pinning them to workers in the stack file makes the free
-  floor an outage instead of a saving; pinning them to the manager keeps
-  production on the master forever.
-- **Every `reservations:` block is load-bearing, twice.** Swarm schedules
-  against them, *and* the autoscaler derives node capacity from them. Delete one
-  and the master looks like an idle 8 GB box: replicas get packed on top of
-  VictoriaMetrics until something is OOM-killed. Understate one and the
-  autoscaler believes in room that is not there.
-- **A small master never reaches the free floor.** If the monitoring stack's
-  reservations leave no room for `MIN_REPLICAS` replicas, one worker always
+  uptime and not just monitoring. Set `MIN_WORKERS=2` if that trade is wrong.
+- **Do not put a `node.role` constraint on a component.** The autoscaler owns
+  it. Pinning to workers makes the free floor an outage instead of a saving;
+  pinning to the manager keeps production on the master forever.
+- **A small master never reaches the free floor.** If the infrastructure's
+  reservations leave no room for every component's minimum, one worker always
   stays up. The autoscaler says so on startup — look for `measured capacity` in
-  its log. A CPX31 holds 3, which is enough; a CPX21 holds 1, which is not.
-- **Staging shares the pool.** Capped at 0.5 CPU, so idle staging is noise. A
-  real load test is not — it will move production. Cap it or expect a worker.
+  its log.
+- **Components share the fleet.** A staging copy is a component like any other:
+  it reserves resources, and a real load test against it will buy a worker.
+  Give it small reservations and a low `max_replicas`, or expect the bill.
+- **Deleting a Redis keeps its volume.** `docker stack rm` does not remove
+  volumes and neither do we — a mistyped delete should cost you a redeploy, not
+  your data. Remove `<name>-data` by hand once you are sure.
+- **Rotating a database password breaks your clients, by design.** Nothing else
+  in the cluster holds a copy, so nothing else needs updating; your application
+  needs the new URL, and that is your move to make.
 - **The master is a single point of failure for control, not traffic.** Enable
-  Hetzner backups; Redis AOF and metrics history live only there.
+  Hetzner backups; every volume and all metrics history live only there.
 - **Redis has no HA.** `everysec` AOF loses up to a second on a hard crash.
   Fine for cache and sessions, not as a source of truth.
 - **Scale-down drains for at most 180s** before removing the node anyway. Long
   requests need that raised in `autoscaler.py`.
 - **A silent alert rule is worse than no alert rule.** `NoHealthyReplicas` once
   matched a service name that no longer existed, so it could never fire and
-  looked identical to "nothing is wrong". `config/alerts_test.yml` now pins that
-  behaviour; run `promtool test rules config/alerts_test.yml` after touching
-  `alerts.yml`. The `Watchdog` rule fires permanently on purpose — if the daily
-  heartbeat stops arriving, the pipeline is broken, not quiet.
+  looked identical to "nothing is wrong". Now that component names are created
+  at runtime, no rule may name one: they key on gauges the autoscaler exports,
+  and `config/alerts_test.yml` pins that — including that the cluster-level
+  gauges stay unlabelled, which is what keeps `AppStrandedWithoutWorkers` able
+  to fire at all. Run `promtool test rules config/alerts_test.yml` after
+  touching `alerts.yml`. The `Watchdog` rule fires permanently on purpose — if
+  the daily heartbeat stops arriving, the pipeline is broken, not quiet.
 
 ## Bring it up, in order
 
 1. **Put this repo somewhere private** and uncomment the clone line in
    `master-cloud-init.yaml` (`runcmd`), filling in your token. See the comment
-   there — it strips `.git` before copying so your token is not left on disk.
-2. **Fill every `REPLACE_ME`** in the `VARIABLES` block. Two matter more than
-   the rest: **`SLO_P95_MS`**, which the entire scaling policy derives from, and
-   **`ADMIN_PASSWORD`**, which is the key to the cluster. Bootstrap refuses to
-   run while any of them is unset.
+   there — it strips `.git` before copying, though the token is still in the
+   instance's user-data, so use a short-lived one and revoke it after.
+2. **Fill every `REPLACE_ME`** in the `VARIABLES` block. The one that matters
+   most is **`ADMIN_PASSWORD`**: it is the key to the cluster. Bootstrap refuses
+   to run while any of them is unset.
+
+   Nothing about an application is in that file — no image, no port, no SLO, no
+   replica counts, no service names. Those are properties of a component, and
+   components are created after the cluster is up. Nothing here can go stale,
+   because nothing here is a copy of something else.
 3. **Create the master**: Hetzner CPX31, Ubuntu 24.04, **attached to the private
    network**, with the cloud-config pasted in.
 4. **Watch it build**:
    ```bash
    ssh root@<ip> tail -f /var/log/infra-bootstrap.log
    ```
-5. **Expect no workers.** With `MIN_WORKERS=1` a healthy idle cluster is one
-   node, with `api-prod` running on the master. That is the resting state, not a
-   failure:
+5. **Expect an empty cluster.** When it finishes, `docker service ls` shows
+   monitoring, ingress and admin — and nothing else. That is the finished state
+   of a boot, not a half-finished one:
    ```bash
-   docker service logs -f monitoring_autoscaler   # "placement manager", "measured capacity"
+   docker service ls                              # infrastructure only
    docker node ls                                 # just the master
-   docker service ps app_api-prod                 # tasks on the master
+   docker service logs -f monitoring_autoscaler   # "0 component(s)", holding at 1 host
    ```
-   Check the `measured capacity` line: it says how many replicas the master
-   holds. If that is below `MIN_REPLICAS`, a worker will always stay up.
-
-   The Hetzner token and worker cloud-init are therefore *not* exercised at
-   boot. To prove them before you need them, temporarily set `MIN_WORKERS=2` in
-   the panel (Settings → Scaling), watch a worker join and the app move onto it,
-   then set it back to 1 and watch it hand back.
-6. **Add the four tunnel hostnames** in Cloudflare:
+6. **Add the two infrastructure hostnames** in Cloudflare:
 
    | Hostname | Target |
    |---|---|
-   | `<app>.<root>` | `http://api-prod:8080` |
-   | `staging-<app>.<root>` | `http://api-staging:8080` |
    | `grafana-<app>.<root>` | `http://grafana:3000` |
    | `admin-<app>.<root>` | `http://<master-private-ip>:3000` |
 
-7. **Put `admin-` and `grafana-` behind Cloudflare Access.** The panel holds the
-   docker socket and can read your Hetzner token, so its password is one factor
-   and Access is the second. **Exempt `/hooks/deploy/*`** or give CI an Access
-   service token, or your pipeline will be blocked before it reaches the panel.
-8. **Prove it works** — do not skip this:
+7. **Put both behind Cloudflare Access.** The panel holds the docker socket and
+   can read your Hetzner token, so its password is one factor and Access is the
+   second. **Exempt `/hooks/deploy/*`** or give CI an Access service token, or
+   your pipeline will be blocked before it reaches the panel.
+8. **Create your components.** In the panel: **Components → New app**, or on the
+   master:
+   ```bash
+   component create redis cache
+   component deploy cache
+   component create app api --image ghcr.io/you/app:sha-abc1234 --port 8080
+   component env api set REDIS_URL="$(component show cache | grep target)"   # your call
+   component deploy api
+   ```
+   Then add the app's hostname in Cloudflare, pointing at the local target the
+   panel shows on its page (`http://api_app:8080`).
+9. **Prove it works** — do not skip this:
    ```bash
    /opt/infra/bin/smoke-test --deep
    ```
    It checks the things that fail silently: whether the panel can actually reach
-   docker, whether it has registry credentials, whether the Redis password the
-   server enforces matches the one the app was given, whether your alert rules
-   loaded. Fix anything red before trusting the cluster.
-9. **Wire up CI.** Open the panel → **Apps → API → Deployments**, copy the
-   endpoint and token into your app repo's secrets (`PANEL_URL`,
-   `DEPLOY_TOKEN_PROD`, `DEPLOY_TOKEN_STAGING`), and copy
-   `docs/github-actions-deploy.yml` into `.github/workflows/`.
-10. **Push a commit** and watch it deploy.
+   docker, whether it has registry credentials, whether the password a Redis
+   enforces is the one the panel shows you, whether a redeploy preserved the
+   image and the replica count, whether your alert rules loaded. Fix anything red
+   before trusting the cluster.
+10. **Turn on autoscaling** for the components that should have it, on their
+    Settings tab. Set the SLO from a real latency distribution.
+11. **Wire up CI.** Open the component → **Deployments**, copy the endpoint and
+    token into your app repo's secrets, and copy `docs/github-actions-deploy.yml`
+    into `.github/workflows/`. One token per component.
+12. **Push a commit** and watch it deploy.
 
-From here on you should not need to SSH in. Configuration, credentials,
-redeploys, the firewall and the scaling policy are all in the panel; the
-`bin/` scripts are the same paths it uses, if you prefer a terminal.
+To prove the Hetzner token and the worker cloud-init before you need them,
+temporarily set `MIN_WORKERS=2` in the panel (Settings → Fleet), watch a worker
+join and your components move onto it, then set it back to 1 and watch them hand
+back and the server get deleted.
+
+From here on you should not need to SSH in. Components, configuration,
+credentials, redeploys, the firewall and the fleet policy are all in the panel;
+the `bin/` scripts are the same paths it uses, if you prefer a terminal.

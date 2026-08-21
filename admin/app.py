@@ -2,11 +2,15 @@
 Swarm admin panel.
 
 One Flask app, pinned to the manager, with the docker socket mounted. It is a
-root-equivalent console: it can redeploy production and read every application
-credential. Everything mutating goes through POST + CSRF, and every deploy goes
-through bin/app-env or bin/stack-deploy rather than calling `docker stack
-deploy` directly — those two are what preserve the autoscaler's replica count
-and CI's deployed image.
+root-equivalent console: it can deploy anything and read every credential in the
+cluster. Everything mutating goes through POST + CSRF.
+
+The routes are generic. `/components/<name>` renders whatever tabs that
+component declares, `/components/<name>/action` dispatches whatever verbs it
+offers, and the create and settings forms are built from its `fields()`. Adding
+a component type touches none of this file — which is the difference from the
+version this replaces, where a dozen routes branched on `key == "app"`,
+`credentials == "redis"` and `env in ("prod", "staging")`.
 
 The one exception to "everything needs a session" is the CI deploy webhook,
 which is bearer-token authenticated instead. See deploy_hook().
@@ -19,11 +23,13 @@ from flask import (Flask, abort, flash, jsonify, redirect, render_template,
 
 import auth
 import catalog
+import components
 import envstore
 import hostops
 import registry
 import settings_def
 import state
+from components import store as component_store
 
 PREVIEW = os.environ.get("PREVIEW") == "1"
 data = __import__("fixtures" if PREVIEW else "swarm")
@@ -57,90 +63,47 @@ app.config.update(
 
 NAV = [
     {"key": "overview", "label": "Overview", "endpoint": "overview"},
-    {"key": "apps", "label": "Apps", "endpoint": "apps"},
+    {"key": "components", "label": "Components", "endpoint": "components_index"},
     {"key": "cluster", "label": "Cluster", "endpoint": "cluster"},
     {"key": "autoscaler", "label": "Autoscaler", "endpoint": "autoscaler"},
     {"key": "alerts", "label": "Alerts", "endpoint": "alerts"},
     {"key": "settings", "label": "Settings", "endpoint": "settings"},
 ]
 
-TABS = ["overview", "environment", "credentials", "deployments", "swarm", "logs"]
-
 
 # --- derived views ---------------------------------------------------------
 
-def _pick(value, env_name):
-    """Catalog fields may be a scalar or a per-environment mapping."""
-    if isinstance(value, dict):
-        return value.get(env_name)
-    return value
-
-
-def ui_access(app_entry, env_name):
+def system_access(entry):
     """
-    Where this service's own UI actually lives. Returns None when it has none.
+    Where an infrastructure service's own UI lives. None when it has none.
 
-    `reachable` is the honest bit: an internal service is on the overlay
-    network only, so linking to it would hand you a URL that times out. We
-    show the address and say it is not published instead.
+    `reachable` is the honest bit: an internal service is on the overlay network
+    only, so linking to it would hand you a URL that times out. We show the
+    address and say it is not published instead.
     """
-    ui = app_entry.get("ui")
+    ui = entry.get("ui")
     if not ui:
         return None
-    kind = ui["kind"]
-    if kind == catalog.UI_TUNNEL:
-        prefix = _pick(ui.get("prefix", {}), env_name) or ""
-        return {"url": f"https://{prefix}{APP_NAME}.{ROOT_DOMAIN}", "reachable": True,
-                "note": "Public hostname on the Cloudflare tunnel."}
-    if kind == catalog.UI_HOST:
-        port = _pick(ui.get("port"), env_name)
-        return {"url": f"http://{data.master_ip()}:{port}", "reachable": True,
+    if ui["kind"] == catalog.UI_TUNNEL:
+        return {"url": f"https://{ui.get('prefix', '')}{APP_NAME}.{ROOT_DOMAIN}",
+                "reachable": True, "note": "Public hostname on the Cloudflare tunnel."}
+    if ui["kind"] == catalog.UI_HOST:
+        return {"url": f"http://{data.master_ip()}:{ui['port']}", "reachable": True,
                 "note": "Published on the master's private address. Reachable from "
                         "inside the private network, or over your VPN."}
-    host = _pick(ui.get("host"), env_name)
-    port = _pick(ui.get("port"), env_name)
-    return {"url": f"http://{host}:{port}{ui.get('path', '')}", "reachable": False,
+    return {"url": f"http://{ui['host']}:{ui['port']}{ui.get('path', '')}",
+            "reachable": False,
             "note": "Overlay network only — this address resolves inside the cluster, "
                     "not from your machine. Reach it with an SSH tunnel to the master."}
 
 
-def redis_credentials(env_name):
-    """Internal and external connection details for one Redis."""
-    pairs = {p["key"]: p["value"] for p in envstore.load(env_name)} if not PREVIEW else \
-            {p["key"]: p["value"] for p in _preview_pairs(env_name)}
-    password = pairs.get("REDIS_PASSWORD", "")
-    external_port = pairs.get("REDIS_EXTERNAL_PORT", "")
-    host = f"redis-{env_name}"
-    internal = f"redis://default:{password}@{host}:6379"
-    external = (f"redis://default:{password}@{data.master_ip()}:{external_port}"
-                if external_port else "")
-    return {
-        "env": env_name,
-        "password": password,
-        "internal_host": host,
-        "internal_port": "6379",
-        "internal_url": internal,
-        "external_port": external_port,
-        "external_host": data.master_ip(),
-        "external_url": external,
-    }
-
-
-def _preview_pairs(env_name):
-    svc = data.service(f"app_api-{env_name}")
-    extra = {"prod": {"REDIS_EXTERNAL_PORT": "46379"}, "staging": {}}.get(env_name, {})
-    merged = {**{k: v for k, v in svc["env"].items() if k not in envstore.RESERVED}, **extra}
-    return [{"key": k, "value": v, "sensitive": bool(envstore.SENSITIVE.search(k))}
-            for k, v in merged.items()]
-
-
-def webhook_for(app_key, env_name):
+def webhook_for(name):
     base = f"https://admin-{APP_NAME}.{ROOT_DOMAIN}"
-    token = "preview-token-not-real-000000" if PREVIEW else state.token_for(app_key, env_name)
+    token = "preview-token-not-real-000000" if PREVIEW else state.token_for(name)
     return {
-        "url": f"{base}/hooks/deploy/{app_key}/{env_name}",
+        "url": f"{base}/hooks/deploy/{name}",
         "token": token,
-        "curl": (f"curl -fsS -X POST {base}/hooks/deploy/{app_key}/{env_name} \\\n"
+        "curl": (f"curl -fsS -X POST {base}/hooks/deploy/{name} \\\n"
                  f"  -H 'X-Deploy-Token: {token}' \\\n"
                  f"  -H 'Content-Type: application/json' \\\n"
                  f"  -d '{{\"image\": \"ghcr.io/you/app:sha-'\"$GITHUB_SHA\"'\"}}'"),
@@ -151,13 +114,11 @@ def _section_href(item):
     return url_for(next(n["endpoint"] for n in NAV if n["key"] == item["key"]))
 
 
-def _app_href(key, env=None, tab=None):
-    kwargs = {"key": key}
-    if env:
-        kwargs["env"] = env
+def _component_href(name, tab=None):
+    kwargs = {"name": name}
     if tab:
         kwargs["tab"] = tab
-    return url_for("app_detail", **kwargs)
+    return url_for("component_detail", **kwargs)
 
 
 @app.context_processor
@@ -171,15 +132,22 @@ def _globals():
         "root_domain": ROOT_DOMAIN,
         "user": auth.current_user(),
         "preview": PREVIEW,
+        "types": components.TYPES,
+        "system_access": system_access,
         "section_href": _section_href,
-        "app_href": _app_href,
-        "action_href": lambda key: url_for("app_action", key=key),
-        "env_href": lambda key: url_for("save_env", key=key),
-        "creds_href": lambda key: url_for("save_credentials", key=key),
-        "token_href": lambda key: url_for("rotate_token", key=key),
+        "component_href": _component_href,
+        "action_href": lambda name: url_for("component_action", name=name),
+        "env_href": lambda name: url_for("save_component_env", name=name),
+        "spec_href": lambda name: url_for("save_component_spec", name=name),
+        "delete_href": lambda name: url_for("delete_component", name=name),
+        "token_href": lambda name: url_for("rotate_token", name=name),
+        "firewall_href": lambda name: url_for("firewall", name=name),
+        "new_href": lambda type_name: url_for("component_new", type=type_name),
+        "create_href": lambda: url_for("component_create"),
         "settings_href": lambda: url_for("save_settings"),
-        "firewall_href": lambda key: url_for("firewall", key=key),
         "registry_href": lambda: url_for("save_registry"),
+        "stack_href": lambda: url_for("deploy_system"),
+        "logout_href": lambda: url_for("logout"),
     }
 
 
@@ -191,6 +159,13 @@ def _require_csrf():
 def _no_writes_in_preview():
     if PREVIEW:
         abort(400, "This is a preview build with dummy data — nothing is written.")
+
+
+def _load(name):
+    try:
+        return components.load(name)
+    except components.ComponentError:
+        abort(404)
 
 
 # --- auth ------------------------------------------------------------------
@@ -219,6 +194,10 @@ def login():
 
 @app.post("/logout")
 def logout():
+    # CSRF-checked like every other POST. Signing someone out is a small harm,
+    # but it is still a state change a third-party page should not be able to
+    # trigger, and "it is only logout" is how the exception list starts.
+    _require_csrf()
     session.clear()
     return redirect(url_for("login"))
 
@@ -230,28 +209,30 @@ def healthz():
 
 # --- CI deploy webhook -----------------------------------------------------
 
-@app.post("/hooks/deploy/<key>/<env_name>")
-def deploy_hook(key, env_name):
+@app.post("/hooks/deploy/<name>")
+def deploy_hook(name):
     """
     Deploy an image, called by your build pipeline. Token-authenticated, so it
     is the one route that does not need a session.
 
     The graceful part is not implemented here — it is the service's own
-    update_config (start-first, monitor 90s, failure_action rollback). This
-    endpoint waits for that to converge and returns 502 when Swarm rolled the
-    update back, so a bad image fails the pipeline instead of quietly reverting.
+    update_config (start-first, monitor, failure_action rollback). This endpoint
+    waits for that to converge and returns 502 when Swarm rolled the update
+    back, so a bad image fails the pipeline instead of quietly reverting.
 
     If you put the panel behind Cloudflare Access, exempt this path or give CI
-    an Access service token — otherwise Access will block the request before it
-    ever reaches Flask.
+    an Access service token — otherwise Access blocks the request before it ever
+    reaches Flask.
     """
-    entry = catalog.BY_KEY.get(key)
-    if not entry or not entry.get("deployments") or env_name not in entry["environments"]:
+    try:
+        component = components.load(name)
+    except components.ComponentError:
+        abort(404)
+    if component.TYPE != "app":
         abort(404)
 
-    presented = (request.headers.get("X-Deploy-Token")
-                 or request.args.get("token", ""))
-    if not (PREVIEW or state.verify_token(key, env_name, presented)):
+    presented = request.headers.get("X-Deploy-Token") or request.args.get("token", "")
+    if not (PREVIEW or state.verify_token(name, presented)):
         # Deliberately terse: a token probe learns nothing from the response.
         return jsonify(error="unauthorized"), 401
 
@@ -261,12 +242,12 @@ def deploy_hook(key, env_name):
     if problem:
         return jsonify(error=problem), 400
 
-    service_name = entry["environments"][env_name]
-    ok, output = data.deploy_image(service_name, image)
+    ok, output = data.deploy_image(component.service, image)
     if not PREVIEW:
-        state.record(key, env_name, image, "ci", ok, output,
+        state.record(name, image, "ci", ok, output,
                      actor=request.headers.get("User-Agent", "")[:60])
-    return jsonify(ok=ok, service=service_name, image=image, detail=output), (200 if ok else 502)
+    return jsonify(ok=ok, component=name, service=component.service,
+                   image=image, detail=output), (200 if ok else 502)
 
 
 # --- pages -----------------------------------------------------------------
@@ -275,8 +256,8 @@ def deploy_hook(key, env_name):
 @auth.login_required
 def overview():
     return render_template("page_overview.html", section="overview",
-                           s=data.summary(), apps=data.apps(), alerts=data.alerts(),
-                           topo=data.topology())
+                           s=data.summary(), views=data.component_views(),
+                           alerts=data.alerts(), topo=data.topology())
 
 
 @app.get("/api/topology")
@@ -286,64 +267,129 @@ def api_topology():
     Live feed for the cluster map on the Overview page.
 
     Read-only and session-authenticated like every other page — it exposes
-    service names and task counts, which is the same thing the page already
-    renders, so there is nothing extra to leak. The page renders server-side
-    first and this only refreshes it, so the view still works with JS off.
+    service names and task counts, the same thing the page already renders, so
+    there is nothing extra to leak. The page renders server-side first and this
+    only refreshes it, so the view still works with JS off.
     """
     return jsonify(data.topology())
 
 
-@app.get("/apps")
+# --- components ------------------------------------------------------------
+
+@app.get("/components")
 @auth.login_required
-def apps():
+def components_index():
+    views = data.component_views()
     grouped = {}
-    for a in data.apps():
-        grouped.setdefault(a["category"], []).append(a)
-    ordered = [(c, grouped[c]) for c in catalog.CATEGORIES if c in grouped]
-    return render_template("page_apps.html", section="apps", grouped=ordered)
+    for view in views:
+        grouped.setdefault(view["category"], []).append(view)
+    order = ["Application", "Data"]
+    ordered = ([(c, grouped[c]) for c in order if c in grouped]
+               + [(c, v) for c, v in grouped.items() if c not in order])
+    return render_template("page_components.html", section="components",
+                           grouped=ordered, views=views)
 
 
-@app.get("/apps/<key>")
+@app.get("/components/new")
 @auth.login_required
-def app_detail(key):
-    a = data.app(key)
-    if not a:
+def component_new():
+    type_name = request.args.get("type", "app")
+    if type_name not in components.TYPES:
         abort(404)
-    env_name = request.args.get("env") or next(iter(a["environments"]))
-    if env_name not in a["environments"]:
-        abort(404)
-    svc = a["envs"][env_name]
-    editable = bool(a.get("editable")) and env_name in ("prod", "staging")
-    creds = redis_credentials(env_name) if a.get("credentials") == "redis" else None
-    deployable = bool(a.get("deployments"))
-
-    pairs = None
-    if editable:
-        pairs = _preview_pairs(env_name) if PREVIEW else envstore.load(env_name)
-
-    tab = request.args.get("tab", "overview")
-    if tab not in TABS:
-        tab = "overview"
-
-    # Every tab panel is rendered so switching is instant and shareable; `tab`
-    # only decides which one starts visible.
-    return render_template(
-        "page_app_detail.html", section="apps", app_entry=a, env_name=env_name,
-        svc=svc, tab=tab, editable=editable, pairs=pairs, creds=creds,
-        access=ui_access(a, env_name),
-        deployments=data.history(key, env_name) if deployable else None,
-        webhook=webhook_for(key, env_name) if deployable else None,
-        firewall=_firewall_state(creds),
-        registries=data.registry_logins() if deployable else None,
-        logs=data.logs(svc["name"]),
-    )
+    cls = components.TYPES[type_name]
+    return render_template("page_component_new.html", section="components",
+                           cls=cls, type_name=type_name, values={}, problems=[], name="")
 
 
-def _firewall_state(creds):
+@app.post("/components")
+@auth.login_required
+def component_create():
+    _require_csrf()
+    _no_writes_in_preview()
+    type_name = request.form.get("type", "")
+    if type_name not in components.TYPES:
+        abort(400, "Unknown component type.")
+    name = request.form.get("name", "").strip()
+    cls = components.TYPES[type_name]
+
+    try:
+        component, problems = components.create(type_name, name, request.form)
+    except components.ComponentError as exc:
+        problems, component = [str(exc)], None
+
+    if problems:
+        # Re-render with what they typed rather than redirecting and losing it.
+        return render_template("page_component_new.html", section="components",
+                               cls=cls, type_name=type_name,
+                               values=request.form, problems=problems, name=name), 400
+
+    if request.form.get("deploy_now"):
+        ok, output = component.deploy()
+        state.record(name, component.spec.get("image", ""), "panel", ok, output,
+                     actor=auth.current_user() or "")
+        flash(f"Created {name} and deployed it." if ok
+              else f"Created {name}, but the deploy failed: {output}",
+              "ok" if ok else "bad")
+    else:
+        flash(f"Created {name}. It is not deployed yet.", "ok")
+    return redirect(_component_href(name))
+
+
+@app.get("/components/<name>")
+@auth.login_required
+def component_detail(name):
+    component = _load(name)
+    view = data.component_view(component)
+    tabs = component.tabs()
+    tab = request.args.get("tab", tabs[0][0])
+    if tab not in [t[0] for t in tabs]:
+        tab = tabs[0][0]
+
+    # Only the open tab's expensive data is fetched. `logs` shells out with a
+    # 30s timeout and the firewall probe is an SSH round trip with another;
+    # doing both on every request made the Overview tab wait for two things it
+    # does not render.
+    extra = {}
+    if tab == "logs":
+        extra["logs"] = data.logs(component.service)
+    if tab == "deployments":
+        extra["webhook"] = webhook_for(name)
+        extra["deployments"] = data.history(name)
+        extra["registries"] = data.registry_logins()
+    if tab == "credentials" and component.TYPE == "redis":
+        extra["creds"] = _redis_credentials(component)
+        extra["firewall"] = _firewall_state(component)
+
+    return render_template("page_component_detail.html", section="components",
+                           component=component, view=view, tabs=tabs, tab=tab,
+                           fields=type(component).fields(),
+                           env_pairs=component_store.read_env(name), **extra)
+
+
+def _redis_credentials(component):
+    """
+    Built once, in Python, and rendered from that.
+
+    The old page assembled the internal URL in Jinja and the external one here,
+    so the two could disagree by construction — and one of them was a value
+    computed and never used.
+    """
+    port = component.spec.get("external_port")
+    master = data.master_ip()
+    return {
+        "password": component.password(),
+        "internal_host": component.service,
+        "internal_port": "6379",
+        "internal_url": component.connection_url(),
+        "external_port": port,
+        "external_host": master,
+        "external_url": component.connection_url(master, port) if port else "",
+    }
+
+
+def _firewall_state(component):
     """Whether the master's firewall currently lets the published port through."""
-    if not creds:
-        return None
-    port = creds.get("external_port")
+    port = component.spec.get("external_port")
     return {
         "available": True if PREVIEW else hostops.available(),
         "port": port,
@@ -351,143 +397,132 @@ def _firewall_state(creds):
     }
 
 
-@app.post("/apps/<key>/env")
+@app.post("/components/<name>/env")
 @auth.login_required
-def save_env(key):
+def save_component_env(name):
     _require_csrf()
     _no_writes_in_preview()
-    a = data.app(key)
-    if not a or not a.get("editable"):
-        abort(404)
-    env_name = request.form.get("env", "")
-    if env_name not in a["environments"]:
-        abort(400, "Unknown environment.")
+    component = _load(name)
 
-    pairs = [{"key": k.strip(), "value": v}
-             for k, v in zip(request.form.getlist("key"), request.form.getlist("value"))
-             if k.strip()]
-    problems = envstore.validate(pairs)
+    # Two editors, one form. The client disables whichever one is not on screen,
+    # so exactly one of them is submitted and there is no question of which view
+    # wins — the one you were looking at when you pressed save does. With JS off
+    # the textarea is disabled in the markup, so the rows are what arrives.
+    if "bulk" in request.form:
+        pairs, problems = component_store.parse_bulk(request.form.get("bulk", ""))
+    else:
+        pairs = [{"key": k.strip(), "value": v}
+                 for k, v in zip(request.form.getlist("key"), request.form.getlist("value"))
+                 if k.strip()]
+        problems = []
+    problems += component_store.validate_env(pairs)
     if problems:
-        for p in problems:
-            flash(p, "bad")
-        return redirect(_app_href(key, env_name, "environment"))
+        for problem in problems:
+            flash(problem, "bad")
+        return redirect(_component_href(name, "environment"))
 
-    envstore.save(env_name, pairs)
-    ok, output = envstore.deploy()
-    state.record(key, env_name, a["envs"][env_name]["image"], "panel", ok,
-                 output, actor=auth.current_user() or "")
-    flash("Configuration saved and deployed." if ok
+    component_store.write_env(name, pairs, header=[f"# Environment for {name}.", ""])
+    ok, output = component.deploy()
+    state.record(name, component.live_image() or component.spec.get("image", ""),
+                 "panel", ok, output, actor=auth.current_user() or "")
+    flash("Environment saved and deployed." if ok
           else f"Saved, but the deploy failed: {output}", "ok" if ok else "bad")
-    return redirect(_app_href(key, env_name, "environment"))
+    return redirect(_component_href(name, "environment"))
 
 
-@app.post("/apps/<key>/credentials")
+@app.post("/components/<name>/settings")
 @auth.login_required
-def save_credentials(key):
-    """Redis password and optional external port, both stored in app-<env>.env."""
+def save_component_spec(name):
     _require_csrf()
     _no_writes_in_preview()
-    a = data.app(key)
-    if not a or a.get("credentials") != "redis":
-        abort(404)
-    env_name = request.form.get("env", "")
-    if env_name not in ("prod", "staging"):
-        abort(400, "Unknown environment.")
+    _load(name)
+    component, problems = components.update(name, request.form)
+    if problems:
+        for problem in problems:
+            flash(problem, "bad")
+        return redirect(_component_href(name, "settings"))
 
-    password = request.form.get("password", "").strip()
-    port = request.form.get("external_port", "").strip()
-    if not password:
-        flash("The Redis password cannot be empty.", "bad")
-        return redirect(_app_href(key, env_name, "credentials"))
-    if port and (not port.isdigit() or not 1 <= int(port) <= 65535):
-        flash(f"{port!r} is not a valid port number.", "bad")
-        return redirect(_app_href(key, env_name, "credentials"))
-
-    pairs = [p for p in envstore.load(env_name)
-             if p["key"] not in ("REDIS_PASSWORD", "REDIS_EXTERNAL_PORT")]
-    pairs.append({"key": "REDIS_PASSWORD", "value": password})
-    if port:
-        pairs.append({"key": "REDIS_EXTERNAL_PORT", "value": port})
-
-    envstore.save(env_name, pairs)
-    ok, output = envstore.deploy()
-    flash("Credentials saved. Redis and every client were redeployed together."
-          if ok else f"Saved, but the deploy failed: {output}", "ok" if ok else "bad")
-    return redirect(_app_href(key, env_name, "credentials"))
+    ok, output = component.deploy()
+    flash("Settings saved and deployed." if ok
+          else f"Saved, but the deploy failed: {output}", "ok" if ok else "bad")
+    return redirect(_component_href(name, "settings"))
 
 
-@app.post("/apps/<key>/token")
+@app.post("/components/<name>/action")
 @auth.login_required
-def rotate_token(key):
+def component_action(name):
     _require_csrf()
     _no_writes_in_preview()
-    env_name = request.form.get("env", "")
-    entry = catalog.BY_KEY.get(key)
-    if not entry or env_name not in entry.get("environments", {}):
-        abort(404)
-    state.rotate_token(key, env_name)
-    flash(f"New deploy token issued for {env_name}. Update your pipeline — the old "
-          f"one stops working immediately.", "ok")
-    return redirect(_app_href(key, env_name, "deployments"))
+    component = _load(name)
+    verb = request.form.get("action", "")
 
-
-@app.post("/apps/<key>/action")
-@auth.login_required
-def app_action(key):
-    _require_csrf()
-    _no_writes_in_preview()
-    a = data.app(key)
-    if not a:
-        abort(404)
-    env_name = request.form.get("env", next(iter(a["environments"])))
-    action = request.form.get("action", "")
-    svc_name = a["environments"].get(env_name)
-    if not svc_name:
-        abort(400, "Unknown environment.")
-
-    if action == "redeploy":
-        ok, out = data.redeploy_stack()
-    elif action == "restart":
-        ok, out = data.restart(svc_name)
-    elif action == "rollback":
-        ok, out = data.rollback(svc_name)
-    elif action == "deploy-image":
+    # Deploying a specific image is the one action that carries an argument, so
+    # it is handled here rather than in the component's own verb table.
+    if verb == "deploy-image":
         image = request.form.get("image", "").strip()
         problem = state.validate_image(image)
         if problem:
             flash(problem, "bad")
-            return redirect(_app_href(key, env_name, "deployments"))
-        ok, out = data.deploy_image(svc_name, image)
-        state.record(key, env_name, image, "panel", ok, out, actor=auth.current_user() or "")
-    else:
+            return redirect(_component_href(name, "deployments"))
+        ok, output = data.deploy_image(component.service, image)
+        state.record(name, image, "panel", ok, output, actor=auth.current_user() or "")
+        flash(output or ("Deployed." if ok else "Failed."), "ok" if ok else "bad")
+        return redirect(_component_href(name, "deployments"))
+
+    handler = component.actions().get(verb)
+    if handler is None or handler[0] is None:
         abort(400, "Unknown action.")
-    flash(out or ("Done." if ok else "Failed."), "ok" if ok else "bad")
-    return redirect(_app_href(key, env_name))
+    ok, output = handler[0]()
+    flash(output or ("Done." if ok else "Failed."), "ok" if ok else "bad")
+    return redirect(_component_href(name))
 
 
-@app.post("/apps/<key>/firewall")
+@app.post("/components/<name>/delete")
 @auth.login_required
-def firewall(key):
+def delete_component(name):
+    _require_csrf()
+    _no_writes_in_preview()
+    component = _load(name)
+    # Typed confirmation, because this removes a stack and its spec, and the
+    # difference between `api` and `api-staging` is eight characters.
+    if request.form.get("confirm", "").strip() != name:
+        flash(f"Type {name} exactly to confirm the delete.", "bad")
+        return redirect(_component_href(name, "settings"))
+    ok, output = component.remove()
+    state.forget_token(name)
+    flash(output or (f"Removed {name}." if ok else "Failed."), "ok" if ok else "bad")
+    return redirect(url_for("components_index") if ok else _component_href(name))
+
+
+@app.post("/components/<name>/token")
+@auth.login_required
+def rotate_token(name):
+    _require_csrf()
+    _no_writes_in_preview()
+    _load(name)
+    state.rotate_token(name)
+    flash(f"New deploy token issued for {name}. Update your pipeline — the old "
+          f"one stops working immediately.", "ok")
+    return redirect(_component_href(name, "deployments"))
+
+
+@app.post("/components/<name>/firewall")
+@auth.login_required
+def firewall(name):
     """Open or close a port on the master, over the restricted SSH channel."""
     _require_csrf()
     _no_writes_in_preview()
-    a = data.app(key)
-    if not a or a.get("credentials") != "redis":
-        abort(404)
-    env_name = request.form.get("env", "")
-    if env_name not in ("prod", "staging"):
-        abort(400, "Unknown environment.")
+    _load(name)
     port = request.form.get("port", "").strip()
     action = request.form.get("firewall_action", "")
-
     if action == "open":
-        ok, out = hostops.open_port(port)
+        ok, output = hostops.open_port(port)
     elif action == "close":
-        ok, out = hostops.close_port(port)
+        ok, output = hostops.close_port(port)
     else:
         abort(400, "Unknown action.")
-    flash(out, "ok" if ok else "bad")
-    return redirect(_app_href(key, env_name, "credentials"))
+    flash(output, "ok" if ok else "bad")
+    return redirect(_component_href(name, "credentials"))
 
 
 @app.post("/registry")
@@ -502,9 +537,9 @@ def save_registry():
     _require_csrf()
     _no_writes_in_preview()
     if request.form.get("registry_action") == "logout":
-        ok, out = registry.logout(request.form.get("registry", "").strip())
+        ok, output = registry.logout(request.form.get("registry", "").strip())
     else:
-        ok, out = registry.login(
+        ok, output = registry.login(
             request.form.get("registry", "").strip(),
             request.form.get("username", "").strip(),
             request.form.get("password", ""),
@@ -513,15 +548,34 @@ def save_registry():
         # synced there (we hold it only long enough to pipe into docker login),
         # so syncing just the username would leave a half-true pair that looks
         # authoritative. infra.env's GHCR_* are first-boot seeds; this is live.
-    flash(out, "ok" if ok else "bad")
-    return redirect(_app_href("app", request.form.get("env", "prod"), "deployments"))
+    flash(output, "ok" if ok else "bad")
+    back = request.form.get("component", "")
+    return redirect(_component_href(back, "deployments") if back
+                    else url_for("components_index"))
 
+
+# --- cluster ---------------------------------------------------------------
 
 @app.get("/cluster")
 @auth.login_required
 def cluster():
     return render_template("page_cluster.html", section="cluster",
-                           nodes=data.nodes(), s=data.summary())
+                           nodes=data.nodes(), s=data.summary(),
+                           system=data.system_view())
+
+
+@app.post("/cluster/stack")
+@auth.login_required
+def deploy_system():
+    """Redeploy an infrastructure stack. Components deploy themselves."""
+    _require_csrf()
+    _no_writes_in_preview()
+    stack = request.form.get("stack", "")
+    if stack not in catalog.SYSTEM_STACKS:
+        abort(400, "Not an infrastructure stack.")
+    ok, output = data.deploy_system_stack(stack)
+    flash(output or (f"{stack} redeployed." if ok else "Failed."), "ok" if ok else "bad")
+    return redirect(url_for("cluster"))
 
 
 @app.get("/autoscaler")
@@ -537,6 +591,8 @@ def autoscaler():
 def alerts():
     return render_template("page_alerts.html", section="alerts", alerts=data.alerts())
 
+
+# --- settings --------------------------------------------------------------
 
 @app.get("/settings")
 @auth.login_required
@@ -574,9 +630,9 @@ def save_settings():
     messages = [f"Saved {', '.join(changed)}."]
     all_ok = True
     for stack in stacks:
-        ok, out = envstore.deploy_stack(stack)
+        ok, output = envstore.deploy_stack(stack)
         all_ok = all_ok and ok
-        messages.append(f"{stack}: {'redeployed' if ok else 'deploy failed — ' + out}")
+        messages.append(f"{stack}: {'redeployed' if ok else 'deploy failed — ' + output}")
     if not stacks:
         messages.append("No redeploy needed for these values.")
     flash(" ".join(messages), "ok" if all_ok else "bad")
@@ -587,7 +643,7 @@ def save_settings():
 #: signals they govern, and Settings links across instead of rendering a second
 #: copy of the same form — two forms posting the same keys is a page where the
 #: value you are looking at may already be stale.
-AUTOSCALER_GROUPS = ["Scaling"]
+AUTOSCALER_GROUPS = ["Fleet"]
 
 
 def _settings_groups(only=None, skip=None):
@@ -599,13 +655,13 @@ def _settings_groups(only=None, skip=None):
         if skip and title in skip:
             continue
         rows = []
-        for k in keys:
-            if k not in values:
+        for key in keys:
+            if key not in values:
                 continue
-            mode, stack, why = settings_def.describe(k)
+            mode, stack, why = settings_def.describe(key)
             rows.append({
-                "key": k, "value": values[k], "mode": mode, "stack": stack, "why": why,
-                "masked": any(m in k for m in settings_def.MASK_HINT),
+                "key": key, "value": values[key], "mode": mode, "stack": stack, "why": why,
+                "masked": any(m in key for m in settings_def.MASK_HINT),
                 "editable": mode == settings_def.EDIT,
             })
         if rows:
@@ -625,26 +681,17 @@ PREVIEW_INFRA = {
     "WORKER_IMAGE": "ubuntu-24.04", "WORKER_TYPE": "cpx21",
     "HCLOUD_TOKEN": "hcl_9f2bc41d77aa0e35", "GHCR_USER": "acme-bot",
     "GHCR_TOKEN": "ghp_a71ccf20e9bb14d0",
-    "APP_IMAGE_PROD": "ghcr.io/acme/aichat-api:sha-9f3ac21",
-    "APP_IMAGE_STAGING": "ghcr.io/acme/aichat-api:sha-c40e8b7",
-    "SLO_P95_MS": "500", "SCALE_UP_P95_RATIO": "0.8", "SCALE_DOWN_P95_RATIO": "0.4",
-    "SCALE_UP_CPU": "70", "SCALE_DOWN_CPU": "30", "NODE_PRESSURE_PCT": "80",
-    "MIN_REPLICAS": "2", "MAX_REPLICAS": "12",
-    "MIN_WORKERS": "1", "MAX_WORKERS": "6", "SUSTAIN_UP_SECONDS": "90",
-    "SUSTAIN_DOWN_SECONDS": "900", "SCALE_UP_FACTOR": "0.5",
+    "NODE_PRESSURE_PCT": "80", "MIN_WORKERS": "1", "MAX_WORKERS": "6",
     "COOLDOWN_UP_SECONDS": "300", "COOLDOWN_DOWN_SECONDS": "900",
-    "REPLICA_COOLDOWN_SECONDS": "60", "SCHEDULE_FLOOR": "",
-    "DRY_RUN": "false", "APP_CPU_LIMIT": "1.0", "APP_SERVICE": "app_api-prod",
-    "APP_SERVICE_STAGING": "app_api-staging",
-    "APP_PORT": "8080", "APP_METRICS_PATH": "/metrics",
+    "SCHEDULE_FLOOR": "", "DRY_RUN": "false",
     "ADMIN_USER": "admin", "ADMIN_PASSWORD": "hunter2hunter2",
     "GRAFANA_ADMIN_USER": "admin", "GRAFANA_ADMIN_PASSWORD": "s3cr3t-grafana",
     "CF_TUNNEL_TOKEN": "eyJhIjoiN2Y0MGQ5YTIi", "CI_SSH_PUBLIC_KEY": "ssh-ed25519 AAAAC3Nza...",
     "ALERT_WEBHOOK_URL": "https://hooks.slack.com/services/T0/B0/xY",
-    "MONGO_URI_PROD": "mongodb+srv://appuser:s3cr3t@cluster0.mongodb.net/appdb",
-    "MONGO_URI_STAGING": "mongodb+srv://appuser:s3cr3t@cluster0.mongodb.net/appdb_staging",
-    "REDIS_PASSWORD_PROD": "8f2b91c4de77a0135be2", "REDIS_PASSWORD_STAGING": "b71ce0aa2f9384d51c60",
 }
+# Nothing application-shaped here: no image, no port, no SLO, no replica counts.
+# The fixture stands in for the real infra.env, so an extra key would make the
+# preview show a Settings page the live panel cannot show.
 
 
 if __name__ == "__main__":

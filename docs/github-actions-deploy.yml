@@ -3,8 +3,8 @@
 # .github/workflows/deploy.yml — it does not belong in the infra repo.
 #
 # The contract it targets:
-#   POST https://admin-<app>.<root>/hooks/deploy/app/<prod|staging>
-#        X-Deploy-Token: <token from the panel's Deployments tab>
+#   POST https://admin-<app>.<root>/hooks/deploy/<component>
+#        X-Deploy-Token: <token from that component's Deployments tab>
 #        {"image": "<immutable reference>"}
 #
 # The endpoint waits for Swarm to converge and answers 502 if the update rolled
@@ -91,11 +91,18 @@ jobs:
           IMAGE: ${{ needs.build.outputs.image }}
           ENVIRONMENT: ${{ needs.build.outputs.environment }}
           PANEL_URL: ${{ secrets.PANEL_URL }}          # https://admin-<app>.<root>
-          TOKEN: ${{ secrets.DEPLOY_TOKEN_PROD }}      # see note on per-env tokens
+          # One component, one token. If you run a staging component too, it is
+          # a separate component with a separate token — which is also the blast
+          # radius you want, since a leaked staging token cannot reach prod.
+          COMPONENT: ${{ vars.COMPONENT || 'api' }}
+          COMPONENT_STAGING: ${{ vars.COMPONENT_STAGING || 'api-staging' }}
+          TOKEN: ${{ secrets.DEPLOY_TOKEN }}
           TOKEN_STAGING: ${{ secrets.DEPLOY_TOKEN_STAGING }}
         run: |
           set -euo pipefail
-          if [ "$ENVIRONMENT" = "staging" ]; then TOKEN="$TOKEN_STAGING"; fi
+          if [ "$ENVIRONMENT" = "staging" ]; then
+            TOKEN="$TOKEN_STAGING"; COMPONENT="$COMPONENT_STAGING"
+          fi
 
           # Deploying is opt-in. Until the panel secrets exist there is no endpoint to
           # call, and an unset PANEL_URL means "not wired up yet", not "the deploy broke".
@@ -110,7 +117,7 @@ jobs:
             exit 0
           fi
 
-          echo "Deploying $IMAGE to $ENVIRONMENT"
+          echo "Deploying $IMAGE to component $COMPONENT"
 
           # NO `|| true`, NO `|| echo`. The endpoint blocks until Swarm has
           # converged and returns 502 when it rolled the update back; swallowing
@@ -125,7 +132,7 @@ jobs:
           # anything useful.
           HTTP_CODE=$(curl -sS -o response.json -w '%{http_code}' \
             --max-time 900 \
-            -X POST "${PANEL_URL}/hooks/deploy/app/${ENVIRONMENT}" \
+            -X POST "${PANEL_URL}/hooks/deploy/${COMPONENT}" \
             -H "X-Deploy-Token: ${TOKEN}" \
             -H 'Content-Type: application/json' \
             -d "{\"image\": \"${IMAGE}\"}" || true)

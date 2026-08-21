@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+
+# bin/component imports admin/components, which leaves bytecode next to it
+bin/__pycache__/

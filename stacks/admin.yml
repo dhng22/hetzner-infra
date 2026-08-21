@@ -7,7 +7,7 @@ version: "3.8"
 # production, and can read every application credential. Treat it accordingly.
 #
 #   - Pinned to the manager. It needs the manager socket to see services and
-#     nodes, and /opt/infra to run bin/app-env.
+#     nodes, and /opt/infra to read and write component specs.
 #   - Published on the private network only (mode: host on the master), never
 #     on a public interface. Reachable through the Cloudflare tunnel as
 #     admin-<app>.<root>, which is where authentication and Cloudflare Access
@@ -45,7 +45,8 @@ services:
     volumes:
       # The manager socket. This is what makes the panel root-equivalent.
       - /var/run/docker.sock:/var/run/docker.sock
-      # Read-write: the panel edits config/app-*.env and shells out to app-env.
+      # Read-write: the panel writes component specs under components/ and
+      # shells out to bin/component to deploy them.
       - /opt/infra:/opt/infra
       # Read-write: Settings edits the runtime-safe values in place. Writes are
       # atomic (temp file + rename) and only touch keys that already exist, so a

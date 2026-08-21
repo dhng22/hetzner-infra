@@ -1,0 +1,399 @@
+{#
+  One component. Every tab, every button and every form field on this page comes
+  from the component object — `tabs()`, `actions()`, `fields()`. Nothing here
+  knows what an application is, or what a database is.
+#}
+<div class="page-head">
+  <div>
+    <div class="eyebrow"><a href="{{ section_href({'key': 'components'}) }}">Components</a></div>
+    <h1>{{ component.name }}</h1>
+    <p class="hint">{{ component.BLURB }}</p>
+  </div>
+  <div class="head-side">
+    <span class="pill {{ view.tone }}">{{ view.state }}</span>
+    <span class="pill mute plain">{{ component.LABEL }}</span>
+  </div>
+</div>
+
+<div class="tabs" data-tabs role="tablist">
+  {% for key, label in tabs %}
+  <a class="tab" role="tab" data-tab="{{ key }}" href="{{ component_href(component.name, key) }}"
+     aria-selected="{{ 'true' if key == tab else 'false' }}">{{ label }}</a>
+  {% endfor %}
+</div>
+
+<div data-panels>
+
+  <!-- overview -------------------------------------------------------------->
+  <div data-panel="overview" {% if tab != 'overview' %}hidden{% endif %}>
+    <div class="tiles">
+      <div class="tile">
+        <div class="eyebrow">Replicas</div>
+        <div class="v">{{ view.running }}<span class="of">/{{ view.desired }}</span></div>
+      </div>
+      <div class="tile">
+        <div class="eyebrow">State</div>
+        <div class="v"><span class="pill {{ view.tone }}">{{ view.state }}</span></div>
+      </div>
+      <div class="tile">
+        <div class="eyebrow">Created</div>
+        <div class="v small mono">{{ component.created_at or '—' }}</div>
+      </div>
+      <div class="tile">
+        <div class="eyebrow">Updated</div>
+        <div class="v small">{{ view.primary.updated if view.primary else '—' }}</div>
+      </div>
+    </div>
+
+    {% if view.access %}
+    <section class="panel">
+      <div class="panel-head"><h2>How to reach it</h2></div>
+      <div class="panel-body stack">
+        <div class="conn">
+          <code>{{ view.access.target }}</code>
+          <button class="btn btn-sm" type="button" data-copy
+                  data-copy-text="{{ view.access.target }}">Copy</button>
+        </div>
+        <p class="hint">{{ view.access.note }}</p>
+      </div>
+    </section>
+    {% endif %}
+
+    <div class="split">
+      <section class="panel">
+        <div class="panel-head"><h2>Services</h2></div>
+        <div class="panel-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Service</th><th>Image</th><th>Running</th><th>State</th></tr></thead>
+              <tbody>
+                {% for svc in view.services %}
+                <tr>
+                  <td class="mono">{{ svc.name }}</td>
+                  <td class="mono small">{{ svc.image_short if svc.exists else '—' }}</td>
+                  <td class="num">{{ svc.running }}/{{ svc.desired }}</td>
+                  <td><span class="pill {{ svc.tone }}">{{ svc.state }}</span></td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2>Placement</h2></div>
+        <div class="panel-body stack">
+          {% if view.primary and view.primary.placement %}
+            <div class="mono">{{ view.primary.placement|join(', ') }}</div>
+          {% else %}
+            <div class="muted">No constraint — eligible for any node.</div>
+          {% endif %}
+          {% if component.TYPE == 'app' %}
+          <p class="hint">
+            The autoscaler owns this. It adds <code>node.role == worker</code> once
+            workers exist and removes it when the pool empties, so the master serves
+            at the free floor and never during a scale-out. Deploys re-state whatever
+            is live rather than applying a stored copy.
+          </p>
+          {% else %}
+          <p class="hint">
+            Pinned to the manager because it has a volume. The autoscaler never moves
+            it, which is what stops a stateful service being deleted with a worker.
+          </p>
+          {% endif %}
+        </div>
+      </section>
+    </div>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Actions</h2></div>
+      <div class="panel-body">
+        <div class="btn-row">
+          {% for verb, spec in component.actions().items() %}
+          {% if spec[0] is not none %}
+          <form method="post" action="{{ action_href(component.name) }}"
+                {% if preview %}data-preview{% endif %}
+                {% if spec[2] %}data-confirm="{{ spec[2] }}"{% endif %}>
+            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="{{ verb }}">
+            <button class="btn {{ 'btn-primary' if verb == 'redeploy' }}{{ 'btn-danger' if verb in ('rollback', 'rotate') }}"
+                    type="submit">{{ spec[1] }}</button>
+          </form>
+          {% endif %}
+          {% endfor %}
+        </div>
+        <p class="hint">
+          Redeploy re-applies this component's stack. It reads the live image and
+          replica count back first, so it will not undo the autoscaler or roll back
+          whatever CI last shipped. Nothing outside this component is touched.
+        </p>
+      </div>
+    </section>
+  </div>
+
+  <!-- environment ----------------------------------------------------------->
+  {% if tabs|selectattr(0, 'equalto', 'environment')|list %}
+  <div data-panel="environment" {% if tab != 'environment' %}hidden{% endif %}>
+    <form method="post" action="{{ env_href(component.name) }}" {% if preview %}data-preview{% endif %}>
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Environment</h2>
+          <span class="spacer"></span>
+          <div class="seg" role="group" aria-label="Editor mode" data-env-modes>
+            <button type="button" data-env-mode="rows" aria-pressed="true">Rows</button>
+            <button type="button" data-env-mode="text" aria-pressed="false">Text</button>
+          </div>
+          <button class="btn btn-sm" type="button" data-add-var data-mode-only="rows">Add variable</button>
+        </div>
+        <div class="panel-body">
+          <div class="kv-grid" data-kv>
+            <div class="eyebrow">Name</div><div class="eyebrow">Value</div><div></div>
+            {% for p in env_pairs %}
+            <input class="k-in" type="text" name="key" value="{{ p.key }}" aria-label="Variable name">
+            <input type="text" name="value" value="{{ p.value }}" aria-label="Value for {{ p.key }}">
+            <button class="btn btn-sm btn-danger" type="button" data-remove-var
+                    aria-label="Remove {{ p.key }}">Remove</button>
+            {% endfor %}
+          </div>
+          {#
+            The same variables, as text. Seeded from the same pairs the rows are,
+            so both views start on what is actually in the file, and switching
+            converts the edits you have made rather than re-reading the server.
+
+            The textarea is the one that starts disabled, because rows are what a
+            browser with no JavaScript is left with — and a disabled control is not
+            submitted, which is what stops the two views ever disagreeing about
+            what gets saved.
+          #}
+          <textarea class="bulk-in" name="bulk" rows="14" hidden disabled wrap="off"
+                    spellcheck="false" autocapitalize="off" autocorrect="off"
+                    aria-label="Environment for {{ component.name }} as text"
+                    >{% for p in env_pairs %}{{ p.key }}={{ p.value }}&#10;{% endfor %}</textarea>
+          <p class="hint" data-mode-only="text" hidden>
+            One <code>KEY=VALUE</code> per line — paste a whole <code>.env</code> in.
+            Blank lines and <code>#</code> comments are dropped, a leading
+            <code>export</code> is allowed, and quotes are kept as part of the value.
+          </p>
+          <p class="hint">
+            Injected into <code>{{ component.service }}</code> at deploy time, exactly as
+            written. Nothing is added and nothing is reserved — if this component needs a
+            database URL, that is a variable you set here, from the credentials page of
+            whatever it connects to.
+          </p>
+        </div>
+        <div class="panel-note">
+          Saving redeploys <strong>only this component</strong>. Its live replica count
+          and deployed image are preserved.
+        </div>
+      </section>
+
+      <div class="sticky-save">
+        <button class="btn btn-primary" type="submit">Save and deploy</button>
+        <a class="btn" href="{{ component_href(component.name) }}">Cancel</a>
+        <span class="muted">Applied with a rolling, health-gated update.</span>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+
+  <!-- credentials ----------------------------------------------------------->
+  {% if creds is defined %}
+  <div data-panel="credentials" {% if tab != 'credentials' %}hidden{% endif %}>
+    <div class="split">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Internal</h2>
+          <span class="spacer"></span>
+          <span class="pill ok plain">in-cluster</span>
+        </div>
+        <div class="panel-body stack">
+          <div>
+            <div class="eyebrow">Connection URL</div>
+            <div class="conn">
+              <code>{{ creds.internal_url }}</code>
+              <button class="btn btn-sm" type="button" data-copy
+                      data-copy-text="{{ creds.internal_url }}">Copy</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <tbody>
+                <tr><th>Host</th><td class="mono">{{ creds.internal_host }}</td></tr>
+                <tr><th>Port</th><td class="mono">{{ creds.internal_port }}</td></tr>
+                <tr>
+                  <th>Password</th>
+                  <td class="secret-val">
+                    <code class="masked mono" data-secret-text="{{ creds.password }}">••••••••••••</code>
+                    <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="hint">
+            Reachable from any component on the edge network. This password is stored
+            in <code>components/{{ component.name }}/secret.env</code> and injected into
+            this service alone — nothing else in the cluster holds a copy, and nothing
+            is written into any application's environment for you.
+          </p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>External</h2>
+          <span class="spacer"></span>
+          <span class="pill {{ 'ok' if creds.external_port else 'mute' }} plain">
+            {{ 'published' if creds.external_port else 'not published' }}</span>
+        </div>
+        <div class="panel-body stack">
+          {% if creds.external_url %}
+          <div class="conn">
+            <code>{{ creds.external_url }}</code>
+            <button class="btn btn-sm" type="button" data-copy
+                    data-copy-text="{{ creds.external_url }}">Copy</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <tbody>
+                <tr><th>Host</th><td class="mono">{{ creds.external_host }}</td></tr>
+                <tr><th>Port</th><td class="mono">{{ creds.external_port }}</td></tr>
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+          <p class="muted">
+            Not published. Set a port in Settings to expose it on the master's private
+            address — then open the firewall below, deliberately.
+          </p>
+          {% endif %}
+
+          {% if creds.external_port and firewall %}
+          <div class="panel-note">
+            {% if not firewall.available %}
+              The panel cannot reach the host to check the firewall. Its SSH key is
+              missing, so ufw has to be changed on the master by hand.
+            {% else %}
+              Port {{ creds.external_port }} is
+              <strong>{{ 'open' if firewall.open else 'closed' }}</strong> in ufw.
+              Publishing puts it on the master's interface; the firewall is what
+              decides whether the internet can reach it.
+            {% endif %}
+          </div>
+          {% if firewall.available %}
+          <form method="post" action="{{ firewall_href(component.name) }}"
+                {% if preview %}data-preview{% endif %}>
+            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="port" value="{{ creds.external_port }}">
+            <input type="hidden" name="firewall_action" value="{{ 'close' if firewall.open else 'open' }}">
+            <button class="btn {{ 'btn-danger' if not firewall.open }}" type="submit">
+              {{ 'Close the port' if firewall.open else 'Open the port' }}
+            </button>
+          </form>
+          {% endif %}
+          {% endif %}
+        </div>
+      </section>
+    </div>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Rotate</h2></div>
+      <div class="panel-body">
+        <form method="post" action="{{ action_href(component.name) }}"
+              {% if preview %}data-preview{% endif %}
+              data-confirm="Generate a new password and restart {{ component.name }} with it? Anything still using the old one will stop being able to authenticate.">
+          <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="rotate">
+          <button class="btn btn-danger" type="submit">Rotate password</button>
+        </form>
+        <p class="hint">
+          Generates a new password and redeploys this component with it. Nothing else
+          holds a copy, so nothing else needs updating — and nothing else breaks. Your
+          own clients will need the new URL.
+        </p>
+      </div>
+    </section>
+  </div>
+  {% endif %}
+
+  <!-- deployments ----------------------------------------------------------->
+  {% if webhook is defined %}
+  <div data-panel="deployments" {% if tab != 'deployments' %}hidden{% endif %}>
+    {% include "_deployments.html" %}
+  </div>
+  {% endif %}
+
+  <!-- settings -------------------------------------------------------------->
+  {% if tabs|selectattr(0, 'equalto', 'settings')|list %}
+  <div data-panel="settings" {% if tab != 'settings' %}hidden{% endif %}>
+    <form method="post" action="{{ spec_href(component.name) }}" {% if preview %}data-preview{% endif %}>
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <section class="panel">
+        <div class="panel-head"><h2>Configuration</h2></div>
+        <div class="panel-body">
+          <div class="grid-2">
+            {% for f in fields %}
+              {% set value = component.spec.get(f.name) %}
+              {% include "_field.html" %}
+            {% endfor %}
+          </div>
+        </div>
+        <div class="panel-note">
+          Saving redeploys this component. The live image and replica count are read
+          back first and preserved, so changing a memory limit will not roll back your
+          last deploy or undo the autoscaler.
+        </div>
+      </section>
+
+      <div class="sticky-save">
+        <button class="btn btn-primary" type="submit">Save and deploy</button>
+        <a class="btn" href="{{ component_href(component.name) }}">Cancel</a>
+      </div>
+    </form>
+
+    <section class="panel danger-zone">
+      <div class="panel-head"><h2>Delete</h2></div>
+      <div class="panel-body stack">
+        <p class="hint">
+          Removes the stack and this component's files. Other components, the
+          infrastructure and the tunnel are untouched.
+          {% if component.TYPE == 'redis' %}
+          The volume <code>{{ component.name }}-data</code> is <strong>kept</strong> —
+          a mistyped delete should cost you a redeploy, not your data.
+          {% endif %}
+        </p>
+        <form method="post" action="{{ delete_href(component.name) }}" class="inline"
+              {% if preview %}data-preview{% endif %}>
+          <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+          <input type="text" name="confirm" placeholder="type {{ component.name }} to confirm"
+                 aria-label="Type the component name to confirm" autocomplete="off">
+          <button class="btn btn-danger" type="submit">Delete {{ component.name }}</button>
+        </form>
+      </div>
+    </section>
+  </div>
+  {% endif %}
+
+  <!-- logs ------------------------------------------------------------------>
+  {% if logs is defined %}
+  <div data-panel="logs" {% if tab != 'logs' %}hidden{% endif %}>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Logs</h2>
+        <span class="spacer"></span>
+        <span class="muted mono">{{ component.service }}</span>
+      </div>
+      <div class="panel-body">
+        <pre class="logs">{{ logs }}</pre>
+        <p class="hint">
+          The last 200 lines, straight from the daemon. Everything is also in Loki —
+          use Grafana for search, filters and anything older than this.
+        </p>
+      </div>
+    </section>
+  </div>
+  {% endif %}
+
+</div>

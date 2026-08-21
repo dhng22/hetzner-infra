@@ -24,6 +24,9 @@ packages:
   - gettext-base
   - ca-certificates
   - gnupg
+  # bin/component renders component stacks with it, on the host, outside the
+  # panel's container. Ubuntu's python3 does not ship PyYAML.
+  - python3-yaml
 
 write_files:
   # ---------------------------------------------------------------------------
@@ -70,26 +73,24 @@ write_files:
       #   staging-${APP_NAME}.${ROOT_DOMAIN}  -> http://api-staging:8080
       CF_TUNNEL_TOKEN=REPLACE_ME
 
-      # --- FIRST BOOT ONLY ------------------------------------------------------
-      # The four values below are copied into config/app-<env>.env once, so that
-      # this file stays the only thing you fill in to stand the cluster up.
-      # After that they are dead: the panel owns them and these copies go stale.
-      # They are hidden in Settings for exactly that reason.
+      # --- application credentials: deliberately NOT here ----------------------
+      # The Mongo URI and the Redis password are per-environment APPLICATION
+      # config, not infrastructure. They live in config/app-<env>.env, which the
+      # panel owns from the first boot onward, so there is nothing to fill in
+      # here and nothing that can go stale.
+      #
+      # Bootstrap seeds both files once and only once:
+      #   MONGO_URI      empty      — yours to set, in the panel
+      #   REDIS_PASSWORD generated  — a random value beats an unset one, and one
+      #                              value reaches the API, the server and the
+      #                              exporter together
+      #   LOG_LEVEL      INFO/DEBUG
       #
       #   Mongo URI       -> Apps > API > <env> > Environment
       #   Redis password  -> Apps > Redis > <env> > Credentials
       #
-      # Changing them here later does nothing — an existing app-<env>.env always
-      # wins, so a re-run of bootstrap cannot clobber what you set in the panel.
-
-      # MongoDB Atlas: separate databases per environment.
-      MONGO_URI_PROD=mongodb+srv://user:pass@cluster.mongodb.net/appdb?retryWrites=true&w=majority
-      MONGO_URI_STAGING=mongodb+srv://user:pass@cluster.mongodb.net/appdb_staging?retryWrites=true&w=majority
-
-      # Redis. One value per environment, enforced by the server and used by the
-      # API and the exporter — the panel keeps all three in step.
-      REDIS_PASSWORD_PROD=REPLACE_ME_LONG_RANDOM
-      REDIS_PASSWORD_STAGING=REPLACE_ME_LONG_RANDOM
+      # An existing app-<env>.env always wins, so a re-run of bootstrap cannot
+      # clobber what you set in the panel.
 
       # --- Grafana ------------------------------------------------------------
       GRAFANA_ADMIN_USER=admin
@@ -111,80 +112,52 @@ write_files:
       # like it is working right up until the moment you needed it.
       ALERT_WEBHOOK_URL=REPLACE_ME
 
-      # --- first image: FIRST BOOT ONLY ---------------------------------------
-      # What the services are created with. From the next deploy onward CI owns
-      # the image and bin/app-env pins whatever is live, so these are never read
-      # again — unless a service is deleted and recreated, when they decide what
-      # it comes back as. The panel shows the LIVE image on the API page; it does
-      # not show these, because they stop being true within a day.
-      #
-      # Use an immutable tag. A moving tag like :prod-latest works here (nothing
-      # exists yet, so there is nothing to no-op against), but a recreated
-      # service would silently come back on whatever is newest rather than the
-      # build you last tested.
-      APP_IMAGE_PROD=ghcr.io/you/your-ktor-app:prod-abc1234
-      APP_IMAGE_STAGING=ghcr.io/you/your-ktor-app:staging-abc1234
-      APP_PORT=8080
-      APP_METRICS_PATH=/metrics
-
       # --- deploy access (OPTIONAL) -------------------------------------------
-      # Your app's CI is your business, but whatever you build needs a way in
-      # that is not root. Put a public key here and this script creates a
-      # `deploy` user in the docker group with that key installed. Its CI then
-      # runs one command:
-      #   docker service update --with-registry-auth --image <img> app_api-prod
-      # Leave blank to skip entirely and deploy however you prefer.
+      # Your CI is your business, but whatever you build needs a way in that is
+      # not root. Put a public key here and this script creates a `deploy` user
+      # in the docker group with that key installed. Its CI then runs one
+      # command per deploy:
+      #   docker service update --with-registry-auth --image <img> <component>_app
+      # Leave blank to skip entirely — the admin panel's deploy webhook is the
+      # path most people want, and it needs nothing here.
       CI_SSH_PUBLIC_KEY=
 
-      # --- Autoscaler ---------------------------------------------------------
-      APP_SERVICE=app_api-prod
-      APP_SERVICE_STAGING=app_api-staging   # follows prod's placement; blank to opt out
-      APP_CPU_LIMIT=1.0              # MUST match the limit in stacks/app.yml
+      # --- Fleet -------------------------------------------------------------
+      # NOTHING ABOUT YOUR APPLICATIONS LIVES IN THIS FILE.
+      #
+      # No image, no port, no SLO, no replica counts, no service names. Those
+      # are properties of a component, and components are created after the
+      # cluster is up — from the admin panel, or with `component create` on the
+      # master. Each one gets its own Docker stack, its own env file and its own
+      # scaling policy, carried as deploy labels on its own service. The
+      # autoscaler discovers them; it is never told about them.
+      #
+      # What is left here is the fleet: how many machines may exist, of what
+      # kind, and how eagerly they come and go.
 
-      # THE number. Everything else is derived from it. Set it to the p95 your
-      # users should never see exceeded, then leave it alone.
-      SLO_P95_MS=500
-      SCALE_UP_P95_RATIO=0.8         # act at 80% of SLO, before users feel it
-      SCALE_DOWN_P95_RATIO=0.4
-
-      # Secondary signal: CPU of ONE replica against its own limit. Needed
-      # because p95 is undefined when traffic is near zero — CPU is what tells
-      # the scaler it is safe to come back down.
-      SCALE_UP_CPU=70
-      SCALE_DOWN_CPU=30
+      # HOSTS, not Hetzner servers. The master is host #1, so:
+      #   MIN_WORKERS=1  ->  the master alone runs your components, nothing is billed
+      #   2 hosts        ->  1 Hetzner worker, and the master runs NO application
+      #   6 hosts        ->  5 Hetzner workers
+      # An idle cluster is therefore one box, not two. Set MIN_WORKERS=2 if you
+      # would rather the master never ran application traffic at all.
+      #
+      # How much fits on a node is NOT configured. It is measured: each node's
+      # real CPU and RAM, minus what Swarm has already reserved there, against
+      # the reservations of the replicas that have to be placed. A new worker's
+      # size comes from the Hetzner catalogue for WORKER_TYPE. Change the worker
+      # type, resize the master, or create another component, and the arithmetic
+      # just follows. Existing workers are filled before another one is bought.
+      MIN_WORKERS=1
+      MAX_WORKERS=6                  # a BUDGET cap, not a capacity plan
 
       # Placement guard, not a trigger: if a node is this loaded on CPU or
       # memory, another replica physically will not fit, so ask for a node.
       NODE_PRESSURE_PCT=80
 
-      # Two is the production floor: with one replica a crash is an outage and
-      # a rolling update has nowhere to shift traffic. This is also the count
-      # used on first deploy — the autoscaler owns it from then on.
-      MIN_REPLICAS=2
-      MAX_REPLICAS=12
-
-      # HOSTS, not Hetzner servers. The master is host #1, so:
-      #   MIN_WORKERS=1  ->  the master alone runs the app, nothing is billed
-      #   2 hosts        ->  1 Hetzner worker, and the master runs NO app
-      #   6 hosts        ->  5 Hetzner workers
-      # An idle cluster is therefore one box, not two. Set MIN_WORKERS=2 if you
-      # would rather the master never ran application traffic at all.
-      #
-      # How many replicas fit on a node is NOT configured. It is measured: each
-      # node's real CPU and RAM, minus what Swarm has already reserved there,
-      # divided by one replica's own reservation from stacks/app.yml. A new
-      # worker's size comes from the Hetzner catalogue for WORKER_TYPE. Change
-      # the worker type or resize the master and the arithmetic just follows.
-      # Existing workers are filled before another one is bought.
-      MIN_WORKERS=1
-      MAX_WORKERS=6                  # a BUDGET cap, not a capacity plan
-
-      # Up fast, down slow. Never make these symmetric.
-      SUSTAIN_UP_SECONDS=90
-      SUSTAIN_DOWN_SECONDS=900
-      SCALE_UP_FACTOR=0.5            # +50% of current, minimum +1
-      REPLICA_COOLDOWN_SECONDS=60
-      # Must exceed node boot + image pull + JVM warmup or you will overshoot.
+      # Node cooldowns. Up must exceed node boot + image pull + app warmup or
+      # you will overshoot; down is slow on purpose, because a deleted node
+      # costs a full boot to get back.
       COOLDOWN_UP_SECONDS=300
       COOLDOWN_DOWN_SECONDS=900
 
@@ -209,9 +182,9 @@ write_files:
       # --- preflight ----------------------------------------------------------
       # This script is written by cloud-init, but the rest of the bundle is not.
       # Say so plainly instead of failing later on a missing stack file.
-      for required in stacks/app.yml stacks/monitoring.yml stacks/admin.yml \
+      for required in stacks/monitoring.yml stacks/ingress.yml stacks/admin.yml \
                       config/vmagent.yml.tpl autoscaler/Dockerfile admin/Dockerfile \
-                      bin/app-env bin/stack-deploy bin/panel-hostops; do
+                      bin/component bin/stack-deploy bin/panel-hostops; do
         if [ ! -e "/opt/infra/$required" ]; then
           echo "FATAL: /opt/infra/$required is missing." >&2
           echo "The bundle was never copied to the master. Uncomment the clone line" >&2
@@ -226,13 +199,13 @@ write_files:
       # created. Discovering a missing token after swarm init and two stack
       # deploys leaves you reconciling half a cluster by hand.
       missing=()
+      # Infrastructure only. Nothing about an application is checked here
+      # because nothing about an application is in this file — no image, no
+      # port, no service name, no SLO. Those arrive with the component.
       for v in APP_NAME ROOT_DOMAIN HCLOUD_TOKEN HCLOUD_NETWORK_NAME \
                GHCR_USER GHCR_TOKEN CF_TUNNEL_TOKEN \
-               MONGO_URI_PROD MONGO_URI_STAGING \
-               REDIS_PASSWORD_PROD REDIS_PASSWORD_STAGING \
                GRAFANA_ADMIN_PASSWORD ALERT_WEBHOOK_URL \
-               ADMIN_USER ADMIN_PASSWORD \
-               APP_IMAGE_PROD APP_IMAGE_STAGING APP_SERVICE APP_CPU_LIMIT; do
+               ADMIN_USER ADMIN_PASSWORD; do
         case "${!v:-}" in
           ""|REPLACE_ME*) missing+=("$v") ;;
         esac
@@ -340,31 +313,12 @@ write_files:
       fi
       mk_secret PANEL_SSH_KEY "$(cat "$PANEL_KEY")"
 
-      # --- seed application config from infra.env ------------------------------
-      # Keeps master-cloud-init.yaml the only file you fill in. Written once; on
-      # later boots the existing file wins, so edits made in the admin panel are
-      # never clobbered by a re-run.
-      seed_env() {
-        local file="/opt/infra/config/app-$1.env"
-        if [ -s "$file" ] && grep -q '^MONGO_URI=' "$file"; then
-          echo "keeping existing $file"
-          return
-        fi
-        {
-          echo "# $1 application configuration."
-          echo "# Seeded from /etc/infra/infra.env at first boot."
-          echo "# Edit in the admin panel (Apps -> API -> $1 -> Environment),"
-          echo "# or with: app-env set KEY=VALUE $1"
-          echo
-          printf 'MONGO_URI=%s\n' "$2"
-          printf 'REDIS_PASSWORD=%s\n' "$3"
-          printf 'LOG_LEVEL=%s\n' "$4"
-        } > "$file"
-        chmod 600 "$file"
-        echo "seeded $file"
-      }
-      seed_env prod    "$MONGO_URI_PROD"    "$REDIS_PASSWORD_PROD"    INFO
-      seed_env staging "$MONGO_URI_STAGING" "$REDIS_PASSWORD_STAGING" DEBUG
+      # --- component storage ---------------------------------------------------
+      # Applications and databases live here, one directory each, created by the
+      # admin panel or by `component create`. Nothing is seeded: an empty
+      # cluster has no components, which is a valid and expected state.
+      mkdir -p /opt/infra/components
+      chmod 700 /opt/infra/components
 
       # --- render templates ---------------------------------------------------
       envsubst < /opt/infra/config/vmagent.yml.tpl > /opt/infra/config/vmagent.yml
@@ -375,23 +329,27 @@ write_files:
       docker build -t "${APP_NAME}/autoscaler:latest" /opt/infra/autoscaler
       docker build -t "${APP_NAME}/admin:latest"      /opt/infra/admin
 
-      # --- monitoring first: the autoscalers need somewhere to read from -----
-      docker stack deploy -c /opt/infra/stacks/monitoring.yml monitoring
+      # --- networks -------------------------------------------------------------
+      # `edge` is created here rather than by a stack, because every component
+      # declares it external and no component may own it. When it belonged to
+      # the app stack, removing that stack took the network — and therefore the
+      # tunnel's route to everything else — with it.
+      docker network inspect edge >/dev/null 2>&1 \
+        || docker network create --driver overlay --attachable edge
 
-      # --- one stack, both environments, one tunnel --------------------------
-      # Deployed through bin/app-env so there is exactly ONE deploy path in the
-      # system. It layers config/app-*.env over the stack file, and on every
-      # run after this one it pins the live replica count and CI's deployed
-      # image so a redeploy cannot undo the autoscaler or roll production back.
-      # Nothing is live yet here, so it falls back to infra.env.
-      # It passes --with-registry-auth, which ships the GHCR credential with the
-      # service spec so a worker created an hour from now can still pull.
+      # --- monitoring first: it creates the `monitoring` network the other two
+      # stacks declare external, and the autoscaler needs somewhere to read from.
+      /opt/infra/bin/stack-deploy monitoring
+
+      # --- ingress -------------------------------------------------------------
+      # The tunnel connector, on its own, depending on nothing. It comes up with
+      # no routes to serve and that is correct: you add a hostname in Cloudflare
+      # when you create the component it points at.
       if [ -d /opt/infra/bin ]; then
         chmod +x /opt/infra/bin/*
-        ln -sf /opt/infra/bin/app-env /usr/local/bin/app-env
+        ln -sf /opt/infra/bin/component /usr/local/bin/component
       fi
-      touch /opt/infra/config/app-prod.env /opt/infra/config/app-staging.env
-      /opt/infra/bin/app-env deploy
+      /opt/infra/bin/stack-deploy ingress
 
       # --- optional deploy user, so CI never needs root -----------------------
       if [ -n "${CI_SSH_PUBLIC_KEY:-}" ]; then
@@ -417,19 +375,28 @@ write_files:
       echo "Workers do not exist yet — the autoscaler creates the first one on"
       echo "its first loop. Watch:  docker service logs -f monitoring_autoscaler"
       echo
-      echo "Cloudflare tunnel public hostnames (ONE tunnel, four hostnames):"
-      echo "  ${APP_NAME}.${ROOT_DOMAIN}          -> http://api-prod:${APP_PORT}"
-      echo "  staging-${APP_NAME}.${ROOT_DOMAIN}  -> http://api-staging:${APP_PORT}"
+      echo "Cloudflare tunnel hostnames to add now (ONE tunnel):"
       echo "  grafana-${APP_NAME}.${ROOT_DOMAIN}  -> http://grafana:3000"
       echo "  admin-${APP_NAME}.${ROOT_DOMAIN}    -> http://${PRIVATE_IP}:3000"
       echo
-      echo "Put the last two behind Cloudflare Access. The admin panel holds the"
-      echo "docker socket and can redeploy production — its password is the"
-      echo "cluster. Access in front of it is your second factor."
+      echo "Put both behind Cloudflare Access. The admin panel holds the docker"
+      echo "socket and can redeploy anything — its password is the cluster."
+      echo "Access in front of it is your second factor."
+      echo
+      echo "There are no applications yet, on purpose. Create one in the panel"
+      echo "(Components -> New app), or on this box:"
+      echo "  component create app api --image ghcr.io/you/app:tag --port 8080"
+      echo "Then add its hostname in Cloudflare, pointing at the local target"
+      echo "the panel shows you."
 
 runcmd:
   - [ bash, -lc, "mkdir -p /opt/infra" ]
-  - [ bash, -lc, "git clone --depth 1 https://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@github.com/you/infra.git /tmp/i && rm -rf /tmp/i/.git && cp -a /tmp/i/. /opt/infra/ && rm -rf /tmp/i" ]
+  # Uncomment ONE of these and fill in your own token. It strips .git before
+  # copying, so the token is not left on disk — but it IS in the instance
+  # user-data, which is readable from the metadata service for the life of
+  # the server. Use a read-only, short-lived token, and revoke it after.
+  #
+  # - [ bash, -lc, "git clone --depth 1 https://<TOKEN>@github.com/you/infra.git /tmp/i && rm -rf /tmp/i/.git && cp -a /tmp/i/. /opt/infra/ && rm -rf /tmp/i" ]
   #
   # ...or leave both commented, scp the bundle to /opt/infra yourself, and run
   # /opt/infra/bootstrap.sh by hand. No token ever touches the server.

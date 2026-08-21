@@ -1,0 +1,300 @@
+#!/usr/bin/env python3
+"""
+component — create, configure and deploy the things that run on this cluster.
+
+    component list
+    component show <name>
+    component create <type> <name> [--field value ...]
+    component set <name> --field value [...]
+    component env <name> [get|set KEY=VALUE|unset KEY|edit]
+    component render <name>
+    component deploy <name>
+    component rotate <name>
+    component remove <name> [--yes]
+    component fields <type>
+
+This and the admin panel are the same code: the panel imports
+`admin/components/` and so does this script. There is no second implementation
+to drift, which is what went wrong with the file this replaces — a bash script
+and a Python panel that had to agree, by hand, about what an env file meant.
+
+WHY DEPLOY IS NOT `docker stack deploy` BY HAND
+-----------------------------------------------
+It is, but with three values read back from the running service first:
+
+  image     CI moved it on with `docker service update`. The spec's copy is
+            whatever was last typed into a form.
+  replicas  the autoscaler owns the count at runtime.
+  placement the autoscaler moves the service between the master and the
+            workers by adding and removing `node.role == worker`.
+
+Applying the file's idea of those three is how a redeploy triggered by an
+unrelated setting rolls production back (docker/cli#2235). Nothing else in the
+stack is contentious, because nothing else shares a file with anything.
+"""
+
+import os
+import subprocess
+import sys
+
+sys.path.insert(0, os.path.join(os.environ.get("INFRA_DIR", "/opt/infra"), "admin"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))), "admin"))
+
+try:
+    import components
+    from components import store
+except ImportError as exc:                                  # pragma: no cover
+    sys.exit(f"cannot import the component library: {exc}\n"
+             f"Run this on the master, or set INFRA_DIR to the bundle root.")
+
+
+def die(message):
+    sys.exit(f"error: {message}")
+
+
+def _flags(argv):
+    """`--image x --port 8080` and `--autoscale` (a bare flag means true)."""
+    out, i = {}, 0
+    while i < len(argv):
+        token = argv[i]
+        if not token.startswith("--"):
+            die(f"unexpected argument {token!r}")
+        key = token[2:].replace("-", "_")
+        if "=" in key:
+            key, value = key.split("=", 1)
+            out[key] = value
+            i += 1
+            continue
+        if i + 1 < len(argv) and not argv[i + 1].startswith("--"):
+            out[key] = argv[i + 1]
+            i += 2
+        else:
+            out[key] = "true"
+            i += 1
+    return out
+
+
+def _report(problems):
+    for problem in problems:
+        print(f"  - {problem}", file=sys.stderr)
+    sys.exit(1)
+
+
+def _print_result(ok, output):
+    if output:
+        print(output)
+    sys.exit(0 if ok else 1)
+
+
+# --- commands ---------------------------------------------------------------
+
+def cmd_list(argv):
+    found, problems = components.all_components()
+    if not found and not problems:
+        print("No components yet. Create one:")
+        print("  component create app api --image ghcr.io/you/app:tag --port 8080")
+        print("  component create redis cache")
+        return
+    width = max([len(c.name) for c in found] + [4])
+    print(f"{'NAME'.ljust(width)}  {'TYPE':<6}  {'REPLICAS':<9}  DETAIL")
+    for c in found:
+        live = c.live_replicas()
+        # Parenthesised means "not deployed — this is what the spec asks for".
+        replicas = f"{live}" if live is not None else f"({c.spec.get('replicas', 1)})"
+        print(f"{c.name.ljust(width)}  {c.TYPE:<6}  {replicas:<9}  {c.summary()}")
+    for name, problem in problems:
+        print(f"{name.ljust(width)}  ERROR   {problem}", file=sys.stderr)
+
+
+def cmd_show(argv):
+    if not argv:
+        die("usage: component show <name>")
+    c = components.load(argv[0])
+    print(f"{c.name}  ({c.LABEL})")
+    print(f"  created   {c.created_at or 'unknown'}")
+    print(f"  services  {', '.join(c.services())}")
+    access = c.access()
+    if access:
+        print(f"  target    {access['target']}")
+    live = c.live_replicas()
+    print(f"  replicas  {'not deployed' if live is None else live} "
+          f"(spec: {c.spec.get('replicas', 1)})")
+    if c.TYPE == "app":
+        print(f"  image     {c.live_image() or c.spec['image']}")
+        print(f"  placement {'workers' if c.live_worker_pinned() else 'master'}")
+    print("  spec")
+    for field in type(c).fields():
+        value = c.spec.get(field.name)
+        print(f"    {field.name:<24} {value}")
+
+
+def cmd_fields(argv):
+    if not argv:
+        die(f"usage: component fields <{'|'.join(sorted(components.TYPES))}>")
+    cls = components.type_for(argv[0])
+    print(f"{cls.LABEL} — {cls.BLURB}\n")
+    for field in cls.fields():
+        flag = "--" + field.name.replace("_", "-")
+        default = "" if field.default is None else f"  [{field.default}]"
+        req = " (required)" if field.required else ""
+        print(f"  {flag:<28} {field.kind}{default}{req}")
+        if field.help:
+            print(f"      {field.help}")
+
+
+def cmd_create(argv):
+    if len(argv) < 2:
+        die("usage: component create <type> <name> [--field value ...]")
+    type_name, name = argv[0], argv[1]
+    component, problems = components.create(type_name, name, _flags(argv[2:]))
+    if problems:
+        print(f"cannot create {name}:", file=sys.stderr)
+        _report(problems)
+    print(f"created {name} ({component.LABEL}) in {store.dir_for(name)}")
+    print(f"deploy it with:  component deploy {name}")
+
+
+def cmd_set(argv):
+    if len(argv) < 2:
+        die("usage: component set <name> --field value [...]")
+    name = argv[0]
+    component, problems = components.update(name, _flags(argv[1:]))
+    if problems:
+        print(f"cannot update {name}:", file=sys.stderr)
+        _report(problems)
+    print(f"updated {name}. Apply it with:  component deploy {name}")
+
+
+def cmd_env(argv):
+    if not argv:
+        die("usage: component env <name> [get KEY | set KEY=VALUE | unset KEY | edit]")
+    name = argv[0]
+    components.load(name)                       # exists, and is a real component
+    action = argv[1] if len(argv) > 1 else "list"
+    pairs = store.read_env(name)
+
+    if action == "list":
+        sys.stdout.write(store.to_bulk(pairs))
+        return
+    if action == "get":
+        if len(argv) < 3:
+            die("usage: component env <name> get KEY")
+        print(store.env_map(name).get(argv[2], ""))
+        return
+    if action == "set":
+        if len(argv) < 3 or "=" not in argv[2]:
+            die("usage: component env <name> set KEY=VALUE")
+        key, value = argv[2].split("=", 1)
+        pairs = [p for p in pairs if p["key"] != key] + [{"key": key, "value": value}]
+    elif action == "unset":
+        if len(argv) < 3:
+            die("usage: component env <name> unset KEY")
+        if not any(p["key"] == argv[2] for p in pairs):
+            die(f"{argv[2]} is not set on {name}")
+        pairs = [p for p in pairs if p["key"] != argv[2]]
+    elif action == "edit":
+        pairs = _edit_env(name, pairs)
+    else:
+        die(f"unknown env action {action!r}")
+
+    problems = store.validate_env(pairs)
+    if problems:
+        _report(problems)
+    store.write_env(name, pairs, header=[f"# Environment for {name}.", ""])
+    print(f"wrote {store.path_for(name, 'env')}. Apply it with:  component deploy {name}")
+
+
+def _edit_env(name, pairs):
+    import tempfile
+    editor = os.environ.get("EDITOR", "vi")
+    with tempfile.NamedTemporaryFile("w", suffix=".env", delete=False) as fh:
+        fh.write(store.to_bulk(pairs))
+        path = fh.name
+    try:
+        subprocess.call([editor, path])
+        with open(path) as fh:
+            parsed, problems = store.parse_bulk(fh.read())
+    finally:
+        os.unlink(path)
+    if problems:
+        _report(problems)
+    return parsed
+
+
+def cmd_render(argv):
+    if not argv:
+        die("usage: component render <name>")
+    sys.stdout.write(components.load(argv[0]).stack_yaml())
+
+
+def cmd_deploy(argv):
+    if not argv:
+        die("usage: component deploy <name>")
+    c = components.load(argv[0])
+    problems = c.validate()
+    if problems:
+        print(f"{c.name} is not deployable as configured:", file=sys.stderr)
+        _report(problems)
+    live_image = c.live_image() if c.TYPE == "app" else None
+    if live_image:
+        print(f"preserving the deployed image: {live_image}")
+    live_replicas = c.live_replicas()
+    if live_replicas is not None:
+        print(f"preserving the live replica count: {live_replicas}")
+    _print_result(*c.deploy())
+
+
+def cmd_rotate(argv):
+    if not argv:
+        die("usage: component rotate <name>")
+    c = components.load(argv[0])
+    if not hasattr(c, "rotate_password"):
+        die(f"{c.name} ({c.LABEL}) has no password to rotate")
+    _print_result(*c.rotate_password())
+
+
+def cmd_remove(argv):
+    if not argv:
+        die("usage: component remove <name> [--yes]")
+    name = argv[0]
+    c = components.load(name)
+    if "--yes" not in argv[1:]:
+        answer = input(f"Remove {name} ({c.LABEL}) and its stack? Type the name to confirm: ")
+        if answer.strip() != name:
+            sys.exit("aborted")
+    _print_result(*c.remove())
+
+
+COMMANDS = {
+    "list": cmd_list, "ls": cmd_list,
+    "show": cmd_show,
+    "fields": cmd_fields,
+    "create": cmd_create,
+    "set": cmd_set,
+    "env": cmd_env,
+    "render": cmd_render,
+    "deploy": cmd_deploy,
+    "rotate": cmd_rotate,
+    "remove": cmd_remove, "rm": cmd_remove,
+}
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        sys.stdout.write(__doc__.lstrip())
+        return 0
+    command = COMMANDS.get(argv[0])
+    if command is None:
+        die(f"unknown command {argv[0]!r}. Try: component --help")
+    try:
+        command(argv[1:])
+    except components.ComponentError as exc:
+        die(str(exc))
+    except KeyboardInterrupt:
+        sys.exit(130)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

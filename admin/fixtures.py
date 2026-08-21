@@ -1,20 +1,27 @@
 """
 Dummy cluster used by the preview build.
 
-Same shapes as swarm.py, so the preview is rendered from the real templates
-and cannot drift from the real UI. The numbers describe a plausible Tuesday
-afternoon: production busy but inside SLO, staging fine, one worker mid-drain,
-and one alert firing so the warning states are actually visible.
+Same shapes as swarm.py, so the preview is rendered from the real templates and
+cannot drift from the real UI. The numbers describe a plausible Tuesday
+afternoon: one application busy but inside its SLO, a staging copy idle, one
+worker mid-drain, and one alert firing so the warning states are visible.
+
+**Components are real here.** `preview_build.py` points INFRA_DIR at a seeded
+directory and this module only fakes the parts that talk to Docker. So the
+preview exercises the actual Component classes, the actual renderer and the
+actual field definitions — the one thing that used to be duplicated by hand
+between here and the live path is not duplicated any more.
 """
 
 import catalog
+import shape
 
 _IMG = "ghcr.io/acme/aichat-api"
 
 
 def _svc(name, image, running, desired, state="healthy", tone="ok", mode="replicated",
          env=None, cpu=1.0, mem=768, cpu_res=0.5, mem_res=384, placement=None,
-         updated="14m ago", tasks=None, networks=("edge", "data-prod", "monitoring")):
+         updated="14m ago", tasks=None, networks=("edge", "monitoring")):
     return {
         "name": name, "exists": True, "tone": tone, "state": state,
         "image": image, "image_short": image.split("/")[-1],
@@ -28,79 +35,46 @@ def _svc(name, image, running, desired, state="healthy", tone="ok", mode="replic
         "networks": list(networks),
         "resources": {"cpu_limit": cpu, "mem_limit": mem, "cpu_res": cpu_res, "mem_res": mem_res},
         "update_config": {"parallelism": 1, "order": "start-first", "delay": "15s",
-                          "monitor": "90s", "failure_action": "rollback"},
+                          "monitor": "60s", "failure_action": "rollback"},
         "placement": placement if placement is not None else ["node.role == worker"],
     }
 
 
-PROD_ENV = {
-    "KTOR_ENV": "production", "REDIS_HOST": "redis-prod", "REDIS_PORT": "6379",
-    "MONGO_URI": "mongodb+srv://appuser:s3cr3t@cluster0.mongodb.net/appdb?retryWrites=true&w=majority",
-    "REDIS_PASSWORD": "8f2b91c4de77a0135be2",
-    "LOG_LEVEL": "INFO", "FEATURE_NEW_CHECKOUT": "true",
-    "OPENAI_TIMEOUT_MS": "30000", "MAX_UPLOAD_MB": "25",
-}
-STAGING_ENV = {
-    "KTOR_ENV": "staging", "REDIS_HOST": "redis-staging", "REDIS_PORT": "6379",
-    "MONGO_URI": "mongodb+srv://appuser:s3cr3t@cluster0.mongodb.net/appdb_staging?retryWrites=true&w=majority",
-    "REDIS_PASSWORD": "b71ce0aa2f9384d51c60",
-    "LOG_LEVEL": "DEBUG", "FEATURE_NEW_CHECKOUT": "true", "MAX_UPLOAD_MB": "5",
-}
-
 _SERVICES = {
-    "app_api-prod": _svc("app_api-prod", f"{_IMG}:sha-9f3ac21", 6, 6, env=PROD_ENV),
-    "app_api-staging": _svc("app_api-staging", f"{_IMG}:sha-c40e8b7", 1, 1, env=STAGING_ENV,
-                            cpu=0.5, mem=512, cpu_res=0.1, mem_res=128,
-                            networks=("edge", "data-staging", "monitoring"), updated="2h ago"),
-    "app_redis-prod": _svc("app_redis-prod", "redis:7.4-alpine", 1, 1, cpu=None, mem=None,
-                           cpu_res=None, mem_res=None, placement=["node.role == manager"],
-                           networks=("data-prod",), updated="6d ago"),
-    "app_redis-staging": _svc("app_redis-staging", "redis:7.4-alpine", 1, 1, cpu=None, mem=None,
-                              cpu_res=None, mem_res=None, placement=["node.role == manager"],
-                              networks=("data-staging",), updated="6d ago"),
-    "app_cloudflared": _svc("app_cloudflared", "cloudflare/cloudflared:2024.10.1", 3, 4,
-                            state="updating", tone="warn", mode="global", cpu=None, mem=None,
-                            cpu_res=None, mem_res=None, networks=("edge", "monitoring"),
-                            updated="3m ago"),
-    "monitoring_grafana": _svc("monitoring_grafana", "grafana/grafana:11.3.0", 1, 1,
-                               cpu=None, mem=None, cpu_res=None, mem_res=None,
-                               placement=["node.role == manager"], networks=("monitoring",),
-                               updated="6d ago"),
-    "monitoring_victoriametrics": _svc("monitoring_victoriametrics",
-                                       "victoriametrics/victoria-metrics:v1.106.1", 1, 1,
-                                       cpu=None, mem=1500, cpu_res=None, mem_res=None,
-                                       placement=["node.role == manager"],
-                                       networks=("monitoring",), updated="6d ago"),
-    "monitoring_vmagent": _svc("monitoring_vmagent", "victoriametrics/vmagent:v1.106.1", 1, 1,
-                               cpu=None, mem=None, cpu_res=None, mem_res=None,
-                               placement=["node.role == manager"], networks=("monitoring",),
-                               updated="6d ago"),
-    "monitoring_loki": _svc("monitoring_loki", "grafana/loki:3.1.1", 1, 1, cpu=None, mem=None,
-                            cpu_res=None, mem_res=None, placement=["node.role == manager"],
-                            networks=("monitoring",), updated="6d ago"),
-    "monitoring_vmalert": _svc("monitoring_vmalert", "victoriametrics/vmalert:v1.106.1", 1, 1,
-                               cpu=None, mem=None, cpu_res=None, mem_res=None,
-                               placement=["node.role == manager"], networks=("monitoring",),
-                               updated="6d ago"),
-    "monitoring_alertmanager": _svc("monitoring_alertmanager", "prom/alertmanager:v0.27.0", 1, 1,
-                                    cpu=None, mem=None, cpu_res=None, mem_res=None,
-                                    placement=["node.role == manager"], networks=("monitoring",),
-                                    updated="6d ago"),
-    "monitoring_autoscaler": _svc("monitoring_autoscaler", "aichat/autoscaler:latest", 1, 1,
-                                  cpu=None, mem=None, cpu_res=None, mem_res=None,
-                                  placement=["node.role == manager"], networks=("monitoring",),
-                                  updated="6d ago"),
-    "monitoring_node-exporter": _svc("monitoring_node-exporter", "prom/node-exporter:v1.8.2",
-                                     4, 4, mode="global", cpu=None, mem=None, cpu_res=None,
-                                     mem_res=None, placement=[], networks=("monitoring",),
-                                     updated="6d ago"),
-    "monitoring_cadvisor": _svc("monitoring_cadvisor", "gcr.io/cadvisor/cadvisor:v0.49.1", 4, 4,
-                                mode="global", cpu=None, mem=None, cpu_res=None, mem_res=None,
-                                placement=[], networks=("monitoring",), updated="6d ago"),
-    "admin_ui": _svc("admin_ui", "aichat/admin:latest", 1, 1, cpu=None, mem=256,
-                     cpu_res=None, mem_res=None, placement=["node.role == manager"],
-                     networks=("monitoring",), updated="21m ago"),
+    "api_app": _svc("api_app", f"{_IMG}:sha-9f3ac21", 6, 6),
+    "api-staging_app": _svc("api-staging_app", f"{_IMG}:sha-c40e8b7", 1, 1,
+                            cpu=0.5, mem=512, cpu_res=0.1, mem_res=128, updated="2h ago"),
+    "cache_redis": _svc("cache_redis", "redis:7.4-alpine", 1, 1, cpu=None, mem=None,
+                        cpu_res=0.2, mem_res=640, placement=["node.role == manager"],
+                        networks=("edge",), updated="6d ago"),
+    "cache_redis-exporter": _svc("cache_redis-exporter", "oliver006/redis_exporter:v1.66.0",
+                                 1, 1, cpu=None, mem=None, cpu_res=0.05, mem_res=32,
+                                 placement=["node.role == manager"], updated="6d ago"),
+    "sessions_redis": _svc("sessions_redis", "redis:7.2-alpine", 1, 1, cpu=None, mem=None,
+                           cpu_res=0.1, mem_res=256, placement=["node.role == manager"],
+                           networks=("edge",), updated="9d ago"),
+    "ingress_cloudflared": _svc("ingress_cloudflared", "cloudflare/cloudflared:2024.10.1",
+                                4, 4, mode="global", cpu=None, mem=None, cpu_res=0.05,
+                                mem_res=32, placement=[], updated="9d ago"),
+    "admin_ui": _svc("admin_ui", "aichat/admin:latest", 1, 1, cpu=0.5, mem=256,
+                     cpu_res=0.10, mem_res=128, placement=["node.role == manager"],
+                     networks=("monitoring",), updated="3d ago"),
 }
+for _name, _image, _cpu_res, _mem_res in [
+    ("monitoring_victoriametrics", "victoriametrics/victoria-metrics:v1.106.1", 0.5, 768),
+    ("monitoring_vmagent", "victoriametrics/vmagent:v1.106.1", 0.15, 128),
+    ("monitoring_vmalert", "victoriametrics/vmalert:v1.106.1", 0.1, 96),
+    ("monitoring_alertmanager", "prom/alertmanager:v0.27.0", 0.1, 96),
+    ("monitoring_loki", "grafana/loki:3.1.1", 0.3, 512),
+    ("monitoring_grafana", "grafana/grafana:11.3.0", 0.2, 256),
+    ("monitoring_autoscaler", "aichat/autoscaler:latest", 0.1, 96),
+    ("monitoring_node-exporter", "prom/node-exporter:v1.8.2", 0.05, 64),
+    ("monitoring_cadvisor", "gcr.io/cadvisor/cadvisor:v0.49.1", 0.10, 128),
+]:
+    _SERVICES[_name] = _svc(_name, _image, 1, 1, cpu=None, mem=None,
+                            cpu_res=_cpu_res, mem_res=_mem_res,
+                            placement=["node.role == manager"],
+                            networks=("monitoring",), updated="9d ago")
 
 
 def service(name, with_tasks=True):
@@ -110,39 +84,44 @@ def service(name, with_tasks=True):
                 "image": "—", "image_short": "—", "running": 0, "desired": 0, "tasks": [],
                 "env": {}, "updated": "—", "mode": "—", "resources": {}, "placement": [],
                 "update_config": {}, "networks": []}
-    return svc
+    return svc if with_tasks else {**svc, "tasks": []}
 
 
-def apps():
-    out = []
-    for entry in catalog.CATALOG:
-        envs = {k: service(v) for k, v in entry["environments"].items()}
-        tones = [e["tone"] for e in envs.values()]
-        worst = "bad" if "bad" in tones else "warn" if "warn" in tones else "ok"
-        out.append({**entry, "envs": envs, "tone": worst})
-    return out
+def component_view(component):
+    return shape.component_view(component, service)
 
 
-def app(key):
-    entry = catalog.BY_KEY.get(key)
-    if not entry:
-        return None
-    envs = {k: service(v) for k, v in entry["environments"].items()}
-    tones = [e["tone"] for e in envs.values()]
-    worst = "bad" if "bad" in tones else "warn" if "warn" in tones else "ok"
-    return {**entry, "envs": envs, "tone": worst}
+def component_views():
+    return shape.component_views(service)
 
 
-_LOG = """2026-08-10T13:42:01Z INFO  [main] Ktor server started on 0.0.0.0:8080 (JVM 1284ms)
-2026-08-10T13:42:01Z INFO  [main] Mongo connection pool ready (min=5 max=50)
-2026-08-10T13:42:02Z INFO  [main] Redis connected redis-prod:6379
-2026-08-10T13:44:17Z INFO  [req] POST /v1/chat 200 143ms user=u_8812
-2026-08-10T13:44:19Z INFO  [req] POST /v1/chat 200 208ms user=u_4410
-2026-08-10T13:46:55Z WARN  [pool] Mongo checkout wait 812ms, pool saturated
-2026-08-10T13:47:02Z INFO  [req] GET  /v1/threads 200 41ms user=u_8812
-2026-08-10T13:48:30Z ERROR [req] POST /v1/chat 502 upstream timeout after 30000ms
-2026-08-10T13:48:31Z INFO  [req] POST /v1/chat 200 388ms user=u_9931
-2026-08-10T13:51:10Z INFO  [health] /health ok, uptime 9m
+def system_view():
+    grouped = {}
+    for entry in catalog.SYSTEM:
+        svc = service(entry["service"], with_tasks=False)
+        grouped.setdefault(entry["category"], []).append({**entry, "svc": svc,
+                                                          "tone": svc["tone"]})
+    return [(c, grouped[c]) for c in catalog.CATEGORIES if c in grouped]
+
+
+def vm_query(expr):
+    return {
+        "count(autoscaler_service_p95_ms > on (service) autoscaler_service_slo_p95_ms)": 1.0,
+        "autoscaler_max_workers": 6.0,
+        "autoscaler_current_hosts": 4.0,
+        "autoscaler_cluster_cpu_percent": 71.0,
+        "autoscaler_cluster_mem_percent": 58.0,
+    }.get(expr)
+
+
+_LOG = """\
+2026-08-12T14:02:11.881Z INFO  [main] com.acme.aichat.Application - Ktor started on 0.0.0.0:8080
+2026-08-12T14:02:11.902Z INFO  [main] com.acme.aichat.Redis - connected to cache_redis:6379
+2026-08-12T14:04:38.117Z INFO  [eventLoop-3] com.acme.aichat.Chat - completion in 812ms (model=gpt-4o-mini)
+2026-08-12T14:05:02.559Z WARN  [eventLoop-1] com.acme.aichat.RateLimit - throttled tenant=acme-9931
+2026-08-12T14:06:44.230Z INFO  [eventLoop-7] com.acme.aichat.Chat - completion in 1.4s (model=gpt-4o)
+2026-08-12T14:07:19.004Z ERROR [eventLoop-2] com.acme.aichat.Upload - stream closed before EOF
+2026-08-12T14:09:55.771Z INFO  [eventLoop-5] com.acme.aichat.Health - ok
 """
 
 
@@ -174,26 +153,22 @@ def nodes():
 # Same shape as swarm.topology(): one entry per RUNNING task, named individually.
 # A worker mid-drain with only a couple of tasks left is the state most worth
 # being able to see at a glance, so the dummy data shows one.
-_BANDS = [("api-prod", "prod"), ("api-staging", "staging"), ("data", "data"),
+_BANDS = [("applications", "prod"), ("data", "data"), ("ingress", "staging"),
           ("observability", "observe"), ("platform", "platform")]
 _BAND_OF = {
-    "api-prod": ("api-prod", "prod"),
-    "api-staging": ("api-staging", "staging"),
-    "redis-prod": ("data", "data"),
-    "redis-staging": ("data", "data"),
-    "redis-exporter-prod": ("data", "data"),
-    "victoriametrics": ("observability", "observe"),
-    "vmagent": ("observability", "observe"),
-    "vmalert": ("observability", "observe"),
-    "alertmanager": ("observability", "observe"),
-    "loki": ("observability", "observe"),
-    "grafana": ("observability", "observe"),
-    "node-exporter": ("observability", "observe"),
-    "cadvisor": ("observability", "observe"),
+    "api": ("applications", "prod"),
+    "api-staging": ("applications", "prod"),
+    "cache": ("data", "data"),
+    "sessions": ("data", "data"),
+    "cloudflared": ("ingress", "staging"),
+    "ui": ("platform", "platform"),
+    "autoscaler": ("platform", "platform"),
 }
-_STACK_OF = {"api-prod": "app", "api-staging": "app", "redis-prod": "app",
-             "redis-staging": "app", "redis-exporter-prod": "app",
-             "cloudflared": "app", "ui": "admin"}
+_SERVICE_OF = {
+    "api": "api_app", "api-staging": "api-staging_app",
+    "cache": "cache_redis", "sessions": "sessions_redis",
+    "cloudflared": "ingress_cloudflared", "ui": "admin_ui",
+}
 
 
 def _tasks(spec):
@@ -201,11 +176,11 @@ def _tasks(spec):
     rank = {b: i for i, (b, _) in enumerate(_BANDS)}
     out = []
     for name, count in spec:
-        band, key = _BAND_OF.get(name, ("platform", "platform"))
-        stack = _STACK_OF.get(name, "monitoring")
+        band, key = _BAND_OF.get(name, ("observability", "observe"))
+        full = _SERVICE_OF.get(name, f"monitoring_{name}")
         for i in range(count):
             out.append({"id": f"{name[:6]}{i}kd93jf01"[:12], "name": name,
-                        "service": f"{stack}_{name}", "band": band, "key": key})
+                        "service": full, "band": band, "key": key})
     out.sort(key=lambda x: (rank.get(x["band"], 99), x["name"], x["id"]))
     return out
 
@@ -217,18 +192,18 @@ def topology():
             ("victoriametrics", 1), ("vmagent", 1), ("vmalert", 1),
             ("alertmanager", 1), ("loki", 1), ("grafana", 1),
             ("node-exporter", 1), ("cadvisor", 1),
-            ("redis-prod", 1), ("redis-staging", 1), ("redis-exporter-prod", 1),
+            ("cache", 1), ("sessions", 1), ("redis-exporter", 1),
             ("cloudflared", 1), ("autoscaler", 1), ("ui", 1),
         ]),
         (n["aichat-worker-1754812203"], 64.0, 47.0, [
-            ("api-prod", 3), ("node-exporter", 1), ("cadvisor", 1), ("cloudflared", 1),
+            ("api", 3), ("node-exporter", 1), ("cadvisor", 1), ("cloudflared", 1),
         ]),
         (n["aichat-worker-1754819114"], 71.0, 52.0, [
-            ("api-prod", 2), ("api-staging", 1),
+            ("api", 2), ("api-staging", 1),
             ("node-exporter", 1), ("cadvisor", 1), ("cloudflared", 1),
         ]),
         (n["aichat-worker-1754823887"], 12.0, 19.0, [
-            ("api-prod", 1), ("node-exporter", 1), ("cadvisor", 1),
+            ("api", 1), ("node-exporter", 1), ("cadvisor", 1),
         ]),
     ]
     out = []
@@ -246,32 +221,39 @@ def topology():
 
 
 def summary():
-    return {
-        "p95": 412.0, "slo": 500.0, "p95_tone": "warn",
-        "replicas_running": 6, "replicas_desired": 6,
-        "workers": 3, "workers_ready": 2, "max_workers": 6,
-        "degraded": [a for a in apps() if a["tone"] in ("bad", "warn")],
-        "cpu_per_replica": 64.0,
-    }
+    return shape.summary(service, nodes(), vm_query)
 
 
 def autoscaler_state():
     return {
+        "services": [
+            {"service": "api_app", "component": "api", "p95": 412.0, "slo": 500.0,
+             "breaching": False, "current": 6, "desired": 8, "admitted": 6, "capped": True,
+             "running": 6, "pending": 0, "min": 2, "max": 12, "cpu_per_replica": 64.0,
+             "worker_pinned": 1.0},
+            {"service": "api-staging_app", "component": "api-staging", "p95": 96.0,
+             "slo": 800.0, "breaching": False, "current": 1, "desired": 1, "admitted": 1,
+             "capped": False, "running": 1, "pending": 0, "min": 1, "max": 2,
+             "cpu_per_replica": 8.0, "worker_pinned": 1.0},
+        ],
         "signals": [
-            {"key": "p95 latency", "value": 412.0, "unit": "ms",
-             "note": "Primary signal. What users feel."},
-            {"key": "CPU per replica", "value": 64.0, "unit": "%",
-             "note": "Secondary. Keeps scale-down working when traffic is near zero."},
             {"key": "Node CPU", "value": 71.0, "unit": "%",
              "note": "Placement guard only, never a trigger. Reads the workers, "
                      "or the master when the fleet is empty."},
             {"key": "Node memory", "value": 58.0, "unit": "%",
              "note": "Placement guard only."},
+            {"key": "Demand", "value": 3.6, "unit": "cores",
+             "note": "Reservations of every application replica that has to be placed."},
+            {"key": "Free", "value": 1.1, "unit": "cores",
+             "note": "What the eligible nodes have left after everything else on them."},
         ],
-        "current_replicas": 6, "desired_replicas": 8, "max_replicas": 12,
-        "current_workers": 4, "current_servers": 3, "desired_workers": 5, "max_workers": 6, "min_workers": 1,
-        "worker_mode": 1.0, "manager_capacity": 3.0, "worker_capacity": 5.0,
-        "slo": 500.0, "last_loop": 1_770_000_000.0,
+        "worker_mode": 1.0, "mixed_placement": 0.0, "managed": 2.0,
+        "demand_cpu": 3.6, "demand_mem": 2_684_354_560,
+        "manager_free_cpu": 1.75, "manager_free_mem": 5_100_273_664,
+        "worker_free_cpu": 1.1, "new_worker_cpu": 2.8,
+        "current_workers": 4, "current_servers": 3, "desired_workers": 5,
+        "max_workers": 6, "min_workers": 1,
+        "last_loop": 1_770_000_000.0,
     }
 
 
@@ -280,13 +262,15 @@ def alerts():
         {"name": "Watchdog", "group": "meta", "state": "firing", "tone": "ok",
          "severity": "none", "summary": "Alerting pipeline is alive"},
         {"name": "SLOBreach", "group": "app", "state": "inactive", "tone": "ok",
-         "severity": "critical", "summary": "p95 is above the SLO and the autoscaler has not recovered it"},
+         "severity": "critical", "summary": "p95 on a component is above its SLO"},
         {"name": "HighErrorRate", "group": "app", "state": "pending", "tone": "warn",
-         "severity": "critical", "summary": "Over 5% of requests are returning 5xx"},
+         "severity": "critical", "summary": "Over 5% of requests to api_app are returning 5xx"},
         {"name": "NoHealthyReplicas", "group": "app", "state": "inactive", "tone": "ok",
-         "severity": "critical", "summary": "No healthy app replicas are being scraped"},
+         "severity": "critical", "summary": "A component wants replicas but none are running"},
         {"name": "ReplicaCeiling", "group": "app", "state": "inactive", "tone": "ok",
-         "severity": "warning", "summary": "Replica ceiling reached — capacity plan or app efficiency issue"},
+         "severity": "warning", "summary": "A component is at its replica ceiling"},
+        {"name": "AppMinReplicasUnsatisfiable", "group": "app", "state": "inactive", "tone": "ok",
+         "severity": "critical", "summary": "The cluster cannot host a component's minimum"},
         {"name": "NodeDown", "group": "infra", "state": "inactive", "tone": "ok",
          "severity": "critical", "summary": "Node is not reporting"},
         {"name": "NodeDiskFilling", "group": "infra", "state": "inactive", "tone": "ok",
@@ -298,8 +282,8 @@ def alerts():
     ]
 
 
-def redeploy_stack():
-    return True, "preserving live replica count: 6\npreserving deployed prod image: ghcr.io/acme/aichat-api:sha-9f3ac21\nUpdating service app_api-prod (id: 8xk2)"
+def deploy_system_stack(name):
+    return True, f"{name}: services converged"
 
 
 def restart(service_name):
@@ -319,28 +303,27 @@ def deploy_image(service_name, image):
 
 
 _HISTORY = [
-    {"at": "2026-08-10T13:41:58+00:00", "epoch": 1786714918, "app": "app", "env": "prod",
+    {"at": "2026-08-10T13:41:58+00:00", "epoch": 1786714918, "component": "api",
      "image": "ghcr.io/acme/aichat-api:sha-9f3ac21", "source": "ci", "actor": "github-actions",
-     "ok": True, "detail": "app_api-prod: image updated\nverify: Service converged"},
-    {"at": "2026-08-10T11:02:11+00:00", "epoch": 1786705331, "app": "app", "env": "staging",
+     "ok": True, "detail": "api_app: image updated\nverify: Service converged"},
+    {"at": "2026-08-10T11:02:11+00:00", "epoch": 1786705331, "component": "api-staging",
      "image": "ghcr.io/acme/aichat-api:sha-c40e8b7", "source": "ci", "actor": "github-actions",
-     "ok": True, "detail": "app_api-staging: image updated\nverify: Service converged"},
-    {"at": "2026-08-09T16:20:44+00:00", "epoch": 1786652444, "app": "app", "env": "prod",
+     "ok": True, "detail": "api-staging_app: image updated\nverify: Service converged"},
+    {"at": "2026-08-09T16:20:44+00:00", "epoch": 1786652444, "component": "api",
      "image": "ghcr.io/acme/aichat-api:sha-77b1e05", "source": "ci", "actor": "github-actions",
      "ok": False, "detail": "update paused due to failure; rolled back to sha-4c9920a\n"
                             "task health check failed after start_period"},
-    {"at": "2026-08-09T09:14:02+00:00", "epoch": 1786626842, "app": "app", "env": "prod",
+    {"at": "2026-08-09T09:14:02+00:00", "epoch": 1786626842, "component": "api",
      "image": "ghcr.io/acme/aichat-api:sha-4c9920a", "source": "panel", "actor": "admin",
      "ok": True, "detail": "configuration change: LOG_LEVEL, OPENAI_TIMEOUT_MS"},
-    {"at": "2026-08-08T18:47:30+00:00", "epoch": 1786574850, "app": "app", "env": "prod",
+    {"at": "2026-08-08T18:47:30+00:00", "epoch": 1786574850, "component": "api",
      "image": "ghcr.io/acme/aichat-api:sha-4c9920a", "source": "ci", "actor": "github-actions",
-     "ok": True, "detail": "app_api-prod: image updated\nverify: Service converged"},
+     "ok": True, "detail": "api_app: image updated\nverify: Service converged"},
 ]
 
 
-def history(app_key=None, env=None, limit=25):
-    rows = [h for h in _HISTORY
-            if (not app_key or h["app"] == app_key) and (not env or h["env"] == env)]
+def history(name=None, limit=25):
+    rows = [h for h in _HISTORY if not name or h["component"] == name]
     return rows[:limit]
 
 

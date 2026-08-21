@@ -1,12 +1,12 @@
 FROM python:3.12-slim
 
 # The panel shells out for everything that touches the cluster:
-#   docker  — service update / stack deploy, via bin/app-env and bin/stack-deploy.
-#             The CLI, not the daemon. Without it every deploy button in the UI
-#             fails at runtime with "No such file or directory".
+#   docker  — stack deploy / service update, for components and for the three
+#             infrastructure stacks. The CLI, not the daemon. Without it every
+#             deploy button fails at runtime with "No such file or directory".
 #   ssh     — the only way to reach the host itself (ufw), since the container
 #             shares nothing with the host's network stack.
-#   envsubst — bin/app-env renders the stack file with it.
+#   envsubst — bin/stack-deploy renders the infrastructure stacks with it.
 ARG DOCKER_CLI_VERSION=27.3.1
 RUN apt-get update \
  && apt-get install -y --no-install-recommends gettext-base curl ca-certificates openssh-client \

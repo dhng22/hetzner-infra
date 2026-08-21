@@ -6,43 +6,47 @@
 </div>
 
 <div class="tiles">
-  <div class="tile is-{{ s.p95_tone }}">
-    <span class="k">p95 latency</span>
-    <span class="v">{% if s.p95 is not none %}{{ s.p95|round|int }}<small style="font-size:14px"> ms</small>{% else %}—{% endif %}</span>
-    <span class="m">SLO {{ s.slo|round|int }} ms · act at {{ (s.slo * 0.8)|round|int }} ms</span>
-    <div class="meter {% if s.p95_tone != 'ok' %}is-{{ s.p95_tone }}{% endif %}">
-      <i style="width: {{ [((s.p95 or 0) / s.slo * 100), 100]|min }}%"></i>
-    </div>
+  <div class="tile">
+    <span class="k">Components</span>
+    <span class="v">{{ s.components_ok }}<span class="muted">/{{ s.components }}</span></span>
+    <span class="m">healthy{% if s.undeployed %} · {{ s.undeployed|length }} not deployed{% endif %}</span>
+  </div>
+
+  <div class="tile is-{{ 'bad' if s.slo_breaching else 'ok' }}">
+    <span class="k">Breaching SLO</span>
+    <span class="v">{{ s.slo_breaching }}</span>
+    <span class="m">each component against its own p95 target</span>
   </div>
 
   <div class="tile">
-    <span class="k">API replicas</span>
-    <span class="v">{{ s.replicas_running }}<span class="muted" style="font-size:16px">/{{ s.replicas_desired }}</span></span>
-    <span class="m">owned by the autoscaler</span>
+    <span class="k">Replicas</span>
+    <span class="v">{{ s.replicas_running }}<span class="muted">/{{ s.replicas_desired }}</span></span>
+    <span class="m">across every component</span>
   </div>
 
   <div class="tile">
     <span class="k">Workers</span>
-    <span class="v">{{ s.workers_ready }}<span class="muted" style="font-size:16px">/{{ s.workers }}</span></span>
+    <span class="v">{{ s.workers_ready }}<span class="muted">/{{ s.workers }}</span></span>
     <span class="m">ceiling {{ s.max_workers }} · a budget cap</span>
-  </div>
-
-  <div class="tile">
-    <span class="k">CPU per replica</span>
-    <span class="v">{% if s.cpu_per_replica is not none %}{{ s.cpu_per_replica|round|int }}<small style="font-size:14px">%</small>{% else %}—{% endif %}</span>
-    <span class="m">of each replica's own limit</span>
   </div>
 </div>
 
 {% if s.degraded %}
 <div class="banner warn">
   <div>
-    <strong>{{ s.degraded|length }} service{{ '' if s.degraded|length == 1 else 's' }} need{{ 's' if s.degraded|length == 1 else '' }} attention.</strong>
-    {% for a in s.degraded %}<a href="{{ app_href(a.key) }}">{{ a.display }}</a>{{ ', ' if not loop.last }}{% endfor %}
+    <strong>{{ s.degraded|length }} component{{ '' if s.degraded|length == 1 else 's' }} need{{ 's' if s.degraded|length == 1 else '' }} attention.</strong>
+    {% for v in s.degraded %}<a href="{{ component_href(v.name) }}">{{ v.name }}</a>{{ ', ' if not loop.last }}{% endfor %}
+  </div>
+</div>
+{% elif not s.components %}
+<div class="banner">
+  <div>
+    Nothing is running yet — the cluster is up and empty.
+    <a href="{{ section_href({'key': 'components'}) }}">Create a component</a> to put something on it.
   </div>
 </div>
 {% else %}
-<div class="banner ok"><div>All services are reporting healthy.</div></div>
+<div class="banner ok"><div>Every component is reporting healthy.</div></div>
 {% endif %}
 
 <section class="panel" id="topology" data-topology>
@@ -122,25 +126,26 @@
 <div class="grid-2">
   <section class="panel">
     <div class="panel-head">
-      <h2>Services</h2>
+      <h2>Components</h2>
       <span class="spacer"></span>
-      <a class="btn btn-sm" href="{{ section_href({'key': 'apps'}) }}">All apps</a>
+      <a class="btn btn-sm" href="{{ section_href({'key': 'components'}) }}">All components</a>
     </div>
     <div class="rows">
-      {% for a in apps[:7] %}
-        {% set primary = a.envs.values()|list|first %}
-        <a class="row {{ a.tone }}" href="{{ app_href(a.key) }}">
+      {% for v in views[:7] %}
+        <a class="row {{ v.tone }}" href="{{ component_href(v.name) }}">
           <span class="stripe"></span>
           <span>
-            <span class="row-title">{{ a.display }}</span>
-            <span class="row-sub">{{ primary.image_short }}</span>
+            <span class="row-title">{{ v.name }}</span>
+            <span class="row-sub">{{ v.summary }}</span>
           </span>
           <span class="row-metric hide-sm">
             <span class="k">Tasks</span>
-            <span class="v num">{{ primary.running }}/{{ primary.desired }}</span>
+            <span class="v num">{{ v.running }}/{{ v.desired }}</span>
           </span>
-          <span class="pill {{ a.tone }}">{{ primary.state }}</span>
+          <span class="pill {{ v.tone }}">{{ v.state }}</span>
         </a>
+      {% else %}
+        <div class="empty">No components yet.</div>
       {% endfor %}
     </div>
   </section>
@@ -153,7 +158,7 @@
           <span class="stripe"></span>
           <span>
             <span class="row-title">{{ al.name }}</span>
-            <span class="row-sub" style="font-family:var(--ui)">{{ al.summary }}</span>
+            <span class="row-sub">{{ al.summary }}</span>
           </span>
           <span class="pill {{ al.tone }}">{{ al.state }}</span>
         </div>

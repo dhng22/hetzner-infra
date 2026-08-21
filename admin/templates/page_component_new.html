@@ -1,0 +1,4 @@
+{% extends "base.html" %}
+{% block title %}New {{ cls.LABEL|lower }} · {{ cluster_name }}{% endblock %}
+{% block crumb %}{{ cluster_name }} · components · new{% endblock %}
+{% block main %}{% include "_component_new.html" %}{% endblock %}

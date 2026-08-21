@@ -28,7 +28,7 @@
   {% set wd = alerts|selectattr('name', 'equalto', 'Watchdog')|first %}
   <div class="tile {{ 'is-ok' if wd and wd.state == 'firing' else 'is-bad' }}">
     <span class="k">Heartbeat</span>
-    <span class="v" style="font-size:20px">{{ 'alive' if wd and wd.state == 'firing' else 'SILENT' }}</span>
+    <span class="v small">{{ 'alive' if wd and wd.state == 'firing' else 'SILENT' }}</span>
     <span class="m">Watchdog must always be firing</span>
   </div>
 </div>

@@ -1,0 +1,139 @@
+{# The Deployments tab: CI webhook, registry auth, a manual deploy, and history. #}
+<section class="panel">
+  <div class="panel-head">
+    <h2>CI webhook</h2>
+    <span class="spacer"></span>
+    <span class="pill mute plain">POST</span>
+  </div>
+  <div class="panel-body stack">
+    <div>
+      <div class="eyebrow">Endpoint</div>
+      <div class="conn">
+        <code>{{ webhook.url }}</code>
+        <button class="btn btn-sm" type="button" data-copy data-copy-text="{{ webhook.url }}">Copy</button>
+      </div>
+    </div>
+    <div>
+      <div class="eyebrow">Deploy token — send as <code>X-Deploy-Token</code></div>
+      <div class="conn">
+        <code data-secret-text="{{ webhook.token }}" class="masked">••••••••••••••••••••</code>
+        <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
+        <button class="btn btn-sm" type="button" data-copy data-copy-text="{{ webhook.token }}">Copy</button>
+      </div>
+    </div>
+    <div>
+      <div class="eyebrow">Call it from your pipeline</div>
+      <div class="conn">
+        <code style="white-space:pre">{{ webhook.curl }}</code>
+        <button class="btn btn-sm" type="button" data-copy data-copy-text="{{ webhook.curl }}">Copy</button>
+      </div>
+    </div>
+    <form method="post" action="{{ token_href(component.name) }}" {% if preview %}data-preview{% endif %}
+          data-confirm="Issue a new deploy token? The current one stops working immediately.">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <button class="btn btn-danger btn-sm" type="submit">Regenerate token</button>
+    </form>
+  </div>
+  <div class="panel-note">
+    One token per component, so a leaked staging token cannot reach production.
+    The update is graceful because of the service's own policy, not this endpoint:
+    <code>start-first</code> brings the new task to healthy before stopping the old one,
+    <code>monitor</code> gives it time to boot before Swarm judges it, and a failure rolls
+    back automatically. The call waits for that and returns <code>502</code> if Swarm
+    rolled the deploy back, so a bad image fails your pipeline instead of quietly
+    reverting. <strong>:latest is rejected</strong> — Swarm compares the reference
+    string, so an unchanged tag is a silent no-op.
+    If the panel is behind Cloudflare Access, exempt this path or give CI a service token.
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Registry credentials</h2>
+    <span class="spacer"></span>
+    <span class="eyebrow">{{ registries|length }} logged in</span>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Registry</th><th>Username</th></tr></thead>
+      <tbody>
+        {% for r in registries %}
+        <tr><td class="mono">{{ r.registry }}</td><td class="mono">{{ r.username or '—' }}</td></tr>
+        {% else %}
+        <tr><td colspan="2" class="empty">No registry credentials. Private images will fail to pull.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <form method="post" action="{{ registry_href() }}" {% if preview %}data-preview{% endif %}>
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <input type="hidden" name="component" value="{{ component.name }}">
+    <div class="setting-row">
+      <label for="reg-host">Registry</label>
+      <input id="reg-host" type="text" name="registry" value="ghcr.io" placeholder="ghcr.io">
+      <p class="why">Any registry: <code>ghcr.io</code>, <code>registry.gitlab.com</code>,
+         <code>docker.io</code>, or your own.</p>
+    </div>
+    <div class="setting-row">
+      <label for="reg-user">Username</label>
+      <input id="reg-user" type="text" name="username" placeholder="github-username">
+    </div>
+    <div class="setting-row">
+      <label for="reg-pass">Password or token</label>
+      <input id="reg-pass" type="password" name="password" placeholder="PAT with read:packages">
+      <p class="why">Sent on stdin to <code>docker login</code>, never on the command line.</p>
+    </div>
+    <div class="panel-body tight-top">
+      <button class="btn btn-primary" type="submit">Save credentials</button>
+    </div>
+  </form>
+  <div class="panel-note">
+    Stored in the docker config the panel shares with the host, which is what
+    <code>--with-registry-auth</code> ships to workers with the service spec. That is why
+    a worker created an hour from now can still pull your private image — it never talks
+    to the registry with its own credentials.
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Deploy an image now</h2></div>
+  <form method="post" action="{{ action_href(component.name) }}" {% if preview %}data-preview{% endif %}>
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="deploy-image">
+    <div class="setting-row">
+      <label for="img-now">Image reference</label>
+      <input id="img-now" type="text" name="image"
+             value="{{ (view.primary.image if view.primary and view.primary.exists else component.spec.image).split('@')[0] }}">
+      <p class="why">The same path CI takes. Must be an immutable tag.</p>
+    </div>
+    <div class="panel-body tight-top">
+      <button class="btn btn-primary" type="submit">Deploy</button>
+    </div>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>History</h2>
+    <span class="spacer"></span>
+    <span class="eyebrow">{{ deployments|length }} recorded</span>
+  </div>
+  <div class="rows">
+    {% for d in deployments %}
+    <div class="deploy-row {{ 'ok' if d.ok else 'bad' }}">
+      <span class="stripe"></span>
+      <span class="src">{{ d.source }}</span>
+      <span>
+        <span class="row-title mono">{{ d.image }}</span>
+        <span class="row-sub">
+          {{ d.at.replace('T', ' ')[:16] }} UTC{% if d.actor %} · {{ d.actor }}{% endif %}
+          {% if d.detail %} · {{ d.detail.splitlines()[0] }}{% endif %}
+        </span>
+      </span>
+      <span class="pill {{ 'ok' if d.ok else 'bad' }}">{{ 'deployed' if d.ok else 'rolled back' }}</span>
+    </div>
+    {% else %}
+    <div class="empty">Nothing deployed through the panel or the webhook yet.</div>
+    {% endfor %}
+  </div>
+</section>

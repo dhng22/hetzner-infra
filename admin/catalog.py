@@ -1,20 +1,20 @@
 """
-What the panel calls an "app", and which Swarm services back it.
+The infrastructure — the part of the cluster you did not create and cannot edit.
 
-Swarm only knows a flat list of services with stack-prefixed names. That is a
-bad mental model for an operator: `app_api-prod` and `app_api-staging` are one
-application in two environments, not two unrelated things. This file is the
-translation layer, and it is the only place that knowledge lives.
+Three stacks come up before anything else exists: monitoring, ingress, admin.
+They are not components; they have no spec file, no environment editor and no
+delete button, because they are the thing that runs components. The panel shows
+them so you can see their state and open their UIs, and shows them read-only
+because a UI that accepts an edit the next deploy reverts is worse than one that
+declines.
 
-`editable` marks the apps whose configuration the panel may write. Everything
-else is owned by a stack file, and the panel shows it read-only rather than
-pretending otherwise — a UI that silently loses your edit on the next deploy is
-worse than one that declines to take it.
+Everything else — every application, every database — is a component, and none
+of it is listed here. That is the whole point of the refactor: this file used to
+hard-code `app_api-prod` and `app_api-staging`, so a second application meant
+editing it.
 """
 
-CATEGORIES = ["Application", "Data", "Ingress", "Observability", "Platform"]
-
-# How a service's own web UI is reached. Being precise here matters: offering an
+# How a service's own web UI is reached. Being precise matters: offering an
 # "Open" button that leads nowhere is worse than saying it is not published.
 #   tunnel   — a public hostname on the Cloudflare tunnel
 #   host     — published on the master's private IP at `port`
@@ -22,128 +22,109 @@ CATEGORIES = ["Application", "Data", "Ingress", "Observability", "Platform"]
 #              rather than linking to an address that will time out.
 UI_TUNNEL, UI_HOST, UI_INTERNAL = "tunnel", "host", "internal"
 
-CATALOG = [
-    {
-        "key": "app",
-        "display": "API",
-        "category": "Application",
-        "blurb": "The Ktor service behind the tunnel. Replica count is owned by the autoscaler.",
-        "environments": {"prod": "app_api-prod", "staging": "app_api-staging"},
-        "env_files": {"prod": "app-prod.env", "staging": "app-staging.env"},
-        "editable": True,
-        "deployable": True,
-        "scalable": False,  # the autoscaler owns this; manual scaling would fight it
-        "deployments": True,   # CI webhook + history tab
-        "ui": {"kind": UI_TUNNEL, "prefix": {"prod": "", "staging": "staging-"}},
-    },
-    {
-        "key": "redis",
-        "display": "Redis",
-        "category": "Data",
-        "blurb": "Cache and sessions, one instance per environment, pinned to the master.",
-        "environments": {"prod": "app_redis-prod", "staging": "app_redis-staging"},
-        "editable": False,
-        "deployable": True,
-        "credentials": "redis",
-        "note": "Password comes from the API's environment file — one value for server and clients.",
-    },
+SYSTEM = [
     {
         "key": "cloudflared",
         "display": "Cloudflare Tunnel",
+        "stack": "ingress",
+        "service": "ingress_cloudflared",
         "category": "Ingress",
-        "blurb": "One connector per node, master included. All inbound traffic arrives here.",
-        "environments": {"default": "app_cloudflared"},
-        "editable": False,
-        "deployable": True,
+        "blurb": "One connector per node, master included. All inbound traffic arrives here. "
+                 "Routes are configured in the Cloudflare dashboard, not here.",
     },
     {
         "key": "grafana",
         "display": "Grafana",
+        "stack": "monitoring",
+        "service": "monitoring_grafana",
         "category": "Observability",
         "blurb": "Dashboards over VictoriaMetrics and Loki.",
-        "environments": {"default": "monitoring_grafana"},
-        "editable": False,
-        "ui": {"kind": UI_TUNNEL, "prefix": {"default": "grafana-"}},
+        "ui": {"kind": UI_TUNNEL, "prefix": "grafana-"},
     },
     {
         "key": "victoriametrics",
         "display": "VictoriaMetrics",
+        "stack": "monitoring",
+        "service": "monitoring_victoriametrics",
         "category": "Observability",
-        "blurb": "Metric store, 30 day retention. The autoscaler reads its signals from here.",
-        "environments": {"default": "monitoring_victoriametrics"},
-        "editable": False,
-        "ui": {"kind": UI_INTERNAL, "port": 8428, "host": "victoriametrics"},
+        "blurb": "Metric storage. Every scaling decision is read from here.",
+        "ui": {"kind": UI_INTERNAL, "host": "victoriametrics", "port": 8428},
     },
     {
         "key": "vmagent",
         "display": "vmagent",
+        "stack": "monitoring",
+        "service": "monitoring_vmagent",
         "category": "Observability",
-        "blurb": "Scraper with Swarm service discovery. Picks up new workers unattended.",
-        "environments": {"default": "monitoring_vmagent"},
-        "editable": False,
-        "ui": {"kind": UI_INTERNAL, "port": 8429, "host": "vmagent"},
+        "blurb": "Scrapes anything carrying the prometheus.* deploy labels. "
+                 "Components get them automatically.",
+        "ui": {"kind": UI_INTERNAL, "host": "vmagent", "port": 8429},
+    },
+    {
+        "key": "vmalert",
+        "display": "vmalert",
+        "stack": "monitoring",
+        "service": "monitoring_vmalert",
+        "category": "Observability",
+        "blurb": "Evaluates config/alerts.yml against VictoriaMetrics.",
+        "ui": {"kind": UI_INTERNAL, "host": "vmalert", "port": 8880},
+    },
+    {
+        "key": "alertmanager",
+        "display": "Alertmanager",
+        "stack": "monitoring",
+        "service": "monitoring_alertmanager",
+        "category": "Observability",
+        "blurb": "Groups and dispatches alerts to your webhook.",
+        "ui": {"kind": UI_INTERNAL, "host": "alertmanager", "port": 9093},
     },
     {
         "key": "loki",
         "display": "Loki",
+        "stack": "monitoring",
+        "service": "monitoring_loki",
         "category": "Observability",
-        "blurb": "Log store. Containers ship straight to it via the Docker log driver.",
-        "environments": {"default": "monitoring_loki"},
-        "editable": False,
-        "ui": {"kind": UI_HOST, "port": 3100},
-    },
-    {
-        "key": "alerting",
-        "display": "Alerting",
-        "category": "Observability",
-        "blurb": "vmalert evaluates the rules; Alertmanager routes them to your webhook.",
-        "environments": {"vmalert": "monitoring_vmalert", "alertmanager": "monitoring_alertmanager"},
-        "editable": False,
-        "ui": {"kind": UI_INTERNAL, "port": {"vmalert": 8880, "alertmanager": 9093},
-               "host": {"vmalert": "vmalert", "alertmanager": "alertmanager"}},
+        "blurb": "Log storage. Every container ships to it directly through the log driver.",
     },
     {
         "key": "autoscaler",
         "display": "Autoscaler",
+        "stack": "monitoring",
+        "service": "monitoring_autoscaler",
         "category": "Platform",
-        "blurb": "Two-tier scaler. Owns the API's replica count, its placement, and the worker pool.",
-        "environments": {"default": "monitoring_autoscaler"},
-        "editable": False,
-        "ui": {"kind": UI_INTERNAL, "port": 9200, "host": "autoscaler", "path": "/metrics"},
+        "blurb": "Discovers components by label, scales their replicas, and buys and "
+                 "sells Hetzner workers to fit them.",
     },
     {
         "key": "exporters",
-        "display": "Exporters",
-        "category": "Observability",
-        "blurb": "node-exporter and cadvisor run on every node, present and future.",
-        "environments": {"node": "monitoring_node-exporter", "container": "monitoring_cadvisor"},
-        "editable": False,
-        "ui": {"kind": UI_HOST, "port": {"node": 9100, "container": 8081}},
+        "display": "Node exporters",
+        "stack": "monitoring",
+        "service": "monitoring_node-exporter",
+        "category": "Platform",
+        "blurb": "node-exporter and cadvisor, one of each per node.",
     },
     {
         "key": "admin",
-        "display": "Admin Panel",
+        "display": "Admin panel",
+        "stack": "admin",
+        "service": "admin_ui",
         "category": "Platform",
-        "blurb": "This panel.",
-        "environments": {"default": "admin_ui"},
-        "editable": False,
-        "ui": {"kind": UI_TUNNEL, "prefix": {"default": "admin-"}},
+        "blurb": "This console. It holds the docker socket, so its password is the cluster.",
+        "ui": {"kind": UI_TUNNEL, "prefix": "admin-"},
     },
 ]
 
-BY_KEY = {a["key"]: a for a in CATALOG}
+BY_KEY = {entry["key"]: entry for entry in SYSTEM}
+
+#: Stacks the panel deploys but never edits. `bin/stack-deploy` accepts exactly
+#: these, and nothing else may be routed through it.
+SYSTEM_STACKS = ["monitoring", "ingress", "admin"]
+
+CATEGORIES = ["Ingress", "Observability", "Platform"]
 
 
-def service_names():
-    names = []
-    for app in CATALOG:
-        names.extend(app["environments"].values())
-    return names
-
-
-def app_for_service(name):
-    for app in CATALOG:
-        for env, svc in app["environments"].items():
-            if svc == name:
-                return app, env
-    return None, None
+def system_for_service(service_name):
+    for entry in SYSTEM:
+        if entry["service"] == service_name:
+            return entry
+    return None

@@ -1,0 +1,68 @@
+<div class="page-head">
+  <div>
+    <div class="eyebrow">Components</div>
+    <h1>What you are running</h1>
+  </div>
+</div>
+
+{% if not views %}
+<section class="panel empty-state">
+  <div class="panel-body stack">
+    <h2>Nothing is running yet</h2>
+    <p class="hint">
+      This cluster boots with monitoring, ingress and this console — and nothing else.
+      Applications and databases are yours to create, one independent stack each,
+      so a broken one cannot take anything else down with it.
+    </p>
+    <div class="btn-row">
+      {% for key, cls in types.items() %}
+      <a class="btn {{ 'btn-primary' if loop.first }}" href="{{ new_href(key) }}">New {{ cls.LABEL|lower }}</a>
+      {% endfor %}
+    </div>
+    <p class="hint">
+      Or on the master: <code>component create app api --image ghcr.io/you/app:tag --port 8080</code>
+    </p>
+  </div>
+</section>
+{% endif %}
+
+{% for category, group in grouped %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>{{ category }}</h2>
+    <span class="spacer"></span>
+    <span class="muted">{{ group|length }}</span>
+  </div>
+  <div class="panel-body">
+    <div class="cards">
+      {% for v in group %}
+      <a class="card" href="{{ component_href(v.name) }}">
+        <div class="card-head">
+          <span class="card-name">{{ v.name }}</span>
+          <span class="pill {{ v.tone }}">{{ v.state }}</span>
+        </div>
+        <div class="card-sub mono">{{ v.summary }}</div>
+        <div class="card-foot">
+          <span class="muted">{{ v.label }}</span>
+          {% if v.primary and v.primary.exists %}
+            <span class="mono">{{ v.running }}/{{ v.desired }} replicas</span>
+          {% else %}
+            <span class="muted">not deployed</span>
+          {% endif %}
+        </div>
+      </a>
+      {% endfor %}
+
+      {% if loop.first %}
+      {% for key, cls in types.items() %}
+      <a class="card card-new" href="{{ new_href(key) }}">
+        <div class="card-plus" aria-hidden="true">+</div>
+        <div class="card-name">New {{ cls.LABEL|lower }}</div>
+        <div class="card-sub">{{ cls.BLURB }}</div>
+      </a>
+      {% endfor %}
+      {% endif %}
+    </div>
+  </div>
+</section>
+{% endfor %}

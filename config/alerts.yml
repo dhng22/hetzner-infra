@@ -68,6 +68,17 @@ groups:
         annotations:
           summary: "Autoscaler is failing repeatedly in stage '{{ $labels.stage }}'"
 
+      # AutoscalerStalled computes time() - gauge, which returns NO SERIES if
+      # the autoscaler's scrape target disappears altogether — the exact case it
+      # looks like it covers. Every per-component rule now depends on gauges
+      # this process exports, so its absence has to page on its own.
+      - alert: AutoscalerAbsent
+        expr: absent(autoscaler_last_loop_timestamp_seconds)
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "The autoscaler is not being scraped at all — every scaling alert is blind"
+
       - alert: AutoscalerStalled
         expr: time() - autoscaler_last_loop_timestamp_seconds > 300
         for: 5m
@@ -77,51 +88,110 @@ groups:
 
   - name: app
     rules:
+      # Per component, not per environment. `service` is the Swarm name and is
+      # written by the vmagent relabel; grouping by it is what makes one noisy
+      # component visible instead of averaged into every other one.
+      #
+      # The traffic floor is not cosmetic: with several components, one request
+      # and one error is a 100% ratio, and this routes to a critical receiver.
       - alert: HighErrorRate
         expr: |
-          sum by (env) (rate(http_server_requests_seconds_count{status=~"5..",env="prod"}[5m]))
-          / sum by (env) (rate(http_server_requests_seconds_count{env="prod"}[5m])) > 0.05
+          (
+            sum by (service) (rate(http_server_requests_seconds_count{status=~"5.."}[5m]))
+            / sum by (service) (rate(http_server_requests_seconds_count[5m]))
+          ) > 0.05
+          and on (service) (sum by (service) (rate(http_server_requests_seconds_count[5m])) > 0.2)
         for: 5m
         labels: { severity: critical }
         annotations:
-          summary: "Over 5% of requests are returning 5xx"
+          summary: "Over 5% of requests to {{ $labels.service }} are returning 5xx"
 
+      # Both sides carry `service`, so this compares each component against its
+      # OWN SLO and produces one alert instance per breaching component. A
+      # filtering comparison returns the left-hand series with its labels
+      # intact, which is what carries the name into the annotation.
       - alert: SLOBreach
-        expr: autoscaler_app_p95_ms > autoscaler_slo_p95_ms
+        expr: autoscaler_service_p95_ms > on (service) autoscaler_service_slo_p95_ms
         for: 5m
         labels: { severity: critical }
         annotations:
-          summary: "p95 is above the SLO and the autoscaler has not recovered it"
+          summary: "p95 on {{ $labels.service }} is above its SLO and the autoscaler has not recovered it"
 
-      # Compare against the exported ceiling, never a literal. This hardcoded
-      # `>= 12`, so raising MAX_REPLICAS left the alert pinned to the old
-      # number — the same config-drift failure that killed NoHealthyReplicas.
-      # AutoscalerAtMax already does it correctly; this now mirrors it.
+      # Compare against the exported ceiling, never a literal.
       #
-      # The old `desired >= current` conjunct added nothing: at the ceiling the
-      # autoscaler clamps desired to current, so it is true by construction.
+      # The two extra conjuncts are load-bearing. A FIXED-replica component sits
+      # at current == max == min permanently and would page forever without
+      # them, which with a handful of components means the rule is muted within
+      # a week and then means nothing.
       #
       # Distinct from AutoscalerAtMax on purpose. That one means "out of node
-      # budget"; this means "out of replicas". The worker ceiling can pin you
-      # below MAX_REPLICAS and trip only the other one.
+      # budget"; this means "this component is out of replicas".
       - alert: ReplicaCeiling
-        expr: autoscaler_current_replicas >= autoscaler_max_replicas
+        expr: |
+          (autoscaler_service_current_replicas >= on (service) autoscaler_service_max_replicas)
+          and on (service) (autoscaler_service_autoscale_enabled == 1)
+          and on (service) (autoscaler_service_max_replicas > autoscaler_service_min_replicas)
         for: 15m
         labels: { severity: warning }
         annotations:
-          summary: "Replica ceiling reached — capacity plan or app efficiency issue"
+          summary: "{{ $labels.service }} is at its replica ceiling — capacity plan or app efficiency issue"
 
-      # `service` is the SWARM name (stack_service), set by the vmagent relabel.
-      # It must match APP_SERVICE in infra.env — it was `prod_api` from the old
-      # two-stack layout, which matched nothing and made this rule dead.
+      # THE OUTAGE RULE. It used to hardcode `service="app_api-prod"` and rely
+      # on `or vector(0)` to survive the series vanishing — neither of which
+      # generalises when the set of components is created at runtime and nobody
+      # here knows their names.
       #
-      # `or vector(0)` is load-bearing. In the outage this rule exists to catch,
-      # every replica is gone, so the series does not exist — and `sum(nothing)
-      # < 1` does not evaluate false, it returns no series at all and never
-      # fires. The fallback is what turns "no data" into an alert.
+      # The anchor is now a gauge the AUTOSCALER owns, read from the Docker API
+      # rather than from a scrape. It exists for exactly as long as the
+      # component does, so "every replica is gone" is a value of 0 rather than
+      # an absent series — which is the same property `or vector(0)` was buying,
+      # obtained without naming anything.
       - alert: NoHealthyReplicas
-        expr: (sum(up{job="swarm-services", service="app_api-prod"}) or vector(0)) < 1
+        expr: |
+          autoscaler_service_running_replicas == 0
+          and on (service) (autoscaler_service_admitted_replicas > 0)
         for: 2m
         labels: { severity: critical }
         annotations:
-          summary: "No healthy app replicas are being scraped"
+          summary: "{{ $labels.service }} wants replicas but none are running"
+
+      # The other half of what NoHealthyReplicas used to conflate: tasks are
+      # running, but nothing is scraping them. That is a monitoring failure, not
+      # an outage, and it deserves a different severity and a different page.
+      #
+      # `or sum by (service) (gauge * 0)` synthesises the zero for whatever set
+      # of components currently exists. `or vector(0)` could only ever do that
+      # for one hardcoded name.
+      - alert: ReplicasNotScraped
+        expr: |
+          (
+            sum by (service) (up{job="swarm-services"})
+            or
+            sum by (service) (autoscaler_service_running_replicas * 0)
+          ) < 1
+          and on (service) (autoscaler_service_running_replicas > 0)
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.service }} has running tasks but no scrapeable metrics"
+
+      # The cluster cannot host a component's floor. Self-healing while there is
+      # budget left, because the fleet is sized from the UNCAPPED demand — so if
+      # this is still true ten minutes later, MAX_WORKERS is the binding
+      # constraint and a human has to choose.
+      - alert: AppMinReplicasUnsatisfiable
+        expr: autoscaler_service_min_unsatisfied == 1
+        for: 10m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.service }} cannot reach its minimum replica count"
+
+      # Tasks Swarm accepted but could not place. Distinct from the two rules
+      # above: the replicas were admitted and the scheduler still said no,
+      # which usually means a reservation that no longer fits any node.
+      - alert: ReplicasPending
+        expr: autoscaler_service_pending_replicas > 0
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.service }} has replicas that cannot be placed"

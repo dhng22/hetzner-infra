@@ -35,21 +35,11 @@ x-autoscaler-env: &autoscaler-env
   HCLOUD_NETWORK_NAME: "${HCLOUD_NETWORK_NAME}"
   HCLOUD_SSH_KEY_NAME: "${HCLOUD_SSH_KEY_NAME}"
   WORKER_IMAGE: "${WORKER_IMAGE}"
-  APP_SERVICE: "${APP_SERVICE}"
-  APP_SERVICE_STAGING: "${APP_SERVICE_STAGING}"
-  APP_CPU_LIMIT: "${APP_CPU_LIMIT}"
-  SLO_P95_MS: "${SLO_P95_MS}"
-  SCALE_UP_P95_RATIO: "${SCALE_UP_P95_RATIO}"
-  SCALE_DOWN_P95_RATIO: "${SCALE_DOWN_P95_RATIO}"
-  SCALE_UP_CPU: "${SCALE_UP_CPU}"
-  SCALE_DOWN_CPU: "${SCALE_DOWN_CPU}"
+  # Nothing per-application here any more. Every scaling policy — SLO, replica
+  # bounds, sustain windows, the CPU thresholds — is carried as deploy labels on
+  # the service it applies to, and the autoscaler discovers services rather than
+  # being told about them. What is left is the fleet.
   NODE_PRESSURE_PCT: "${NODE_PRESSURE_PCT}"
-  MIN_REPLICAS: "${MIN_REPLICAS}"
-  MAX_REPLICAS: "${MAX_REPLICAS}"
-  SCALE_UP_FACTOR: "${SCALE_UP_FACTOR}"
-  REPLICA_COOLDOWN_SECONDS: "${REPLICA_COOLDOWN_SECONDS}"
-  SUSTAIN_UP_SECONDS: "${SUSTAIN_UP_SECONDS}"
-  SUSTAIN_DOWN_SECONDS: "${SUSTAIN_DOWN_SECONDS}"
   COOLDOWN_UP_SECONDS: "${COOLDOWN_UP_SECONDS}"
   COOLDOWN_DOWN_SECONDS: "${COOLDOWN_DOWN_SECONDS}"
   POST_DRAIN_GRACE_SECONDS: "45"

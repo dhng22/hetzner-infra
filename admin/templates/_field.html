@@ -1,0 +1,38 @@
+{#
+  One editable field, rendered from its Field descriptor.
+
+  Every form in the panel that edits a component uses this — the create page and
+  the settings tab both loop over `fields()`. A new component type therefore
+  needs no new markup at all, which is the point: the old panel had its form
+  written out by hand per app, so a second type meant a second template.
+#}
+<div class="field">
+  <label for="f-{{ f.name }}">{{ f.label }}</label>
+
+  {% if f.kind == "bool" %}
+    <label class="check">
+      <input type="checkbox" id="f-{{ f.name }}" name="{{ f.name }}" value="true"
+             {% if value %}checked{% endif %}>
+      <span>{{ f.help or "Enabled" }}</span>
+    </label>
+
+  {% elif f.kind == "choice" %}
+    <select id="f-{{ f.name }}" name="{{ f.name }}">
+      {% for choice in f.choices %}
+      <option value="{{ choice }}" {% if value|string == choice %}selected{% endif %}>{{ choice }}</option>
+      {% endfor %}
+    </select>
+
+  {% else %}
+    <input id="f-{{ f.name }}" name="{{ f.name }}"
+           type="{{ 'number' if f.kind in ('number', 'port', 'memory', 'cpu') else 'text' }}"
+           {% if f.kind == 'cpu' %}step="0.05"{% endif %}
+           {% if f.minimum is not none %}min="{{ f.minimum }}"{% endif %}
+           {% if f.maximum is not none %}max="{{ f.maximum }}"{% endif %}
+           {% if f.required %}required{% endif %}
+           {% if f.placeholder %}placeholder="{{ f.placeholder }}"{% endif %}
+           value="{{ '' if value is none else value }}">
+  {% endif %}
+
+  {% if f.help and f.kind != "bool" %}<p class="hint">{{ f.help }}</p>{% endif %}
+</div>

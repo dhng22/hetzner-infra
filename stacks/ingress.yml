@@ -1,0 +1,82 @@
+version: "3.8"
+
+# =============================================================================
+# INGRESS — the Cloudflare tunnel connector, and nothing else
+# =============================================================================
+#   docker stack deploy --with-registry-auth -c stacks/ingress.yml ingress
+#
+# This used to live in stacks/app.yml, next to the application. That was the
+# bug: compose refuses an empty `image:`, so an application you had not built
+# yet took the tunnel down with it — and the tunnel is how you reach the panel
+# that creates applications. Ingress does not depend on any application, so it
+# is not deployed with one.
+#
+# ROUTING IS NOT CONFIGURED HERE. The connector runs in token mode
+# (TUNNEL_TOKEN_FILE), so it downloads its ingress rules from Cloudflare at
+# startup. You add a hostname in the Zero Trust dashboard and point it at the
+# local target the admin panel shows you on the component's page, which is
+# always service DNS on the `edge` network:
+#
+#   <app>.<root>            ->  http://<component>_app:<port>
+#   grafana-<app>.<root>    ->  http://grafana:3000
+#   admin-<app>.<root>      ->  http://<master-private-ip>:3000   (host port)
+#
+# Cloudflare's free Universal SSL covers one subdomain level only, which is why
+# everything stays at the third level and extra services are separated by a
+# dash rather than another dot.
+# =============================================================================
+
+x-loki-logging: &loki-logging
+  driver: loki
+  options:
+    loki-url: "http://${MASTER_PRIVATE_IP}:3100/loki/api/v1/push"
+    loki-retries: "3"
+    loki-batch-size: "400"
+    mode: "non-blocking"
+    max-buffer-size: "4m"
+
+services:
+
+  cloudflared:
+    image: cloudflare/cloudflared:2024.10.1
+    command: tunnel --no-autoupdate --metrics 0.0.0.0:2000 run
+    environment:
+      TUNNEL_TOKEN_FILE: /run/secrets/CF_TUNNEL_TOKEN
+    secrets: [CF_TUNNEL_TOKEN]
+    # edge       reaches every component by service DNS
+    # monitoring reaches grafana, and lets vmagent scrape the line below
+    networks: [edge, monitoring]
+    logging: *loki-logging
+    stop_grace_period: 45s     # cloudflared drains edge connections on SIGTERM
+    deploy:
+      # Global with NO role constraint, so the manager always has a connector
+      # too. This is load-bearing for scale-to-zero: at zero workers it is the
+      # only ingress there is, and when the last worker is drained the master's
+      # connector is already registered with Cloudflare, so the tunnel never
+      # goes dark mid-handover. Do not add a constraint here.
+      mode: global
+      resources:
+        # Global, so this is the per-node tax the autoscaler subtracts from a
+        # new worker's advertised size before counting application capacity.
+        reservations: { cpus: "0.05", memory: 32M }
+      labels:
+        prometheus.scrape: "true"
+        prometheus.port: "2000"
+        prometheus.path: "/metrics"
+      restart_policy:
+        condition: any
+        delay: 10s
+
+networks:
+  # Both are created before any stack is deployed — `edge` by bootstrap.sh with
+  # `docker network create`, `monitoring` by stacks/monitoring.yml. Neither is
+  # owned by a stack that can be removed while components still need it, which
+  # is what went wrong when `edge` belonged to the app stack.
+  edge:
+    external: true
+  monitoring:
+    external: true
+
+secrets:
+  CF_TUNNEL_TOKEN:
+    external: true

@@ -45,27 +45,39 @@ def _write(path, payload):
 
 
 # --- deploy tokens ---------------------------------------------------------
+# One token per component, keyed by its name. This used to be keyed by
+# (app_key, environment), which only made sense while "the app" was a single
+# thing with exactly two environments. A component is one deployable unit and
+# gets one token; two environments are two components and two tokens, which is
+# also the blast radius you want — a leaked staging token cannot touch prod.
 
-def token_for(app_key, env, create=True):
+def token_for(name, create=True):
     tokens = _read(TOKENS, {})
-    existing = tokens.get(app_key, {}).get(env)
+    existing = tokens.get(name)
     if existing or not create:
         return existing
-    tokens.setdefault(app_key, {})[env] = secrets.token_urlsafe(32)
+    tokens[name] = secrets.token_urlsafe(32)
     _write(TOKENS, tokens)
-    return tokens[app_key][env]
+    return tokens[name]
 
 
-def rotate_token(app_key, env):
+def rotate_token(name):
     tokens = _read(TOKENS, {})
-    tokens.setdefault(app_key, {})[env] = secrets.token_urlsafe(32)
+    tokens[name] = secrets.token_urlsafe(32)
     _write(TOKENS, tokens)
-    return tokens[app_key][env]
+    return tokens[name]
 
 
-def verify_token(app_key, env, presented):
+def forget_token(name):
+    """Called when a component is deleted, so a leaked token cannot outlive it."""
+    tokens = _read(TOKENS, {})
+    if tokens.pop(name, None) is not None:
+        _write(TOKENS, tokens)
+
+
+def verify_token(name, presented):
     import hmac
-    expected = token_for(app_key, env, create=False)
+    expected = token_for(name, create=False)
     if not expected or not presented:
         return False
     return hmac.compare_digest(expected, presented)
@@ -73,13 +85,12 @@ def verify_token(app_key, env, presented):
 
 # --- deployment history ----------------------------------------------------
 
-def record(app_key, env, image, source, ok, detail="", actor=""):
+def record(name, image, source, ok, detail="", actor=""):
     entries = _read(HISTORY, [])
     entries.insert(0, {
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "epoch": time.time(),
-        "app": app_key,
-        "env": env,
+        "component": name,
         "image": image,
         "source": source,          # "ci" | "panel"
         "actor": actor,
@@ -89,12 +100,15 @@ def record(app_key, env, image, source, ok, detail="", actor=""):
     _write(HISTORY, entries[:HISTORY_MAX])
 
 
-def history(app_key=None, env=None, limit=25):
+def history(name=None, limit=25):
+    """
+    Deployments, newest first. History is deliberately NOT dropped when a
+    component is deleted: "what happened to the thing that used to be here" is
+    the question you ask right after deleting the wrong one.
+    """
     entries = _read(HISTORY, [])
-    if app_key:
-        entries = [e for e in entries if e.get("app") == app_key]
-    if env:
-        entries = [e for e in entries if e.get("env") == env]
+    if name:
+        entries = [e for e in entries if e.get("component") == name]
     return entries[:limit]
 
 

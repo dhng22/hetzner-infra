@@ -4,20 +4,25 @@
 #   promtool test rules config/alerts_test.yml
 #
 # These exist because of a rule that was dead for months without anyone
-# noticing. NoHealthyReplicas matched service="prod_api", a name left over from
-# an earlier two-stack layout. It matched nothing, so it could never fire — and
-# a rule that cannot fire looks exactly like a rule with nothing to report.
+# noticing. NoHealthyReplicas matched a service name left over from an earlier
+# layout, so it could never fire — and a rule that cannot fire looks exactly
+# like a rule with nothing to report.
 #
-# The two scenarios below are the ones that actually matter, and they fail
-# differently:
-#   - the service is scraped and reporting down  -> series exists, value 0
-#   - every replica is gone                      -> series does not exist
-# The second is the real outage, and it is the one a bare `sum(...) < 1` misses,
-# because sum() over no series returns no series rather than 0. `or vector(0)`
-# is what makes it fire. Delete that fallback and scenario 1 goes silent again.
+# Now that components are created at runtime, no rule may name one. That moves
+# the hazard rather than removing it, so these tests pin the three properties
+# the new rules depend on:
 #
-# Timing note: series go stale 5m after their last sample, and `for: 2m` runs
-# on top of that, so the vanished-series case cannot be asserted before ~8m.
+#   1. Per-component rules join on `service` and produce ONE alert per
+#      component, with the name in the annotation.
+#   2. The cluster gauges stay UNLABELED. AppStrandedWithoutWorkers is a plain
+#      `and` on the empty label signature; the moment one side gains a label it
+#      matches nothing and goes silent. Its four cases below are unchanged from
+#      before the refactor on purpose — they are the assertion that it did not.
+#   3. "An absent series must alert" survives a dynamic component set, via a
+#      gauge the autoscaler owns rather than `or vector(0)` on a known name.
+#
+# Timing note: series go stale 5m after their last sample and `for:` runs on top
+# of that, so a vanished-series case cannot be asserted before ~8m.
 # =============================================================================
 
 rule_files:
@@ -27,73 +32,220 @@ evaluation_interval: 1m
 
 tests:
 
-  # --- TOTAL OUTAGE: the series itself disappears --------------------------
+  # --- OUTAGE: a component wants replicas and has none ----------------------
+  # The anchor is autoscaler_service_running_replicas, which the autoscaler
+  # reads from the Docker API. It exists for as long as the component does, so
+  # "every replica is gone" is the value 0 rather than a missing series.
   - interval: 1m
     input_series:
-      - series: 'up{job="swarm-services", service="app_api-prod", instance="w1"}'
-        values: '1 1 _x20'
-    alert_rule_test:
-      - eval_time: 12m
-        alertname: NoHealthyReplicas
-        exp_alerts:
-          - exp_labels: { severity: critical }
-            exp_annotations: { summary: "No healthy app replicas are being scraped" }
-
-  # --- SCRAPED BUT DOWN: series present, value 0 ---------------------------
-  - interval: 1m
-    input_series:
-      - series: 'up{job="swarm-services", service="app_api-prod", instance="w1"}'
-        values: '0x10'
+      - series: 'autoscaler_service_running_replicas{service="api_app"}'
+        values: '3 3 0x20'
+      - series: 'autoscaler_service_admitted_replicas{service="api_app"}'
+        values: '3x22'
     alert_rule_test:
       - eval_time: 8m
         alertname: NoHealthyReplicas
         exp_alerts:
-          - exp_labels: { severity: critical }
-            exp_annotations: { summary: "No healthy app replicas are being scraped" }
+          - exp_labels: { severity: critical, service: api_app }
+            exp_annotations: { summary: "api_app wants replicas but none are running" }
 
-  # --- HEALTHY: must stay silent -------------------------------------------
+  # TWO components, ONE down. Exactly one alert, naming the right one. This is
+  # the whole point of the refactor and nothing pinned it before.
   - interval: 1m
     input_series:
-      - series: 'up{job="swarm-services", service="app_api-prod", instance="w1"}'
-        values: '1x10'
+      - series: 'autoscaler_service_running_replicas{service="api_app"}'
+        values: '0x20'
+      - series: 'autoscaler_service_admitted_replicas{service="api_app"}'
+        values: '2x20'
+      - series: 'autoscaler_service_running_replicas{service="worker_app"}'
+        values: '4x20'
+      - series: 'autoscaler_service_admitted_replicas{service="worker_app"}'
+        values: '4x20'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: NoHealthyReplicas
+        exp_alerts:
+          - exp_labels: { severity: critical, service: api_app }
+            exp_annotations: { summary: "api_app wants replicas but none are running" }
+
+  # Deliberately scaled to zero is NOT an outage. Without the admitted > 0
+  # conjunct, every stopped component would page.
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_service_running_replicas{service="batch_app"}'
+        values: '0x20'
+      - series: 'autoscaler_service_admitted_replicas{service="batch_app"}'
+        values: '0x20'
     alert_rule_test:
       - eval_time: 8m
         alertname: NoHealthyReplicas
         exp_alerts: []
+
+  # --- RUNNING BUT UNSCRAPED ------------------------------------------------
+  # The other half of what the old rule conflated. Tasks are up; the metrics
+  # path is not. A monitoring failure, not an outage.
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_service_running_replicas{service="api_app"}'
+        values: '3x25'
+      - series: 'up{job="swarm-services", service="api_app", instance="w1"}'
+        values: '1 1 _x25'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ReplicasNotScraped
+        exp_alerts:
+          - exp_labels: { severity: warning, service: api_app }
+            exp_annotations:
+              summary: "api_app has running tasks but no scrapeable metrics"
+
+  # Healthy and scraped: silent.
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_service_running_replicas{service="api_app"}'
+        values: '3x20'
+      - series: 'up{job="swarm-services", service="api_app", instance="w1"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ReplicasNotScraped
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: NoHealthyReplicas
+        exp_alerts: []
+
+  # --- SLO BREACH: each component against its OWN target -------------------
+  # SLOBreach had no test at all before, and it has just grown a vector-matching
+  # operator. Two components, different SLOs, one breaching.
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_service_p95_ms{service="api_app"}'
+        values: '900x20'
+      - series: 'autoscaler_service_slo_p95_ms{service="api_app"}'
+        values: '500x20'
+      - series: 'autoscaler_service_p95_ms{service="api-staging_app"}'
+        values: '600x20'
+      - series: 'autoscaler_service_slo_p95_ms{service="api-staging_app"}'
+        values: '800x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SLOBreach
+        exp_alerts:
+          - exp_labels: { severity: critical, service: api_app }
+            exp_annotations:
+              summary: "p95 on api_app is above its SLO and the autoscaler has not recovered it"
 
   # --- REPLICA CEILING: threshold tracks the gauge, not a literal ----------
-  # The regression this guards: the rule hardcoded `>= 12`. With MAX_REPLICAS
-  # raised to 20, sitting at 12 replicas is mid-range and must stay silent,
-  # but the old rule fired anyway.
+  # The original regression: the rule hardcoded `>= 12`, so raising the ceiling
+  # left it firing at the old number. Mid-range must stay silent.
   - interval: 1m
     input_series:
-      - series: 'autoscaler_current_replicas'
+      - series: 'autoscaler_service_current_replicas{service="api_app"}'
         values: '12x20'
-      - series: 'autoscaler_max_replicas'
+      - series: 'autoscaler_service_max_replicas{service="api_app"}'
         values: '20x20'
+      - series: 'autoscaler_service_min_replicas{service="api_app"}'
+        values: '2x20'
+      - series: 'autoscaler_service_autoscale_enabled{service="api_app"}'
+        values: '1x20'
     alert_rule_test:
       - eval_time: 18m
         alertname: ReplicaCeiling
         exp_alerts: []
 
-  # Actually pinned at a raised ceiling -> must fire.
+  # Actually pinned at a raised ceiling -> must fire, and name the component.
   - interval: 1m
     input_series:
-      - series: 'autoscaler_current_replicas'
+      - series: 'autoscaler_service_current_replicas{service="api_app"}'
         values: '20x20'
-      - series: 'autoscaler_max_replicas'
+      - series: 'autoscaler_service_max_replicas{service="api_app"}'
         values: '20x20'
+      - series: 'autoscaler_service_min_replicas{service="api_app"}'
+        values: '2x20'
+      - series: 'autoscaler_service_autoscale_enabled{service="api_app"}'
+        values: '1x20'
     alert_rule_test:
       - eval_time: 18m
         alertname: ReplicaCeiling
         exp_alerts:
-          - exp_labels: { severity: warning }
+          - exp_labels: { severity: warning, service: api_app }
             exp_annotations:
-              summary: "Replica ceiling reached — capacity plan or app efficiency issue"
+              summary: "api_app is at its replica ceiling — capacity plan or app efficiency issue"
+
+  # THE NEW TRAP. A fixed-replica component sits at current == max == min
+  # forever. Without the autoscale_enabled and max > min guards this pages
+  # continuously for every non-autoscaled component, and the rule is muted
+  # within a week — at which point it means nothing.
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_service_current_replicas{service="worker_app"}'
+        values: '3x20'
+      - series: 'autoscaler_service_max_replicas{service="worker_app"}'
+        values: '3x20'
+      - series: 'autoscaler_service_min_replicas{service="worker_app"}'
+        values: '3x20'
+      - series: 'autoscaler_service_autoscale_enabled{service="worker_app"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: ReplicaCeiling
+        exp_alerts: []
+
+  # --- HIGH ERROR RATE: the traffic floor ----------------------------------
+  # One request, one error, 100% ratio. Without the floor this pages a critical
+  # receiver for a single failed request on an idle staging component.
+  - interval: 1m
+    input_series:
+      - series: 'http_server_requests_seconds_count{service="api-staging_app", status="500"}'
+        values: '0+1x20'
+      - series: 'http_server_requests_seconds_count{service="api-staging_app", status="200"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: HighErrorRate
+        exp_alerts: []
+
+  # Real traffic, real errors: must fire and name the component.
+  - interval: 1m
+    input_series:
+      - series: 'http_server_requests_seconds_count{service="api_app", status="500"}'
+        values: '0+60x20'
+      - series: 'http_server_requests_seconds_count{service="api_app", status="200"}'
+        values: '0+60x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: HighErrorRate
+        exp_alerts:
+          - exp_labels: { severity: critical, service: api_app }
+            exp_annotations:
+              summary: "Over 5% of requests to api_app are returning 5xx"
+
+  # --- UNSATISFIABLE MINIMUM ------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_service_min_unsatisfied{service="api_app"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: AppMinReplicasUnsatisfiable
+        exp_alerts:
+          - exp_labels: { severity: critical, service: api_app }
+            exp_annotations:
+              summary: "api_app cannot reach its minimum replica count"
+
+  # --- PENDING REPLICAS -----------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_service_pending_replicas{service="api_app"}'
+        values: '2x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ReplicasPending
+        exp_alerts:
+          - exp_labels: { severity: warning, service: api_app }
+            exp_annotations:
+              summary: "api_app has replicas that cannot be placed"
 
   # --- AUTOSCALER ERRORS: a wedged handover must not be silent -------------
-  # A counter climbing steadily in one stage. Must fire, and must name the
-  # stage — "it is broken" without saying where is barely better than silence.
   - interval: 1m
     input_series:
       - series: 'autoscaler_errors_total{stage="placement"}'
@@ -110,9 +262,8 @@ tests:
   # failures happen every time VictoriaMetrics restarts.
   #
   # Evaluated at 5m, while the 10m rate window still sees the increment, so the
-  # `for` is the only thing keeping it silent. At 25m the rate has decayed to
-  # zero on its own and the test would pass even with `for: 0m` — pinning
-  # nothing.
+  # `for` is the only thing keeping it silent. At 25m the rate has decayed on
+  # its own and the test would pass even with `for: 0m` — pinning nothing.
   - interval: 1m
     input_series:
       - series: 'autoscaler_errors_total{stage="query"}'
@@ -122,10 +273,36 @@ tests:
         alertname: AutoscalerErrors
         exp_alerts: []
 
+  # --- THE AUTOSCALER ITSELF ------------------------------------------------
+  # Every per-component rule above depends on gauges this process exports, so
+  # its absence must page on its own. `time() - gauge` returns no series at all
+  # when the target is gone, which is the case it looks like it covers.
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_current_workers'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AutoscalerAbsent
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "The autoscaler is not being scraped at all — every scaling alert is blind"
+
+  # Present and looping: silent.
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_last_loop_timestamp_seconds'
+        values: '0+60x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AutoscalerAbsent
+        exp_alerts: []
+
   # --- CEILING vs STRANDED use DIFFERENT gauges ----------------------------
   # `autoscaler_current_hosts` counts the master, `autoscaler_current_workers`
   # does not. Collapsing them once made the stranded rule unfireable, because
-  # hosts is never below 1. These two cases pin them apart.
+  # hosts is never below 1. These cases pin them apart.
   #
   # At the free floor: 1 host, 0 servers, ceiling 6. Nothing should fire.
   - interval: 1m
@@ -162,8 +339,10 @@ tests:
               summary: "Autoscaler pinned at MAX_WORKERS — raise the ceiling or optimise"
 
   # --- STRANDED: worker-pinned with an empty fleet -------------------------
-  # The hard-outage state of the two-mode placement model. Every task is
-  # unplaceable, so this must fire.
+  # UNCHANGED FROM BEFORE THE REFACTOR, deliberately. These four cases are the
+  # assertion that autoscaler_placement_worker_mode stayed an UNLABELED cluster
+  # gauge. Give it a `service` label and the plain `and` below matches nothing,
+  # the rule goes permanently silent, and these tests are what notice.
   - interval: 1m
     input_series:
       - series: 'autoscaler_placement_worker_mode'
@@ -204,12 +383,11 @@ tests:
         exp_alerts: []
 
   # The self-healing window. The autoscaler notices on its next loop and fails
-  # back, so this state exists for about a minute during any worker loss. `for:
-  # 2m` is what stops that routine transient from paging.
+  # back, so this state exists for about a minute during any worker loss.
+  # `for: 2m` is what stops that routine transient from paging.
   #
-  # Evaluated at 1m, INSIDE the window, on purpose: at 6m the alert has
-  # resolved either way, so a test there passes even with `for: 0m` and pins
-  # nothing. This one fails if the `for` is ever dropped.
+  # Evaluated at 1m, INSIDE the window, on purpose: at 6m the alert has resolved
+  # either way, so a test there passes even with `for: 0m` and pins nothing.
   - interval: 1m
     input_series:
       - series: 'autoscaler_placement_worker_mode'

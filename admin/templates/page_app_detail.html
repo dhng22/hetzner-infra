@@ -1,4 +1,0 @@
-{% extends "base.html" %}
-{% block title %}{{ app_entry.display }} · {{ cluster_name }}{% endblock %}
-{% block crumb %}{{ cluster_name }} / <a href="{{ section_href({"key": "apps"}) }}">Apps</a> / <strong>{{ app_entry.display }}</strong>{% endblock %}
-{% block main %}{% include "_app_detail.html" %}{% endblock %}
