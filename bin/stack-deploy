@@ -70,7 +70,19 @@ if [ "$stack" = "monitoring" ]; then
   # It holds a bot token, so it is not world-readable. Not a docker secret,
   # deliberately: a secret cannot be absent and cannot be changed, and this has
   # to be both optional and editable. Same trade as a component's credentials.
-  chmod 600 "$INFRA_DIR/config/alertmanager.yml"
+  #
+  # 0640 root:65534, NOT 0600 root. prom/alertmanager runs as `nobody` (uid
+  # 65534) and this file is a bind mount, so 0600 root meant the container could
+  # not read its own config: it exited 1 on "permission denied" and crash-looped
+  # from the very first deploy, while every other service came up fine. The
+  # group bit is what makes it readable to that one process; the file is still
+  # closed to everything else on the host, which is the property that mattered.
+  #
+  # The gid is coupled to the image. If alertmanager's uid ever changes, this
+  # breaks the same silent way — check `docker image inspect ... .Config.User`
+  # when bumping the pin in stacks/monitoring.yml.
+  chown 0:65534 "$INFRA_DIR/config/alertmanager.yml"
+  chmod 640 "$INFRA_DIR/config/alertmanager.yml"
 fi
 
 echo "deploying $stack"

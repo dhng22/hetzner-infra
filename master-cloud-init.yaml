@@ -402,7 +402,15 @@ write_files:
           >> /root/.ssh/authorized_keys
         echo "installed forced-command key for the admin panel"
       fi
-      mk_secret PANEL_SSH_KEY "$(cat "$PANEL_KEY")"
+      # Created FROM THE FILE, not through mk_secret. `$(cat key)` strips every
+      # trailing newline and mk_secret's `printf '%s'` does not put one back, so
+      # the secret arrived one byte short of the file — and OpenSSH rejects a
+      # private key that does not end in a newline with "error in libcrypto".
+      # Every host operation the panel performs (opening a database's external
+      # port, reading the firewall) then failed with a key that looks perfectly
+      # fine in `docker secret ls` and diffs clean against the original except
+      # for its last byte. Reading the path preserves the bytes exactly.
+      docker secret create PANEL_SSH_KEY "$PANEL_KEY" >/dev/null 2>&1 || true
 
       # --- component storage ---------------------------------------------------
       # Applications and databases live here, one directory each, created by the
