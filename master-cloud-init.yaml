@@ -58,7 +58,7 @@ write_files:
       HCLOUD_NETWORK_NAME=prod-net
       HCLOUD_SSH_KEY_NAME=my-laptop
       WORKER_IMAGE=ubuntu-24.04
-      WORKER_TYPE=cpx21              # shared worker pool
+      WORKER_TYPE=cpx22              # shared worker pool
 
       # --- container registry: FIRST BOOT ONLY --------------------------------
       # Used once, for the initial `docker login` so the very first deploy can
