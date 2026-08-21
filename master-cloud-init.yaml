@@ -396,16 +396,7 @@ write_files:
 
 runcmd:
   - [ bash, -lc, "mkdir -p /opt/infra" ]
-  # Uncomment ONE of these and fill in your own token. It strips .git before
-  # copying, so the token is not left on disk — but it IS in the instance
-  # user-data, which is readable from the metadata service for the life of
-  # the server. Use a read-only, short-lived token, and revoke it after.
-  #
-  # - [ bash, -lc, "git clone --depth 1 https://<TOKEN>@github.com/you/infra.git /tmp/i && rm -rf /tmp/i/.git && cp -a /tmp/i/. /opt/infra/ && rm -rf /tmp/i" ]
-  #
-  # ...or leave both commented, scp the bundle to /opt/infra yourself, and run
-  # /opt/infra/bootstrap.sh by hand. No token ever touches the server.
-  #
+  - [ bash, -lc, "git clone --depth 1 https://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@github.com/you/infra.git /tmp/i && rm -rf /tmp/i/.git && cp -a /tmp/i/. /opt/infra/ && rm -rf /tmp/i" ]
   - [ bash, -lc, "/opt/infra/bootstrap.sh" ]
 
 final_message: "Master ready after $UPTIME seconds. See /var/log/infra-bootstrap.log"
