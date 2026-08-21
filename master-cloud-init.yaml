@@ -341,7 +341,23 @@ write_files:
       echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 
       # --- swarm, on the private interface ------------------------------------
-      docker swarm init --advertise-addr "$PRIVATE_IP" --listen-addr "$PRIVATE_IP:2377" || true
+      # --default-addr-pool is not optional here, and it cannot be changed after
+      # init. Swarm's own default pool is 10.0.0.0/8, so `ingress` is allocated
+      # 10.0.0.0/24 — and a Hetzner private network is 10.0.0.0/16, handing this
+      # master 10.0.0.2 and every worker 10.0.0.3, .4, .5. The overlay subnet
+      # therefore contains the host addresses of the nodes carrying it.
+      #
+      # Nothing complains at init. It surfaces later as workers that join the
+      # swarm and then cannot be reached, which reads like a Hetzner networking
+      # fault rather than an address the cluster assigned to itself. Moving
+      # Docker off 10/8 entirely is the fix; 172.20/16 gives 256 overlay
+      # networks, well past what this cluster can create.
+      #
+      # If you are re-running this on a swarm that was initialised WITHOUT the
+      # flag, the pool is baked in — `docker swarm leave --force` first, then
+      # re-run. That destroys the secrets too, which this script recreates.
+      docker swarm init --advertise-addr "$PRIVATE_IP" --listen-addr "$PRIVATE_IP:2377" \
+        --default-addr-pool 172.20.0.0/16 --default-addr-pool-mask-length 24 || true
       MASTER_ID="$(docker info -f '{{.Swarm.NodeID}}')"
       docker node update --label-add role=master "$MASTER_ID"
 
