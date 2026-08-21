@@ -189,6 +189,10 @@
     }
 
     if ((el = ev.target.closest("[data-tab]"))) {
+      // Some tabs are rendered empty until the server is asked for them, so
+      // switching to one in the browser would show a blank panel and then
+      // rewrite the URL to look like it had loaded. Let the link navigate.
+      if (el.hasAttribute("data-tab-server")) { return; }
       ev.preventDefault();
       var group = el.closest("[data-tabs]");
       var scope = scopeOf(el);

@@ -84,8 +84,46 @@ def verify_token(name, presented):
 
 
 # --- deployment history ----------------------------------------------------
+#
+# A deploy has THREE outcomes, not two, and the missing one is why this history
+# used to lie. `docker stack deploy` is detached: it exits 0 once Swarm accepts
+# the spec, which is before any task has started. Recording that exit code as
+# the result meant every deploy was written down as a success — including the
+# ones whose tasks then failed and were reverted by `failure_action: rollback`.
+# The page said "deployed" while the service ran the previous image.
+#
+# So the CLI's exit code only decides PENDING vs FAILED, and the real verdict
+# arrives later from Swarm's own UpdateStatus, via reconcile().
 
-def record(name, image, source, ok, detail="", actor=""):
+PENDING = "pending"      # accepted by Swarm, tasks not yet converged
+DONE = "done"            # Swarm reports the rollout completed
+FAILED = "failed"        # rejected outright, or rolled back after failing
+SUPERSEDED = "superseded"  # another deploy overtook it; its fate is unknowable
+
+
+def status_of(entry):
+    """
+    An entry's status, tolerating records written before statuses existed.
+
+    Old entries have only `ok`, and every one of them says True because that is
+    what the detached exit code reported. They are read as `done` rather than
+    rewritten: inventing a verdict for a deploy nobody observed would be the
+    same mistake in the other direction.
+    """
+    if entry.get("status"):
+        return entry["status"]
+    return DONE if entry.get("ok") else FAILED
+
+
+def record(name, image, source, ok, detail="", actor="", status=None):
+    """
+    `status` defaults to PENDING for an accepted deploy, because acceptance is
+    all a detached deploy can tell us. Callers that genuinely waited for
+    convergence — the CI webhook runs `docker service update` attached — pass
+    DONE explicitly and are believed.
+    """
+    if status is None:
+        status = PENDING if ok else FAILED
     entries = _read(HISTORY, [])
     entries.insert(0, {
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -95,9 +133,48 @@ def record(name, image, source, ok, detail="", actor=""):
         "source": source,          # "ci" | "panel"
         "actor": actor,
         "ok": bool(ok),
+        "status": status,
         "detail": detail[-2000:],
     })
     _write(HISTORY, entries[:HISTORY_MAX])
+
+
+def reconcile(name, verdict, started_epoch=None):
+    """
+    Settle this component's pending deploys against Swarm's verdict.
+
+    Only the newest pending entry can claim the verdict: UpdateStatus describes
+    the LAST rollout and nothing else, so anything older that is still pending
+    was overtaken and its outcome is genuinely unknown. Marking those
+    SUPERSEDED rather than guessing keeps the one property this whole file
+    exists for — never report an outcome that was not observed.
+
+    `started_epoch` guards against a stale verdict being pinned to a deploy that
+    has only just been accepted: if Swarm's rollout began before this record was
+    written, it is describing the previous deploy, so leave the record pending.
+    """
+    entries = _read(HISTORY, [])
+    changed = False
+    newest = None
+    for entry in entries:                      # newest first
+        if entry.get("component") != name or status_of(entry) != PENDING:
+            continue
+        if newest is None:
+            newest = entry
+        else:
+            entry["status"] = SUPERSEDED
+            changed = True
+
+    if newest is not None and verdict in (DONE, FAILED):
+        # 30s of slack: the record is written just before the CLI call returns,
+        # so its timestamp can sit marginally after the rollout Swarm reports.
+        if started_epoch is None or started_epoch >= newest.get("epoch", 0) - 30:
+            newest["status"] = verdict
+            newest["ok"] = verdict == DONE
+            changed = True
+
+    if changed:
+        _write(HISTORY, entries)
 
 
 def history(name=None, limit=25):
@@ -109,6 +186,8 @@ def history(name=None, limit=25):
     entries = _read(HISTORY, [])
     if name:
         entries = [e for e in entries if e.get("component") == name]
+    for entry in entries:
+        entry["status"] = status_of(entry)
     return entries[:limit]
 
 

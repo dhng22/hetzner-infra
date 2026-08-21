@@ -17,7 +17,11 @@
 
 <div class="tabs" data-tabs role="tablist">
   {% for key, label in tabs %}
+  {# data-tab-server: this tab's content is fetched server-side, so the link
+     must be followed. Absent in the offline preview, where every tab's data is
+     already in the page and there is no server to navigate to. #}
   <a class="tab" role="tab" data-tab="{{ key }}" href="{{ component_href(component.name, key) }}"
+     {% if key in lazy_tabs|default([]) %}data-tab-server{% endif %}
      aria-selected="{{ 'true' if key == tab else 'false' }}">{{ label }}</a>
   {% endfor %}
 </div>

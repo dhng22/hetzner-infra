@@ -410,13 +410,26 @@ class Component:
         and the autoscaler respectively — not to this file. Applying the spec's
         idea of them would roll production back to whatever was last typed into
         a form (docker/cli#2235).
+
+        `--prune` removes services in this stack that the render no longer
+        emits. Without it, turning off an optional sub-service in the panel is a
+        no-op that looks like it worked: `docker stack deploy` only ever adds
+        and updates, so disabling a Redis exporter dropped it from the spec, the
+        stack file and the component's own service list — while the container
+        kept running, kept its CPU reservation, and kept being scraped. Nothing
+        in the panel would ever mention it again.
+
+        It is safe here for the reason the whole component model exists: one
+        component owns one stack and nothing else writes to it, so everything
+        `--prune` can reach is this component's own.
         """
         try:
             path = self.write_stack()
         except store.ComponentError as exc:
             return False, str(exc)
         return run(["docker", "stack", "deploy", "--with-registry-auth",
-                    "--resolve-image", "changed", "-c", path, self.stack])
+                    "--resolve-image", "changed", "--prune",
+                    "-c", path, self.stack])
 
     def remove(self):
         ok, out = run(["docker", "stack", "rm", self.stack], timeout=120)

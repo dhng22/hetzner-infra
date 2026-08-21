@@ -13,6 +13,11 @@ stays split.
 """
 
 
+#: How bad a tone is. Used to detect a component whose overall colour is worse
+#: than its primary service's label admits.
+_RANK = {"ok": 0, "mute": 0, "warn": 1, "bad": 2}
+
+
 def component_view(component, service_fn):
     """
     A component's live state, merged with its spec.
@@ -40,6 +45,12 @@ def component_view(component, service_fn):
         worst, state = "mute", "not deployed"
     else:
         state = primary["state"] if primary else "unknown"
+        # The colour comes from the WORST service, the label from the primary
+        # one. When they disagree the pill contradicts itself — a red "healthy",
+        # which is what a Redis whose exporter cannot be placed rendered as.
+        # The label has to answer for the whole component, not just its head.
+        if primary is not None and _RANK.get(worst, 0) > _RANK.get(primary["tone"], 0):
+            state = "degraded"
 
     return {
         "name": component.name,

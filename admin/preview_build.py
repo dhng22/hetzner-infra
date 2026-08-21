@@ -96,6 +96,7 @@ def detail_contexts():
             "logs": fixtures.logs(component.service),
             "webhook": panel.webhook_for(component.name),
             "deployments": fixtures.history(component.name),
+            "rollout": fixtures.update_status(component.service),
             "registries": fixtures.registry_logins(),
         }
         if component.TYPE == "redis":

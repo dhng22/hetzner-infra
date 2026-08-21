@@ -103,19 +103,119 @@ def _task_rows(service_id):
     return rows
 
 
-def _state_of(running, desired, tasks):
+#: A task on its way up. Swarm walks through these in order, and none of them
+#: means anything is wrong.
+STARTING_STATES = ("new", "allocated", "assigned", "accepted", "preparing",
+                   "ready", "starting")
+#: A task Swarm accepted but cannot place — no node has the resources, or none
+#: satisfies its constraints. It will sit here indefinitely. Reporting it as
+#: "down" hides the one fact that explains it and suggests the wrong fix.
+BLOCKED_STATES = ("pending",)
+
+
+def _task_counts():
+    """
+    {service_id: {running, starting, blocked}}, for every service, in ONE call.
+
+    These are properties of the tasks, never of the service spec, so they
+    cannot be read from the service alone. That is why callers asking for
+    services WITHOUT their tasks used to report every one of them as down: the
+    counts were derived from a task list they had deliberately not fetched, so
+    they were always 0 — replicated services rendered "down", global ones
+    rendered "0/0 stopped", and no page could show a healthy cluster at all.
+
+    Fetching each service's tasks instead would be one round trip per row on
+    the heaviest page in the panel. This is one for all of them.
+
+    Counted by SLOT, not by task. `order: start-first` runs the replacement
+    task alongside the one it replaces, so a service mid-rollout legitimately
+    has two tasks per slot — and a rollout that wedges keeps them. Counting
+    tasks reported `3/2 replicas` on a two-replica service, which then passed
+    the `running < desired` check and rendered as healthy while every container
+    was crash-looping. A slot is the thing a replica actually is. Global
+    services have no slot, so their unit is the node.
+    """
+    slots = {}
+    try:
+        tasks = client().api.tasks(filters={"desired-state": "running"})
+    except Exception:
+        return {}
+    for t in tasks:
+        sid = t.get("ServiceID")
+        if not sid:
+            continue
+        row = slots.setdefault(sid, {"running": set(), "starting": set(),
+                                     "blocked": set()})
+        # Slot is 1-based for replicated services and absent (0) for global.
+        unit = t.get("Slot") or t.get("NodeID")
+        if unit is None:
+            continue
+        state = (t.get("Status") or {}).get("State")
+        if state == "running":
+            row["running"].add(unit)
+        elif state in STARTING_STATES:
+            row["starting"].add(unit)
+        elif state in BLOCKED_STATES:
+            row["blocked"].add(unit)
+
+    counts = {}
+    for sid, row in slots.items():
+        running = row["running"]
+        counts[sid] = {
+            "running": len(running),
+            # Only slots with NOTHING running yet are still coming up. A slot
+            # that has a running task and a starting one is being replaced,
+            # which is `in_flight` below, not missing capacity.
+            "starting": len(row["starting"] - running),
+            "blocked": len(row["blocked"] - running),
+            "in_flight": len((row["starting"] | row["blocked"]) & running),
+        }
+    return counts
+
+
+def _state_of(running, desired, tasks, starting=0, blocked=0, in_flight=0):
+    """
+    (tone, label) for a service.
+
+    `starting`, `blocked` and `in_flight` are counted separately from the task
+    rows because the cheap path does not fetch rows at all. Without them a
+    component being deployed reads "down" until the moment it reads "healthy",
+    with nothing in between — so a normal rollout is indistinguishable from an
+    outage for as long as it takes to pull the image.
+    """
+    if not starting:
+        starting = sum(1 for t in tasks if t["state"] in STARTING_STATES)
+    if not blocked:
+        blocked = sum(1 for t in tasks if t["state"] in BLOCKED_STATES)
+
     if desired == 0:
         return "mute", "stopped"
     if running == 0:
+        if starting:
+            return "warn", "deploying"
+        # Distinct from "down" on purpose: nothing is crashing, Swarm simply has
+        # nowhere to put it. `docker service ps <name>` names the reason.
+        if blocked:
+            return "bad", "unschedulable"
         return "bad", "down"
     if running < desired:
-        return "warn", "degraded"
-    if any(t["state"] in ("starting", "preparing", "pending") for t in tasks):
+        if blocked:
+            return "bad", "unschedulable"
+        return "warn", "deploying" if starting else "degraded"
+    # Every slot is up, but some are being replaced. Never "healthy": this is
+    # also what a wedged rollout looks like, and calling it healthy is how a
+    # service whose new tasks keep dying reported green.
+    if in_flight or starting:
         return "warn", "updating"
     return "ok", "healthy"
 
 
-def service(name, with_tasks=True):
+def service(name, with_tasks=True, running_counts=None):
+    """
+    `running_counts` is the map from _task_counts(), and is how a caller that
+    skips `with_tasks` still gets truthful counts. Callers that render many
+    services pass it once; anything else can leave it None.
+    """
     try:
         svc = client().services.get(name)
     except Exception:
@@ -129,19 +229,29 @@ def service(name, with_tasks=True):
     container = task_tpl.get("ContainerSpec", {})
     mode = spec.get("Mode", {})
     tasks = _task_rows(svc.id) if with_tasks else []
-    running = sum(1 for t in tasks if t["state"] == "running")
+    starting = blocked = in_flight = 0
+    # Always slot-counted, even on the with_tasks path: `docker service ls`
+    # itself will say 3/2 during a start-first rollout, and a panel repeating
+    # that is telling you a service has more replicas than it was asked for.
+    counts = running_counts if running_counts is not None else _task_counts()
+    row = counts.get(svc.id) or {}
+    running = row.get("running", 0)
+    starting = row.get("starting", 0)
+    blocked = row.get("blocked", 0)
+    in_flight = row.get("in_flight", 0)
 
     if "Replicated" in mode:
         desired = mode["Replicated"].get("Replicas", 0)
         mode_label = "replicated"
     else:
-        desired = len([t for t in tasks if t["desired"] == "running"]) or running
+        desired = (len([t for t in tasks if t["desired"] == "running"])
+                   or (running + starting + blocked))
         mode_label = "global"
 
     res = task_tpl.get("Resources", {}) or {}
     limits, reservations = res.get("Limits") or {}, res.get("Reservations") or {}
     upd = spec.get("UpdateConfig", {}) or {}
-    tone, state = _state_of(running, desired, tasks)
+    tone, state = _state_of(running, desired, tasks, starting, blocked, in_flight)
 
     env = {}
     for item in container.get("Env", []) or []:
@@ -180,15 +290,34 @@ def service(name, with_tasks=True):
     }
 
 
+def _service_fn_with_counts():
+    """
+    `service` with one task query pre-bound, for callers that shape several
+    services at once.
+
+    Without this each service does its own full task listing, so rendering the
+    components page cost two API round trips per component and grew with the
+    cluster. The counts are a single snapshot, which is also more correct: every
+    row on a page then describes the same instant.
+    """
+    counts = _task_counts()
+
+    def fn(name, with_tasks=True, running_counts=None):
+        return service(name, with_tasks=with_tasks,
+                       running_counts=running_counts or counts)
+    return fn
+
+
 def component_view(component):
-    return shape.component_view(component, service)
+    return shape.component_view(component, _service_fn_with_counts())
 
 
 def system_view():
     """The three infrastructure stacks, read-only, grouped by category."""
     grouped = {}
+    counts = _task_counts()
     for entry in catalog.SYSTEM:
-        svc = service(entry["service"], with_tasks=False)
+        svc = service(entry["service"], with_tasks=False, running_counts=counts)
         grouped.setdefault(entry["category"], []).append({**entry, "svc": svc,
                                                           "tone": svc["tone"]})
     return [(c, grouped[c]) for c in catalog.CATEGORIES if c in grouped]
@@ -206,14 +335,133 @@ def history(name=None, limit=25):
     return state.history(name, limit=limit)
 
 
+LOKI_URL = os.environ.get("LOKI_URL", "http://loki:3100")
+
+#: How far back the Logs tab looks. A crash-looping container writes its whole
+#: life in a few seconds and then goes quiet, so a short window shows an empty
+#: page for the exact service you opened the tab to debug.
+LOG_WINDOW_SECONDS = 24 * 3600
+
+
+#: Swarm's UpdateStatus.State -> what it means for the deploy that caused it.
+#: `paused` is a failure: it is where a rollout stops when it breached its
+#: failure threshold and has no rollback configured. None means "still running".
+_UPDATE_VERDICT = {
+    "updating": None,
+    "completed": "done",
+    "paused": "failed",
+    "rollback_started": "failed",
+    "rollback_paused": "failed",
+    "rollback_completed": "failed",
+}
+
+
+def update_status(service_name):
+    """
+    Swarm's own account of the service's last rollout.
+
+    This is the only honest source for "did my deploy work". The deploy command
+    cannot answer it — `docker stack deploy` returns before the tasks even
+    start — and the component's files on disk always show the new spec whether
+    or not it survived. UpdateStatus is what Swarm actually did.
+    """
+    blank = {"state": "", "verdict": None, "started_epoch": None,
+             "message": "", "at": "—"}
+    try:
+        svc = client().services.get(service_name)
+    except Exception:  # noqa: BLE001
+        return blank
+
+    status = svc.attrs.get("UpdateStatus") or {}
+    state = status.get("State") or ""
+    started = status.get("StartedAt") or ""
+    epoch = None
+    if started:
+        try:
+            epoch = _dt.datetime.fromisoformat(
+                started.replace("Z", "+00:00").split(".")[0] + "+00:00").timestamp()
+        except ValueError:
+            epoch = None
+    return {
+        "state": state,
+        "verdict": _UPDATE_VERDICT.get(state),
+        "started_epoch": epoch,
+        "message": status.get("Message") or "",
+        "at": _age(status.get("CompletedAt") or started),
+    }
+
+
+def deployments(name, service_name, limit=25):
+    """
+    (history, live rollout status) for one component, reconciled first.
+
+    Reconciling on read rather than on a timer is deliberate: the panel has one
+    worker and no scheduler, and the only moment the answer matters is when
+    somebody is looking at the page.
+    """
+    import state
+    live = update_status(service_name)
+    if live["verdict"]:
+        state.reconcile(name, live["verdict"], live["started_epoch"])
+    return state.history(name, limit=limit), live
+
+
+def _loki_logs(service_name, lines):
+    """
+    Lines from Loki, or None if Loki could not answer.
+
+    None and "" mean different things and the caller depends on it: None is
+    "ask the CLI instead", "" is "Loki answered and this service has said
+    nothing". Collapsing them would hide a broken Loki behind an empty page.
+    """
+    now = _dt.datetime.now(_dt.timezone.utc).timestamp()
+    try:
+        resp = requests.get(
+            f"{LOKI_URL}/loki/api/v1/query_range",
+            params={
+                "query": '{swarm_service="%s"}' % service_name.replace('"', ''),
+                "start": int((now - LOG_WINDOW_SECONDS) * 1e9),
+                "end": int(now * 1e9),
+                "limit": lines,
+                "direction": "backward",
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception:  # noqa: BLE001 — any failure means "fall back to the CLI"
+        return None
+
+    rows = []
+    for stream in (payload.get("data") or {}).get("result") or []:
+        for ts, line in stream.get("values") or []:
+            rows.append((int(ts), line.rstrip("\n")))
+    rows.sort()
+    out = []
+    for ts, line in rows:
+        stamp = _dt.datetime.fromtimestamp(ts / 1e9, _dt.timezone.utc)
+        out.append(f"{stamp:%H:%M:%S} {line}")
+    return "\n".join(out)
+
+
 def logs(service_name, lines=200):
     """
-    Read service logs through the CLI.
+    Read a service's logs from Loki, falling back to the CLI.
 
-    Not the SDK: APIClient.service_logs returns either bytes or a generator
-    depending on arguments and version, and the wrong branch raises rather than
-    showing you your logs. The CLI has one behaviour.
+    NOT `docker service logs` first. Every stack here sets the `loki` log
+    driver, and Docker cannot read back from a non-local driver — so the CLI
+    returns absolutely nothing for every component in the cluster, and this tab
+    rendered "No log output yet" no matter how much the container was screaming.
+    The logs were never missing; the panel was asking the one component that
+    does not have them.
+
+    The CLI fallback stays for anything that somehow logs locally, and so that
+    a Loki outage degrades to "no logs" rather than to a stack trace.
     """
+    from_loki = _loki_logs(service_name, lines)
+    if from_loki:
+        return from_loki
+
     import subprocess
     try:
         proc = subprocess.run(
@@ -221,11 +469,17 @@ def logs(service_name, lines=200):
             capture_output=True, text=True, timeout=30,
         )
         out = (proc.stdout + proc.stderr).strip()
-        return out or f"No log output from {service_name} yet."
     except subprocess.TimeoutExpired:
         return f"Timed out reading logs for {service_name}."
     except OSError as exc:
         return f"Could not read logs for {service_name}: {exc}"
+
+    if out:
+        return out
+    if from_loki is None:
+        return (f"Could not reach Loki at {LOKI_URL}, and the Docker CLI has no "
+                f"local logs for {service_name}. Check `docker service ls | grep loki`.")
+    return f"No log output from {service_name} in the last 24h."
 
 
 # --- cluster ---------------------------------------------------------------
@@ -398,11 +652,12 @@ def topology():
 
 
 def summary():
-    return shape.summary(service, nodes(), vm_query)
+    # summary() shapes every component too, so it gets the same single snapshot.
+    return shape.summary(_service_fn_with_counts(), nodes(), vm_query)
 
 
 def component_views():
-    return shape.component_views(service)
+    return shape.component_views(_service_fn_with_counts())
 
 
 def autoscaler_state():

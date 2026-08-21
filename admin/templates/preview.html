@@ -52,7 +52,8 @@
         {% with component = d.component, view = d.view, tabs = d.tabs, tab = d.tab,
                 fields = d.fields, env_pairs = d.env_pairs, logs = d.logs,
                 creds = d.creds, firewall = d.firewall, webhook = d.webhook,
-                deployments = d.deployments, registries = d.registries %}
+                deployments = d.deployments, rollout = d.rollout,
+                registries = d.registries %}
           {% include "_component_detail.html" %}
         {% endwith %}
       </section>

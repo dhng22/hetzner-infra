@@ -330,7 +330,20 @@ _HISTORY = [
 
 def history(name=None, limit=25):
     rows = [h for h in _HISTORY if not name or h["component"] == name]
+    for row in rows:
+        row.setdefault("status", "done" if row.get("ok") else "failed")
     return rows[:limit]
+
+
+def update_status(service_name):
+    """Swarm's verdict on the last rollout. Mirrors swarm.update_status()."""
+    return {"state": "completed", "verdict": "done", "started_epoch": None,
+            "message": "update completed", "at": "6m ago"}
+
+
+def deployments(name, service_name, limit=25):
+    """Mirrors swarm.deployments(). Nothing to reconcile against fixtures."""
+    return history(name, limit=limit), update_status(service_name)
 
 
 def port_is_open(port):

@@ -245,7 +245,10 @@ def deploy_hook(name):
 
     ok, output = data.deploy_image(component.service, image)
     if not PREVIEW:
+        # `deploy_image` runs `docker service update` ATTACHED, so it has
+        # already waited for convergence and its exit code is the real verdict.
         state.record(name, image, "ci", ok, output,
+                     status=state.DONE if ok else state.FAILED,
                      actor=request.headers.get("User-Agent", "")[:60])
     return jsonify(ok=ok, component=name, service=component.service,
                    image=image, detail=output), (200 if ok else 502)
@@ -330,12 +333,19 @@ def component_create():
         ok, output = component.deploy()
         state.record(name, component.spec.get("image", ""), "panel", ok, output,
                      actor=auth.current_user() or "")
-        flash(f"Created {name} and deployed it." if ok
+        flash(f"Created {name}. Deploying — watch the Deployments tab for the "
+              f"result; Swarm rolls a failing deploy back." if ok
               else f"Created {name}, but the deploy failed: {output}",
               "ok" if ok else "bad")
     else:
         flash(f"Created {name}. It is not deployed yet.", "ok")
     return redirect(_component_href(name))
+
+
+#: Tabs whose content this route fetches only when they are the open tab. They
+#: must be followed as links rather than switched in the browser — see the
+#: handler in static/app.js.
+LAZY_TABS = ("logs", "deployments", "credentials")
 
 
 @app.get("/components/<name>")
@@ -348,16 +358,20 @@ def component_detail(name):
     if tab not in [t[0] for t in tabs]:
         tab = tabs[0][0]
 
-    # Only the open tab's expensive data is fetched. `logs` shells out with a
-    # 30s timeout and the firewall probe is an SSH round trip with another;
-    # doing both on every request made the Overview tab wait for two things it
-    # does not render.
+    # Only the open tab's expensive data is fetched. `logs` queries Loki and the
+    # firewall probe is an SSH round trip; doing both on every request made the
+    # Overview tab wait for two things it does not render.
+    #
+    # LAZY_TABS is passed to the template so the tab strip can mark these links
+    # as needing a real navigation. Switching to one of them client-side reveals
+    # a panel this route never filled in — which is exactly how the Logs and
+    # Credentials tabs came to render blank while their data was one URL away.
     extra = {}
     if tab == "logs":
         extra["logs"] = data.logs(component.service)
     if tab == "deployments":
         extra["webhook"] = webhook_for(name)
-        extra["deployments"] = data.history(name)
+        extra["deployments"], extra["rollout"] = data.deployments(name, component.service)
         extra["registries"] = data.registry_logins()
     if tab == "credentials" and component.TYPE == "redis":
         extra["creds"] = _redis_credentials(component)
@@ -365,6 +379,7 @@ def component_detail(name):
 
     return render_template("page_component_detail.html", section="components",
                            component=component, view=view, tabs=tabs, tab=tab,
+                           lazy_tabs=LAZY_TABS,
                            fields=type(component).fields(),
                            env_pairs=component_store.read_env(name), **extra)
 
@@ -428,7 +443,8 @@ def save_component_env(name):
     ok, output = component.deploy()
     state.record(name, component.live_image() or component.spec.get("image", ""),
                  "panel", ok, output, actor=auth.current_user() or "")
-    flash("Environment saved and deployed." if ok
+    flash("Environment saved. Deploying — the Deployments tab shows whether it "
+          "converged or was rolled back." if ok
           else f"Saved, but the deploy failed: {output}", "ok" if ok else "bad")
     return redirect(_component_href(name, "environment"))
 
@@ -468,7 +484,9 @@ def component_action(name):
             flash(problem, "bad")
             return redirect(_component_href(name, "deployments"))
         ok, output = data.deploy_image(component.service, image)
-        state.record(name, image, "panel", ok, output, actor=auth.current_user() or "")
+        state.record(name, image, "panel", ok, output,
+                     status=state.DONE if ok else state.FAILED,
+                     actor=auth.current_user() or "")
         flash(output or ("Deployed." if ok else "Failed."), "ok" if ok else "bad")
         return redirect(_component_href(name, "deployments"))
 

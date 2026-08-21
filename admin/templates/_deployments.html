@@ -112,6 +112,38 @@
   </form>
 </section>
 
+{# Swarm's own verdict on the last rollout. The history below is written by the
+   panel and can only ever say what it asked for; this says what happened. #}
+{% set tone = {'done': 'ok', 'failed': 'bad'}.get(rollout.verdict, 'warn') %}
+{% if rollout and rollout.state %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>Current rollout</h2>
+    <span class="spacer"></span>
+    <span class="pill {{ tone }}">
+      {% if rollout.verdict == 'done' %}converged
+      {% elif rollout.verdict == 'failed' %}rolled back
+      {% else %}in progress{% endif %}
+    </span>
+  </div>
+  <div class="rows">
+    <div class="deploy-row {{ tone }}">
+      <span class="stripe"></span>
+      <span class="src">swarm</span>
+      <span>
+        <span class="row-title mono">{{ rollout.state }}</span>
+        <span class="row-sub">
+          {{ rollout.at }}{% if rollout.message %} · {{ rollout.message }}{% endif %}
+          {% if rollout.verdict == 'failed' %}
+          · the previous version is still serving; check the Logs tab for why the new one exited
+          {% endif %}
+        </span>
+      </span>
+    </div>
+  </div>
+</section>
+{% endif %}
+
 <section class="panel">
   <div class="panel-head">
     <h2>History</h2>
@@ -120,7 +152,8 @@
   </div>
   <div class="rows">
     {% for d in deployments %}
-    <div class="deploy-row {{ 'ok' if d.ok else 'bad' }}">
+    {% set row = {'done': 'ok', 'failed': 'bad', 'pending': 'warn'}.get(d.status, 'mute') %}
+    <div class="deploy-row {{ row }}">
       <span class="stripe"></span>
       <span class="src">{{ d.source }}</span>
       <span>
@@ -130,7 +163,12 @@
           {% if d.detail %} · {{ d.detail.splitlines()[0] }}{% endif %}
         </span>
       </span>
-      <span class="pill {{ 'ok' if d.ok else 'bad' }}">{{ 'deployed' if d.ok else 'rolled back' }}</span>
+      <span class="pill {{ row }}">
+        {%- if d.status == 'done' %}deployed
+        {%- elif d.status == 'failed' %}rolled back
+        {%- elif d.status == 'pending' %}deploying
+        {%- else %}superseded{% endif -%}
+      </span>
     </div>
     {% else %}
     <div class="empty">Nothing deployed through the panel or the webhook yet.</div>
