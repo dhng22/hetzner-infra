@@ -231,6 +231,14 @@ services:
 
 networks:
   monitoring:
+    # `name` is load-bearing. Without it the stack namespaces this network as
+    # `monitoring_monitoring`, while stacks/ingress.yml and stacks/admin.yml
+    # declare `monitoring` as external and look for that literal name — so both
+    # fail to deploy with "network monitoring is declared as external, but
+    # could not be found", after the monitoring stack has come up perfectly.
+    # This stack creates the network the other two consume; the name is the
+    # contract between them.
+    name: monitoring
     driver: overlay
     attachable: true
 
