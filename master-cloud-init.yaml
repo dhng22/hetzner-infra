@@ -280,8 +280,49 @@ write_files:
       ufw --force enable
 
       # --- docker -------------------------------------------------------------
-      curl -fsSL https://get.docker.com | sh
+      # get.docker.com is NOT used here. It runs apt behind `-qq >/dev/null`, so
+      # every way this step can fail — a held dpkg lock, a package the mirror
+      # does not carry — produces no error at all, and the first symptom is
+      # `docker: command not found` a hundred lines later with nothing above it
+      # to explain why. The install is done inline so apt's output reaches the
+      # bootstrap log.
+
+      # cloud-init's own package_upgrade and unattended-upgrades both run at
+      # boot and both hold the dpkg lock. apt does not queue; it exits.
+      for _ in $(seq 1 90); do
+        fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || break
+        echo "waiting for dpkg lock to clear..."
+        sleep 5
+      done
+
+      install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+        -o /etc/apt/keyrings/docker.asc
+      chmod a+r /etc/apt/keyrings/docker.asc
+      printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu %s stable\n' \
+        "$(dpkg --print-architecture)" \
+        "$(. /etc/os-release && echo "$VERSION_CODENAME")" \
+        > /etc/apt/sources.list.d/docker.list
+      apt-get update
+
+      # Named explicitly, and deliberately WITHOUT docker-model-plugin, which
+      # the install script adds to the same transaction. apt fails a whole
+      # transaction atomically, so one package the mirror has not published yet
+      # leaves the box with no docker whatsoever.
+      DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        docker-ce docker-ce-cli containerd.io \
+        docker-buildx-plugin docker-compose-plugin
+
       systemctl enable --now docker
+
+      # Everything below this line assumes a working daemon. Stop here rather
+      # than at `docker swarm init`, with the firewall already reconfigured and
+      # half the preconditions met.
+      if ! docker version >/dev/null 2>&1; then
+        echo "FATAL: docker did not install, or the daemon is not running." >&2
+        echo "See the apt output above, and: systemctl status docker" >&2
+        exit 1
+      fi
 
       # --- registry login, so the manager can resolve image digests ----------
       echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
