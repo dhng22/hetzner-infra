@@ -16,8 +16,8 @@
 #      component, with the name in the annotation.
 #   2. The cluster gauges stay UNLABELED. AppStrandedWithoutWorkers is a plain
 #      `and` on the empty label signature; the moment one side gains a label it
-#      matches nothing and goes silent. Its four cases below are unchanged from
-#      before the refactor on purpose — they are the assertion that it did not.
+#      matches nothing and goes silent. Its four cases below are the assertion
+#      that nobody has labelled it.
 #   3. "An absent series must alert" survives a dynamic component set, via a
 #      gauge the autoscaler owns rather than `or vector(0)` on a known name.
 #
@@ -299,20 +299,16 @@ tests:
         alertname: AutoscalerAbsent
         exp_alerts: []
 
-  # --- CEILING vs STRANDED use DIFFERENT gauges ----------------------------
-  # `autoscaler_current_hosts` counts the master, `autoscaler_current_workers`
-  # does not. Collapsing them once made the stranded rule unfireable, because
-  # hosts is never below 1. These cases pin them apart.
-  #
-  # At the free floor: 1 host, 0 servers, ceiling 6. Nothing should fire.
+  # --- THE WORKER CEILING ---------------------------------------------------
+  # Both sides are worker counts. The master is not a worker, so the free floor
+  # is ZERO workers and must be silent — if this ever fires at rest, every idle
+  # night pages someone.
   - interval: 1m
     input_series:
-      - series: 'autoscaler_current_hosts'
-        values: '1x20'
-      - series: 'autoscaler_max_workers'
-        values: '6x20'
       - series: 'autoscaler_current_workers'
         values: '0x20'
+      - series: 'autoscaler_max_workers'
+        values: '5x20'
       - series: 'autoscaler_placement_worker_mode'
         values: '0x20'
     alert_rule_test:
@@ -323,13 +319,25 @@ tests:
         alertname: AppStrandedWithoutWorkers
         exp_alerts: []
 
-  # At the ceiling: 6 hosts = master + 5 servers. AutoscalerAtMax must fire.
+  # Mid-range: three of five. Also silent — it is a budget, not a warning line.
   - interval: 1m
     input_series:
-      - series: 'autoscaler_current_hosts'
-        values: '6x20'
+      - series: 'autoscaler_current_workers'
+        values: '3x20'
       - series: 'autoscaler_max_workers'
-        values: '6x20'
+        values: '5x20'
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: AutoscalerAtMax
+        exp_alerts: []
+
+  # At the ceiling: five of five, nothing left to buy. Must fire.
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_current_workers'
+        values: '5x20'
+      - series: 'autoscaler_max_workers'
+        values: '5x20'
     alert_rule_test:
       - eval_time: 18m
         alertname: AutoscalerAtMax
@@ -339,10 +347,13 @@ tests:
               summary: "Autoscaler pinned at MAX_WORKERS — raise the ceiling or optimise"
 
   # --- STRANDED: worker-pinned with an empty fleet -------------------------
-  # UNCHANGED FROM BEFORE THE REFACTOR, deliberately. These four cases are the
-  # assertion that autoscaler_placement_worker_mode stayed an UNLABELED cluster
-  # gauge. Give it a `service` label and the plain `and` below matches nothing,
-  # the rule goes permanently silent, and these tests are what notice.
+  # These four cases are the assertion that autoscaler_placement_worker_mode
+  # stayed an UNLABELED cluster gauge. Give it a `service` label and the plain
+  # `and` below matches nothing, the rule goes permanently silent, and these
+  # tests are what notice.
+  #
+  # This is NOT the free floor. Zero workers with nothing pinned is the resting
+  # state; zero workers with something still pinned is an outage.
   - interval: 1m
     input_series:
       - series: 'autoscaler_placement_worker_mode'
@@ -357,8 +368,9 @@ tests:
             exp_annotations:
               summary: "App is pinned to worker nodes but no worker exists — tasks cannot be placed"
 
-  # Manager mode with zero workers is the NORMAL idle state, not an outage.
-  # If this ever fires, scale-to-zero pages someone every night.
+  # Zero workers with nothing pinned is the NORMAL idle state — the master is
+  # carrying the load and no server is billed. If this ever fires, the free
+  # floor pages someone every night.
   - interval: 1m
     input_series:
       - series: 'autoscaler_placement_worker_mode'

@@ -198,6 +198,56 @@ class PanelTest(unittest.TestCase):
                          follow_redirects=True)
         self.assertFalse(self.components.exists("api6"))
 
+    def test_credentials_can_be_set_and_regenerated(self):
+        csrf = self.login()
+        self.client.post("/components", data={"csrf": csrf, "type": "redis", "name": "db2",
+                                              "maxmemory_mb": "512",
+                                              "memory_reservation_mb": "640",
+                                              "cpu_reservation": "0.2",
+                                              "version": "7.4-alpine",
+                                              "maxmemory_policy": "allkeys-lru"})
+        generated = self.components.load("db2").password()
+        self.assertEqual(len(generated), 48)
+
+        self.client.post("/components/db2/credentials", follow_redirects=True,
+                         data={"csrf": csrf, "REDIS_PASSWORD": "a-chosen-password"})
+        self.assertEqual(self.components.load("db2").password(), "a-chosen-password")
+
+        self.client.post("/components/db2/credentials", follow_redirects=True,
+                         data={"csrf": csrf, "regenerate": "1"})
+        rotated = self.components.load("db2").password()
+        self.assertNotEqual(rotated, "a-chosen-password")
+        self.assertEqual(len(rotated), 48)
+
+    def test_a_weak_password_is_refused_by_the_route(self):
+        csrf = self.login()
+        self.client.post("/components", data={"csrf": csrf, "type": "redis", "name": "db3",
+                                              "maxmemory_mb": "512",
+                                              "memory_reservation_mb": "640",
+                                              "cpu_reservation": "0.2",
+                                              "version": "7.4-alpine",
+                                              "maxmemory_policy": "allkeys-lru"})
+        before = self.components.load("db3").password()
+        r = self.client.post("/components/db3/credentials", follow_redirects=True,
+                             data={"csrf": csrf, "REDIS_PASSWORD": "abc"})
+        self.assertIn("at least", r.get_data(as_text=True))
+        self.assertEqual(self.components.load("db3").password(), before)
+
+    def test_an_application_has_no_credentials_route(self):
+        csrf, _ = self.create_app("plain")
+        r = self.client.post("/components/plain/credentials",
+                             data={"csrf": csrf, "X": "y"})
+        self.assertEqual(r.status_code, 404)
+
+    def test_the_new_menu_offers_one_entry_per_group(self):
+        self.login()
+        body = self.client.get("/components").get_data(as_text=True)
+        self.assertIn("+ New", body)
+        self.assertIn(">Application<", body)
+        self.assertIn(">Database<", body)
+        # The old per-type create cards are gone from the grid.
+        self.assertNotIn("card-new", body)
+
     # --- deploy webhook -----------------------------------------------------
 
     def test_webhook_rejects_a_bad_token(self):
@@ -248,6 +298,41 @@ class PanelTest(unittest.TestCase):
         for stack in ("api", "app", "anything"):
             r = self.client.post("/cluster/stack", data={"csrf": csrf, "stack": stack})
             self.assertEqual(r.status_code, 400, stack)
+
+    def test_preview_infra_matches_the_shipped_defaults(self):
+        """
+        The preview's dummy infra.env must agree with the one the cloud-init
+        actually writes — for the values that ARE defaults.
+
+        Scoped to the Fleet group on purpose. `ROOT_DOMAIN=mydomain.com` is an
+        example you replace, so the preview inventing `acme.dev` is correct.
+        `MIN_WORKERS=0` is a decision this project has made, so a preview
+        showing 1 is documenting a product that does not exist — which is what
+        it did, and is the third time a fixture has quietly disagreed with
+        reality during this refactor.
+        """
+        import pathlib
+        import re
+        import settings_def
+
+        root = pathlib.Path(__file__).resolve().parents[2]
+        block = (root / "master-cloud-init.yaml").read_text()
+        block = block[block.index("/etc/infra/infra.env"):block.index("bootstrap.sh")]
+        shipped = {}
+        for line in block.splitlines():
+            match = re.match(r"^\s{6}([A-Z][A-Z0-9_]*)=(.*)$", line)
+            if match:
+                key, raw = match.groups()
+                shipped[key] = raw.split("#")[0].strip()
+
+        self.assertIn("MIN_WORKERS", shipped, "the infra.env block did not parse")
+        policy = next(keys for title, keys in settings_def.GROUPS if title == "Fleet")
+        for key in policy:
+            self.assertIn(key, shipped, f"{key} is offered by the panel but not shipped")
+            self.assertEqual(
+                self.panel.PREVIEW_INFRA.get(key), shipped[key],
+                f"the preview shows {key}={self.panel.PREVIEW_INFRA.get(key)!r} but "
+                f"the cloud-init ships {shipped[key]!r}")
 
     def test_settings_refuses_a_key_it_does_not_manage(self):
         csrf = self.login()

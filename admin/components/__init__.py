@@ -22,7 +22,25 @@ TYPES = {
 __all__ = [
     "Component", "ComponentError", "Field", "TYPES",
     "type_for", "load", "create", "all_components", "names", "exists", "store",
+    "groups", "types_in_group", "GROUP_ORDER",
 ]
+
+
+#: The "+ New" menu: group label -> the types that create one. Ordered, so the
+#: menu reads Application then Database rather than in dict order.
+GROUP_ORDER = ["Application", "Database"]
+
+
+def groups():
+    out = {}
+    for key, cls in TYPES.items():
+        out.setdefault(cls.GROUP, []).append((key, cls))
+    return [(g, out[g]) for g in GROUP_ORDER if g in out] + \
+           [(g, t) for g, t in out.items() if g not in GROUP_ORDER]
+
+
+def types_in_group(group):
+    return [(key, cls) for key, cls in TYPES.items() if cls.GROUP == group]
 
 
 def type_for(type_name):
@@ -85,14 +103,24 @@ def create(type_name, name, raw_spec):
     if problems:
         return None, problems
 
+    # Credentials come from the same form, and a blank one means "generate".
+    # Checked BEFORE anything is written, so a password that is too short is a
+    # form error rather than a half-created component.
+    secret_problems = []
+    for secret in type(component).SECRETS:
+        supplied = (raw_spec.get(secret.key) or raw_spec.get(secret.key.lower()) or "").strip()
+        problem = secret.check(supplied)
+        if problem:
+            secret_problems.append(problem)
+    if secret_problems:
+        return None, secret_problems
+
     store.write_spec(name, component.as_dict())
     # An application starts with an empty environment file so the editor has
-    # something to open; a database generates its credentials up front so the
-    # panel can show a connection URL before the first deploy.
+    # something to open.
     if isinstance(component, AppComponent):
         store.write_env(name, [], header=[f"# Environment for {name}.", ""])
-    if isinstance(component, RedisComponent):
-        component.ensure_password()
+    component.apply_secrets(raw_spec)
     component.created_at = store.read_spec(name).get("created_at")
     return component, []
 

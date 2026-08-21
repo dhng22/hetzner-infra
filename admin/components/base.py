@@ -16,6 +16,7 @@ Stdlib plus PyYAML only. `bin/component` imports this on the master.
 
 import os
 import re
+import secrets
 import shlex
 import subprocess
 
@@ -93,6 +94,46 @@ class Field:
         return None
 
 
+class Secret:
+    """
+    A credential the component owns, stored in `secret.env` and never in the
+    spec file.
+
+    Kept off `fields()` on purpose: a Field's value is written to
+    `component.json`, which is 0640 and is what you would paste into an issue
+    when asking why something will not deploy. A password must not be in there.
+
+    Either supply one or leave it blank and get a generated one — both at create
+    time and afterwards. "Generated" is the good default, not the only option:
+    plenty of people are moving an existing database and already have a password
+    their clients know.
+    """
+
+    def __init__(self, key, label, help="", minimum=8, maximum=128):
+        self.key = key
+        self.label = label
+        self.help = help
+        self.minimum = minimum
+        self.maximum = maximum
+
+    def generate(self):
+        return secrets.token_hex(24)
+
+    def check(self, value):
+        """Returns a problem string, or None. Blank is valid — it means generate."""
+        if not value:
+            return None
+        if len(value) < self.minimum:
+            return f"{self.label} must be at least {self.minimum} characters."
+        if len(value) > self.maximum:
+            return f"{self.label} must be at most {self.maximum} characters."
+        if any(c in value for c in "\n\r\t"):
+            return f"{self.label} cannot contain a line break or a tab."
+        if value.strip() != value:
+            return f"{self.label} cannot start or end with a space."
+        return None
+
+
 # An image reference we are willing to deploy. Rejects a bare name with no tag,
 # because "whatever :latest means today" is not a deployment you can roll back.
 IMAGE_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-/:@]{0,510}$")
@@ -138,7 +179,11 @@ class Component:
     TYPE = "component"
     LABEL = "Component"
     BLURB = ""
-    CATEGORY = "Application"
+    CATEGORY = "Application"      # which section of the list it appears in
+    #: Which entry of the "+ New" menu creates it. Several types can share a
+    #: group — a second database type is a new class and nothing else, and the
+    #: create page grows a picker on its own.
+    GROUP = "Application"
 
     def __init__(self, name, data=None):
         self.name = store.check_name(name)
@@ -193,6 +238,59 @@ class Component:
             if problem:
                 problems.append(problem)
         return problems
+
+    # --- credentials --------------------------------------------------------
+    # Declared, not hard-coded, so the panel renders a credentials tab for any
+    # type that has one and none for a type that does not.
+
+    SECRETS = ()
+
+    def secret_values(self):
+        return store.env_map(self.name, "secret.env")
+
+    def secret(self, key):
+        return self.secret_values().get(key, "")
+
+    def apply_secrets(self, raw, generate_missing=True):
+        """
+        Set this component's credentials from a form, generating any left blank.
+
+        Returns a list of problems; nothing is written when there are any. Also
+        used at create time, which is why blank has to mean "generate" rather
+        than "unset" — a database with no password is not a state worth being
+        able to reach by leaving a field empty.
+        """
+        if not self.SECRETS:
+            return []
+        current = self.secret_values()
+        problems, values = [], {}
+        for spec in self.SECRETS:
+            supplied = (raw.get(spec.key) or raw.get(spec.key.lower()) or "").strip()
+            problem = spec.check(supplied)
+            if problem:
+                problems.append(problem)
+                continue
+            if supplied:
+                values[spec.key] = supplied
+            elif current.get(spec.key):
+                values[spec.key] = current[spec.key]        # unchanged
+            elif generate_missing:
+                values[spec.key] = spec.generate()
+        if problems:
+            return problems
+        self._write_secrets(values)
+        return []
+
+    def rotate_secrets(self):
+        """Regenerate every credential, ignoring whatever is there now."""
+        self._write_secrets({s.key: s.generate() for s in self.SECRETS})
+
+    def _write_secrets(self, values):
+        store.write_env(
+            self.name, [{"key": k, "value": v} for k, v in values.items()],
+            filename="secret.env",
+            header=["# Generated or set through the panel. Edit it there rather than",
+                    "# here, so the running service is updated with it.", ""])
 
     # --- identity -----------------------------------------------------------
 

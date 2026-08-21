@@ -63,7 +63,7 @@
         {# f["values"], not f.values — Jinja resolves the attribute first and
            dict.values is a method, which is a genuinely confusing failure. #}
         {% with cls = f.cls, type_name = f.type_name, values = f["values"],
-                problems = f.problems, name = f.name %}
+                problems = f.problems, name = f.name, siblings = f.siblings %}
           {% include "_component_new.html" %}
         {% endwith %}
       </section>

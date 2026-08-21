@@ -132,7 +132,8 @@ def main():
                         + (HERE / "static" / "style.css").read_text()),
             inline_js=(HERE / "static" / "app.js").read_text(),
             details=details,
-            new_forms=[{"cls": cls, "type_name": key, "values": {}, "problems": [], "name": ""}
+            new_forms=[{"cls": cls, "type_name": key, "values": {}, "problems": [],
+                        "name": "", "siblings": components.types_in_group(cls.GROUP)}
                        for key, cls in components.TYPES.items()],
             labels=labels,
             # page data
@@ -152,6 +153,7 @@ def main():
             # chrome
             nav=panel.NAV,
             types=components.TYPES,
+            new_groups=components.groups(),
             cluster_name=os.environ["APP_NAME"],
             root_domain=os.environ["ROOT_DOMAIN"],
             user="admin",
@@ -170,6 +172,7 @@ def main():
             delete_href=lambda name: "#",
             token_href=lambda name: "#",
             firewall_href=lambda name: "#",
+            creds_href=lambda name: "#",
             create_href=lambda: "#",
             settings_href=lambda: "#",
             registry_href=lambda: "#",

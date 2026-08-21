@@ -142,6 +142,7 @@ def _globals():
         "delete_href": lambda name: url_for("delete_component", name=name),
         "token_href": lambda name: url_for("rotate_token", name=name),
         "firewall_href": lambda name: url_for("firewall", name=name),
+        "creds_href": lambda name: url_for("save_credentials", name=name),
         "new_href": lambda type_name: url_for("component_new", type=type_name),
         "create_href": lambda: url_for("component_create"),
         "settings_href": lambda: url_for("save_settings"),
@@ -287,7 +288,7 @@ def components_index():
     ordered = ([(c, grouped[c]) for c in order if c in grouped]
                + [(c, v) for c, v in grouped.items() if c not in order])
     return render_template("page_components.html", section="components",
-                           grouped=ordered, views=views)
+                           grouped=ordered, views=views, new_groups=components.groups())
 
 
 @app.get("/components/new")
@@ -298,7 +299,8 @@ def component_new():
         abort(404)
     cls = components.TYPES[type_name]
     return render_template("page_component_new.html", section="components",
-                           cls=cls, type_name=type_name, values={}, problems=[], name="")
+                           cls=cls, type_name=type_name, values={}, problems=[], name="",
+                           siblings=components.types_in_group(cls.GROUP))
 
 
 @app.post("/components")
@@ -320,8 +322,9 @@ def component_create():
     if problems:
         # Re-render with what they typed rather than redirecting and losing it.
         return render_template("page_component_new.html", section="components",
-                               cls=cls, type_name=type_name,
-                               values=request.form, problems=problems, name=name), 400
+                               cls=cls, type_name=type_name, values=request.form,
+                               problems=problems, name=name,
+                               siblings=components.types_in_group(cls.GROUP)), 400
 
     if request.form.get("deploy_now"):
         ok, output = component.deploy()
@@ -506,6 +509,39 @@ def rotate_token(name):
     return redirect(_component_href(name, "deployments"))
 
 
+@app.post("/components/<name>/credentials")
+@auth.login_required
+def save_credentials(name):
+    """
+    Set or regenerate a component's own credentials.
+
+    Blank means "generate", both here and on the create form, because a database
+    with no password is not a state worth being able to reach by leaving a field
+    empty. Nothing else in the cluster holds a copy, so the only thing this can
+    break is your own client — which is the trade that makes it a form field
+    rather than a versioned-secret dance.
+    """
+    _require_csrf()
+    _no_writes_in_preview()
+    component = _load(name)
+    if not type(component).SECRETS:
+        abort(404)
+
+    if request.form.get("regenerate"):
+        component.rotate_secrets()
+    else:
+        problems = component.apply_secrets(request.form)
+        if problems:
+            for problem in problems:
+                flash(problem, "bad")
+            return redirect(_component_href(name, "credentials"))
+
+    ok, output = component.deploy()
+    flash("Credentials saved and the service restarted with them." if ok
+          else f"Saved, but the redeploy failed: {output}", "ok" if ok else "bad")
+    return redirect(_component_href(name, "credentials"))
+
+
 @app.post("/components/<name>/firewall")
 @auth.login_required
 def firewall(name):
@@ -681,7 +717,7 @@ PREVIEW_INFRA = {
     "WORKER_IMAGE": "ubuntu-24.04", "WORKER_TYPE": "cpx21",
     "HCLOUD_TOKEN": "hcl_9f2bc41d77aa0e35", "GHCR_USER": "acme-bot",
     "GHCR_TOKEN": "ghp_a71ccf20e9bb14d0",
-    "NODE_PRESSURE_PCT": "80", "MIN_WORKERS": "1", "MAX_WORKERS": "6",
+    "NODE_PRESSURE_PCT": "80", "MIN_WORKERS": "0", "MAX_WORKERS": "5",
     "COOLDOWN_UP_SECONDS": "300", "COOLDOWN_DOWN_SECONDS": "900",
     "SCHEDULE_FLOOR": "", "DRY_RUN": "false",
     "ADMIN_USER": "admin", "ADMIN_PASSWORD": "hunter2hunter2",
@@ -691,7 +727,9 @@ PREVIEW_INFRA = {
 }
 # Nothing application-shaped here: no image, no port, no SLO, no replica counts.
 # The fixture stands in for the real infra.env, so an extra key would make the
-# preview show a Settings page the live panel cannot show.
+# preview show a Settings page the live panel cannot show — and a DIFFERENT
+# VALUE would make it document a default the cloud-init does not ship. Both are
+# pinned by test_preview_infra_matches_the_shipped_defaults.
 
 
 if __name__ == "__main__":

@@ -55,12 +55,12 @@ FIELDS = {
                           "Placement guard, never a trigger: above this the autoscaler asks for "
                           "one host more than the capacity arithmetic alone would."),
     "MIN_WORKERS": (EDIT, "monitoring",
-                    "A HOST count, and the master is host #1. 1 means no Hetzner workers at "
-                    "all — the master runs your components and nothing is billed. 2 or more "
-                    "means the master never runs application traffic."),
+                    "Hetzner workers, and the master is not one of them. 0 means none are "
+                    "billed and the master carries the load itself. 1 or more means the "
+                    "master never runs application traffic at all."),
     "MAX_WORKERS": (EDIT, "monitoring",
-                    "A budget cap, not a capacity plan. Also a host count, so 6 means the "
-                    "master plus up to 5 Hetzner workers."),
+                    "A budget cap, not a capacity plan. The most Hetzner workers that may "
+                    "exist at once, on top of the master."),
     "COOLDOWN_UP_SECONDS": (EDIT, "monitoring",
                             "Must exceed node boot + image pull + app warmup, or the loop "
                             "provisions again while the last node is still warming and badly "

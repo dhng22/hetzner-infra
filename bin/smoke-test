@@ -163,10 +163,12 @@ for svc in $APP_SERVICES; do
   fi
 done
 
-if [ "${MIN_WORKERS:-1}" -lt 1 ]; then
-  bad "MIN_WORKERS >= 1" "the master is host #1, so 1 already means 'no Hetzner workers'"
+if [ "${MIN_WORKERS:-0}" -lt 0 ]; then
+  bad "MIN_WORKERS >= 0" "0 already means 'no Hetzner workers'; there is nothing below it"
+elif [ "${MIN_WORKERS:-0}" -eq 0 ]; then
+  ok "MIN_WORKERS is 0 — the free floor, master carries the load, nothing billed"
 else
-  ok "MIN_WORKERS (${MIN_WORKERS:-1}) is a host count, master included"
+  ok "MIN_WORKERS (${MIN_WORKERS}) workers always run; the master carries no application"
 fi
 
 # ---------------------------------------------------------------------------

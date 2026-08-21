@@ -104,6 +104,7 @@ def summary(service_fn, nodes, vm_query):
         "workers_ready": len([n for n in workers if n["tone"] == "ok"]),
         "max_workers": int(vm_query("autoscaler_max_workers") or 0),
         "hosts": int(vm_query("autoscaler_current_hosts") or 0),
+        "min_workers": int(vm_query("autoscaler_effective_min_workers") or 0),
         "cluster_cpu": vm_query("autoscaler_cluster_cpu_percent"),
         "cluster_mem": vm_query("autoscaler_cluster_mem_percent"),
     }

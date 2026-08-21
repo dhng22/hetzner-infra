@@ -28,11 +28,12 @@ and monitoring picks up anything new without configuration.
    └────────────────────────────────────────────────────────────────┘
 ```
 
-The master is **host #1**, so the resting state is one box and no Hetzner
-servers. When load outgrows what the master can hold, workers are provisioned
-for *all* the replicas and the master goes back to carrying none. How much each
-node holds is measured from its real CPU and memory, not configured.
-See [Scaling policy](#scaling-policy).
+The master is **not a worker** — it is the control plane, and while no worker
+exists it carries your components itself. So the resting state is one box and no
+Hetzner servers. When load outgrows what the master can hold, workers are
+provisioned for *all* the replicas and the master goes back to carrying none.
+How much each node holds is measured from its real CPU and memory, not
+configured. See [Scaling policy](#scaling-policy).
 
 Two networks, both created before any component exists: `edge` (every component
 plus cloudflared — this is how your app reaches your database, and how the
@@ -53,10 +54,14 @@ and a Docker stack:
 
 Two types ship today:
 
-| Type | What it is | Owns |
-|---|---|---|
-| `app` | a container image of yours, behind the tunnel | its environment, its replica count, its scaling policy |
-| `redis` | a password-protected Redis with a volume | its own generated password, rotatable in one click |
+| Group | Type | What it is | Owns |
+|---|---|---|---|
+| Application | `app` | a container image of yours, behind the tunnel | its environment, its replica count, its scaling policy |
+| Database | `redis` | a password-protected Redis with a volume | its own password, yours to set or generate |
+
+In the panel that is one **+ New** button with those two entries. Database
+currently means Redis; a second engine is a new class and one line, and the
+menu grows on its own.
 
 Create them in the panel (**Components → New app**) or on the master:
 
@@ -64,7 +69,9 @@ Create them in the panel (**Components → New app**) or on the master:
 component create app api --image ghcr.io/you/app:sha-abc1234 --port 8080
 component deploy api
 
-component create redis cache
+component create redis cache                       # generates a password
+component create redis cache --REDIS_PASSWORD ...  # or bring your own
+component secret cache show
 component rotate cache            # new password, redeploys only this component
 component env api set LOG_LEVEL=debug
 component remove api
@@ -75,11 +82,16 @@ Each becomes the Swarm stack `<name>`, with services `<name>_app` or
 a broken image cannot take down the tunnel, and no two things write to the same
 file — which is exactly what went wrong in the design this replaced.
 
-**Databases keep their credentials to themselves.** A Redis component generates
-its password, injects it into its own service and nowhere else, and shows you
-the connection URL. Nothing is injected into your application for you; how you
-use the URL is your business. That is also why rotating is safe: nothing else
-holds a copy.
+**Databases keep their credentials to themselves.** A Redis component's
+password is injected into its own service and nowhere else, and the panel shows
+you the connection URL. Nothing is injected into your application for you; how
+you use the URL is your business.
+
+**You choose the password, or leave it blank and get a generated one** — on the
+create form and afterwards on the Credentials tab, plus a one-click regenerate.
+Setting your own matters when you are moving an existing database whose clients
+already know it. Rotating is safe for the same reason nothing is injected:
+nothing else in the cluster holds a copy to go stale.
 
 ## Hostnames
 
@@ -132,18 +144,20 @@ simply subtracted from whatever node it sits on. That is why a database needs no
 autoscaler change at all — and why a database must never carry the label, since
 it would then be moved onto a worker that later gets deleted.
 
-### Where your apps run — the master is host #1
+### Where your apps run — the master is not a worker
 
-Hosts are counted **including the master**, so the floor costs nothing:
+`MIN_WORKERS` and `MAX_WORKERS` count **Hetzner workers**. The master is not one
+of them, so a floor of zero costs nothing:
 
-| Hosts | Hetzner servers | Constraint on app services | Who runs them |
-|---|---|---|---|
-| 1 | none | *(none)* | the master |
-| 2+ | that many | `node.role == worker` | the workers only; master carries zero |
+| Workers | Constraint on app services | Who runs them |
+|---|---|---|
+| 0 | *(none)* | the master |
+| 1+ | `node.role == worker` | the workers only; the master carries zero |
 
-`MIN_WORKERS=1` therefore means "no workers, the master serves". `MAX_WORKERS=6`
-means the master plus up to 5 workers. Set `MIN_WORKERS=2` if you would rather
-the master never ran application traffic.
+`MIN_WORKERS=0` therefore means "nothing billed, the master serves" — the
+default. `MIN_WORKERS=1` keeps one worker up permanently, which also means the
+master never runs application traffic; there is no separate switch for that.
+`MAX_WORKERS=5` is the most that may ever exist.
 
 The autoscaler adds and removes that constraint itself, and re-states whatever is
 live on every deploy — the component spec deliberately never sets it.
@@ -205,7 +219,7 @@ If every worker disappears at once, the next loop puts everything back on the
 master by the same path — and it runs at the *top* of the loop, before anything
 that can fail, so a VictoriaMetrics or Hetzner outage cannot block the recovery.
 `AppStrandedWithoutWorkers` fires if it does not happen within two minutes. The
-emergency path applies even at `MIN_WORKERS=2`: an outage is worse than
+emergency path applies even at `MIN_WORKERS=1`: an outage is worse than
 temporary co-tenancy.
 
 Removing the last worker additionally waits for a replica of **every** component
@@ -223,8 +237,8 @@ Where each setting lives now — and the split is the point:
 | `autoscale.sustain_up_seconds` | 90 | the component | Up fast |
 | `autoscale.sustain_down_seconds` | 900 | the component | Down slow. Never symmetric. |
 | `autoscale.up_factor` | 0.5 | the component | +50% of current, min +1. One at a time cannot track a spike. |
-| `MIN_WORKERS` | 1 | `infra.env` | A **host** count, master included. `1` = no servers billed. |
-| `MAX_WORKERS` | 6 | `infra.env` | Also a host count, so master + up to 5 workers. A **budget** cap. |
+| `MIN_WORKERS` | 0 | `infra.env` | Hetzner workers; the master is not one. `0` = nothing billed. |
+| `MAX_WORKERS` | 5 | `infra.env` | The most workers that may exist. A **budget** cap. |
 | `NODE_PRESSURE_PCT` | 80 | `infra.env` | Placement guard: another replica will not fit |
 | `COOLDOWN_UP_SECONDS` | 300 | `infra.env` | Must exceed boot + pull + app warmup, or you overshoot |
 
@@ -404,7 +418,8 @@ rolls production back:
   `smoke-test` fails on it — but the label is yours to get right.
 - **At the floor the master IS the request path.** That is the deal for not
   paying for an idle worker: while no workers exist, losing the master costs
-  uptime and not just monitoring. Set `MIN_WORKERS=2` if that trade is wrong.
+  uptime and not just monitoring. Set `MIN_WORKERS=1` if that trade is wrong —
+  one worker always up means the master carries nothing.
 - **Do not put a `node.role` constraint on a component.** The autoscaler owns
   it. Pinning to workers makes the free floor an outage instead of a saving;
   pinning to the manager keeps production on the master forever.
@@ -463,7 +478,7 @@ rolls production back:
    ```bash
    docker service ls                              # infrastructure only
    docker node ls                                 # just the master
-   docker service logs -f monitoring_autoscaler   # "0 component(s)", holding at 1 host
+   docker service logs -f monitoring_autoscaler   # "0 component(s)", 0 workers
    ```
 6. **Add the two infrastructure hostnames** in Cloudflare:
 
@@ -504,8 +519,8 @@ rolls production back:
 12. **Push a commit** and watch it deploy.
 
 To prove the Hetzner token and the worker cloud-init before you need them,
-temporarily set `MIN_WORKERS=2` in the panel (Settings → Fleet), watch a worker
-join and your components move onto it, then set it back to 1 and watch them hand
+temporarily set `MIN_WORKERS=1` in the panel (Settings → Fleet), watch a worker
+join and your components move onto it, then set it back to 0 and watch them hand
 back and the server get deleted.
 
 From here on you should not need to SSH in. Components, configuration,

@@ -478,8 +478,10 @@ def autoscaler_state():
         "manager_free_mem": g("autoscaler_manager_free_memory_bytes"),
         "worker_free_cpu": g("autoscaler_worker_pool_free_cpu_cores"),
         "new_worker_cpu": g("autoscaler_new_worker_free_cpu_cores"),
-        "current_workers": g("autoscaler_current_hosts"),
-        "current_servers": g("autoscaler_current_workers"),
+        # Workers are Hetzner servers; the master is not one. `hosts` is kept
+        # only as "boxes in the swarm", and nothing keys a threshold on it.
+        "current_workers": g("autoscaler_current_workers"),
+        "hosts": g("autoscaler_current_hosts"),
         "desired_workers": g("autoscaler_desired_workers"),
         "max_workers": g("autoscaler_max_workers"),
         "min_workers": g("autoscaler_effective_min_workers"),

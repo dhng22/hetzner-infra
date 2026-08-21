@@ -231,6 +231,9 @@ class FleetTest(unittest.TestCase):
 
     master free   = 4 vCPU / 8192MB  -  infra 1.75 / 2304  =  2.25 CPU / 5888MB
     new worker    = 3 vCPU / 4096MB  -  per-node tax 0.20 / 224 = 2.80 / 3872MB
+
+    Every number below is a count of HETZNER WORKERS. The master is not one, so
+    0 is the free floor rather than a nonsense value.
     """
 
     MASTER = property(lambda self: res(2.25, 5888))
@@ -240,42 +243,47 @@ class FleetTest(unittest.TestCase):
         self.a = workload("a", 0.5, 384, min_replicas=1, max_replicas=20)
         self.b = workload("b", 0.25, 256, min_replicas=1, max_replicas=20)
 
-    def hosts(self, wants, worker_bins=(), pressure=None):
-        return A.hosts_needed([self.a, self.b], wants, pressure, self.MASTER,
-                              list(worker_bins), self.NEW)
+    def workers(self, wants, worker_bins=(), pressure=None):
+        return A.workers_needed([self.a, self.b], wants, pressure, self.MASTER,
+                                list(worker_bins), self.NEW)
 
-    def test_idle_fits_on_the_master_and_bills_nothing(self):
-        self.assertEqual(self.hosts({"a": 2, "b": 1}), 1)
+    def test_idle_needs_no_worker_at_all(self):
+        self.assertEqual(self.workers({"a": 2, "b": 1}), 0)
 
     def test_the_master_is_used_right_up_to_its_edge(self):
-        # a=4, b=1 is exactly 2.25 CPU, which the master has. No worker bought.
-        self.assertEqual(self.hosts({"a": 4, "b": 1}), 1)
+        # a=4, b=1 is exactly 2.25 CPU, which the master has. Nothing is bought.
+        self.assertEqual(self.workers({"a": 4, "b": 1}), 0)
 
     def test_past_the_master_a_single_worker_is_reachable(self):
         # a=5, b=1 is 2.75 CPU. Over the master, but one CPX21 holds it all.
-        self.assertEqual(self.hosts({"a": 5, "b": 1}), 2)
+        self.assertEqual(self.workers({"a": 5, "b": 1}), 1)
 
     def test_two_workers_when_one_cannot_hold_everything(self):
         # a=8, b=4 -> 5.0 CPU / 4096MB. One CPX21 offers 2.80 / 3872.
-        self.assertEqual(self.hosts({"a": 8, "b": 4}), 3)
+        self.assertEqual(self.workers({"a": 8, "b": 4}), 2)
 
     def test_existing_capacity_is_filled_before_buying(self):
         big = A.Bin("w-big", res(3.8, 7968), False)      # a CPX31 worker
         small = A.Bin("w-small", res(2.8, 3872), False)  # a CPX21 worker
         # a=6, b=2 -> 3.5 CPU / 2816MB, which the CPX31 alone holds.
-        self.assertEqual(self.hosts({"a": 6, "b": 2}, [big, small]), 2)
+        self.assertEqual(self.workers({"a": 6, "b": 2}, [big, small]), 1)
 
-    def test_node_pressure_buys_one_more_host(self):
-        self.assertGreater(self.hosts({"a": 2, "b": 1}, pressure=95.0), 1)
+    def test_node_pressure_buys_one_more(self):
+        self.assertGreaterEqual(self.workers({"a": 2, "b": 1}, pressure=95.0), 1)
 
-    def test_returning_to_the_floor_is_the_same_arithmetic(self):
-        self.assertEqual(self.hosts({"a": 2, "b": 1},
-                                    [A.Bin("w", res(2.8, 3872), False)]), 1)
+    def test_returning_to_the_floor_releases_every_worker(self):
+        self.assertEqual(self.workers({"a": 2, "b": 1},
+                                      [A.Bin("w", res(2.8, 3872), False)]), 0)
 
     def test_a_replica_larger_than_any_node_does_not_buy_forever(self):
         huge = workload("huge", 8.0, 16000, min_replicas=1, max_replicas=1)
-        hosts = A.hosts_needed([huge], {"huge": 1}, None, self.MASTER, [], self.NEW)
-        self.assertLessEqual(hosts, A.MAX_WORKERS + 1)
+        count = A.workers_needed([huge], {"huge": 1}, None, self.MASTER, [], self.NEW)
+        self.assertLessEqual(count, A.MAX_WORKERS + 2)
+
+    def test_the_floor_is_zero_by_default(self):
+        """The master is not a worker, so a floor of 0 is the resting state."""
+        self.assertEqual(A.MIN_WORKERS, 0)
+        self.assertEqual(A.scheduled_floor(), 0)
 
 
 class RemovalTest(unittest.TestCase):

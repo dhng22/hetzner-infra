@@ -29,11 +29,14 @@ groups:
         annotations:
           summary: "Disk over 85% on {{ $labels.instance }}"
 
-      # MAX_WORKERS is a HOST ceiling (the master is host #1), so this compares
-      # against the host gauge. `autoscaler_current_workers` counts only Hetzner
-      # servers and would be one short of the ceiling forever.
+      # Both sides are WORKER counts, so this is a straight comparison against
+      # the budget you set. The master is not a worker and never was: it is the
+      # control plane that happens to carry the load while no worker exists.
+      #
+      # Distinct from ReplicaCeiling, which means "this component is out of
+      # replicas". Either can trip without the other.
       - alert: AutoscalerAtMax
-        expr: autoscaler_current_hosts >= autoscaler_max_workers
+        expr: autoscaler_current_workers >= autoscaler_max_workers
         for: 15m
         labels: { severity: warning }
         annotations:

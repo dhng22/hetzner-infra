@@ -355,6 +355,27 @@ textarea { resize: vertical; min-height: 260px; }
 [hidden] { display: none !important; }
 .bulk-in { min-height: 320px; white-space: pre; overflow-wrap: normal; overflow-x: auto; tab-size: 4; }
 
+/* --- the New menu --------------------------------------------------------- */
+/* <details>, so it closes on Escape and on click-away with no JavaScript. */
+.menu { position: relative; margin-left: auto; }
+.menu > summary { list-style: none; cursor: pointer; }
+.menu > summary::-webkit-details-marker { display: none; }
+.menu > summary::after { content: "▾"; font-size: 11px; opacity: .8; }
+.menu[open] > summary { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.menu-list {
+  position: absolute; right: 0; top: calc(100% + var(--s-2)); z-index: 30;
+  min-width: 280px; padding: var(--s-1);
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r-lg); box-shadow: var(--shadow);
+}
+.menu-item {
+  display: block; padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-md); color: var(--text);
+}
+.menu-item:hover { background: var(--surface-2); text-decoration: none; }
+.menu-label { display: block; font-weight: var(--w-bold); font-size: var(--t-md); }
+.menu-sub { display: block; color: var(--text-mute); font-size: var(--t-sm); }
+
 /* --- component cards ------------------------------------------------------ */
 .cards { display: grid; gap: var(--s-3); grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
 .card {

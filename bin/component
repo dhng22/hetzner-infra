@@ -9,6 +9,7 @@ component — create, configure and deploy the things that run on this cluster.
     component env <name> [get|set KEY=VALUE|unset KEY|edit]
     component render <name>
     component deploy <name>
+    component secret <name> [show|set KEY=VALUE|generate]
     component rotate <name>
     component remove <name> [--yes]
     component fields <type>
@@ -245,13 +246,42 @@ def cmd_deploy(argv):
     _print_result(*c.deploy())
 
 
+def cmd_secret(argv):
+    """Show, set or regenerate a component's own credentials."""
+    if not argv:
+        die("usage: component secret <name> [show | set KEY=VALUE | generate]")
+    c = components.load(argv[0])
+    if not type(c).SECRETS:
+        die(f"{c.name} ({c.LABEL}) has no credentials")
+    action = argv[1] if len(argv) > 1 else "show"
+
+    if action == "show":
+        for key, value in c.secret_values().items():
+            print(f"{key}={value}")
+        return
+    if action == "set":
+        if len(argv) < 3 or "=" not in argv[2]:
+            die("usage: component secret <name> set KEY=VALUE")
+        key, value = argv[2].split("=", 1)
+        problems = c.apply_secrets({key: value})
+    elif action == "generate":
+        c.rotate_secrets()
+        problems = []
+    else:
+        die(f"unknown secret action {action!r}")
+    if problems:
+        _report(problems)
+    print(f"updated {c.name}. Apply it with:  component deploy {c.name}")
+
+
 def cmd_rotate(argv):
     if not argv:
         die("usage: component rotate <name>")
     c = components.load(argv[0])
-    if not hasattr(c, "rotate_password"):
-        die(f"{c.name} ({c.LABEL}) has no password to rotate")
-    _print_result(*c.rotate_password())
+    if not type(c).SECRETS:
+        die(f"{c.name} ({c.LABEL}) has no credentials to rotate")
+    c.rotate_secrets()
+    _print_result(*c.deploy())
 
 
 def cmd_remove(argv):
@@ -275,6 +305,7 @@ COMMANDS = {
     "env": cmd_env,
     "render": cmd_render,
     "deploy": cmd_deploy,
+    "secret": cmd_secret,
     "rotate": cmd_rotate,
     "remove": cmd_remove, "rm": cmd_remove,
 }

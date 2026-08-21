@@ -45,17 +45,21 @@ each gets capped to fit, the total never exceeds capacity, and no worker is ever
 bought. Admission caps GROWTH only — it never scales anything down. Shrinking is
 tier 1's job and the node-removal path's job.
 
-THE MASTER IS HOST #1
----------------------
-Hosts are counted including the master, so the floor of MIN_WORKERS=1 is free:
-one host means the master, and no Hetzner server is billed. Applications live in
-one of two places, and exactly one at a time:
+THE MASTER IS NOT A WORKER
+--------------------------
+`MIN_WORKERS`/`MAX_WORKERS` count Hetzner worker servers, and the master is not
+one of them. `MIN_WORKERS=0` is therefore the free floor: no server is billed,
+and the master carries the load itself. Applications live in one of two places,
+and exactly one at a time:
 
-  MANAGER MODE   one host. App services carry no role constraint and run on the
-                 master alongside monitoring, the databases and the panel.
-  WORKER MODE    two or more hosts. Every app service carries
+  MANAGER MODE   zero workers. App services carry no role constraint and run on
+                 the master alongside monitoring, the databases and the panel.
+  WORKER MODE    one or more workers. Every app service carries
                  `node.role == worker` and the master goes back to being a pure
                  control plane carrying no application replicas at all.
+
+So `MIN_WORKERS=1` means "always keep one worker", which also means the master
+never runs application traffic — there is no separate switch for that.
 
 CAPACITY IS MEASURED, NOT CONFIGURED
 ------------------------------------
@@ -176,13 +180,15 @@ def _secret(name):
 CLUSTER = _env("APP_NAME", "app")
 VM_URL = _env("VM_URL", "http://victoriametrics:8428")
 
-# --- hosts ----------------------------------------------------------------
-# HOSTS, not Hetzner servers. The master counts as host #1:
+# --- workers --------------------------------------------------------------
+# Hetzner worker servers. The master is NOT one of them — it is the control
+# plane, and it happens to carry the load while no worker exists.
 #
-#   MIN_WORKERS = 1  ->  the master alone runs your components, zero servers billed
-#   hosts     >= 2   ->  that many Hetzner workers exist and the master runs none
-MIN_WORKERS = _env("MIN_WORKERS", "1", int)
-MAX_WORKERS = _env("MAX_WORKERS", "6", int)
+#   MIN_WORKERS = 0  ->  no server billed; the master runs your components
+#   MIN_WORKERS = 1  ->  always one worker, so the master runs no application
+#   MAX_WORKERS = 5  ->  at most five workers. A BUDGET cap, not a capacity plan.
+MIN_WORKERS = _env("MIN_WORKERS", "0", int)
+MAX_WORKERS = _env("MAX_WORKERS", "5", int)
 
 # Placement guard, not a trigger. If a node is this loaded on either CPU or
 # memory, another replica will not fit on it, so a node is required.
@@ -216,12 +222,9 @@ logging.basicConfig(
 )
 log = logging.getLogger("autoscaler")
 
-# The master is host #1, so a floor below 1 is meaningless and a floor of 0
-# would ask for a cluster with nowhere to run.
-if MIN_WORKERS < 1:
-    log.warning("MIN_WORKERS=%d is below the floor of 1 (the master is host #1); using 1",
-                MIN_WORKERS)
-    MIN_WORKERS = 1
+if MIN_WORKERS < 0:
+    log.warning("MIN_WORKERS=%d is negative; using 0", MIN_WORKERS)
+    MIN_WORKERS = 0
 if MAX_WORKERS < MIN_WORKERS:
     log.warning("MAX_WORKERS=%d is below MIN_WORKERS=%d; using %d",
                 MAX_WORKERS, MIN_WORKERS, MIN_WORKERS)
@@ -437,7 +440,11 @@ def _limits(spec_resources):
 # alongside it for per-service visibility.
 
 M_CURRENT = Gauge("autoscaler_current_workers", "Hetzner worker servers in the swarm")
-M_HOSTS = Gauge("autoscaler_current_hosts", "Hosts running applications, master included")
+# Kept alongside _current_workers because "how many boxes am I running" is a
+# different question from "how many am I paying for", and the panel shows both.
+# Nothing keys a THRESHOLD on it any more: the ceiling is a worker count now, so
+# AutoscalerAtMax compares workers to workers.
+M_HOSTS = Gauge("autoscaler_current_hosts", "Boxes running applications, master included")
 M_DESIRED = Gauge("autoscaler_desired_workers", "Host count the autoscaler wants")
 M_MAX = Gauge("autoscaler_max_workers", "Configured host ceiling")
 M_MIN = Gauge("autoscaler_effective_min_workers", "Host floor in force right now")
@@ -996,31 +1003,33 @@ def servers_needed(items, worker_bins, new_free, pressured):
     return used
 
 
-def hosts_needed(workloads, wants, node_pressure, manager_free, worker_bins, new_free):
+def workers_needed(workloads, wants, node_pressure, manager_free, worker_bins, new_free):
     """
-    How many HOSTS the wanted replicas require. The master is host #1, so
-    `servers = hosts - 1`.
+    How many Hetzner WORKERS the wanted replicas require. The master is not one.
 
-    Returns 1 when the master alone can hold everything — the free floor,
+    Returns 0 when the master alone can hold everything — the free floor,
     nothing billed. Otherwise the master stops being a placement target and the
-    workers must cover the WHOLE demand.
+    workers must cover the WHOLE demand, so the answer is never 0 and never 1
+    just because "one more would do": one worker has to hold what the master was
+    holding as well.
     """
     pressured = node_pressure is not None and node_pressure > NODE_PRESSURE_PCT
 
     # "Could the master hold everything IF we unpinned?" — a hypothetical about
     # the target state, which is why the masks are ignored here.
-    hypothetical = demand_items(workloads, wants, pinned_names=set())
     if not pressured:
+        hypothetical = demand_items(workloads, wants, pinned_names=set())
         _, unplaced = place(hypothetical, [Bin("master", manager_free, True)])
         if not unplaced:
-            return 1
+            return 0
 
     items = demand_items(workloads, wants, pinned_names=set(w.name for w in workloads))
     servers = servers_needed(items, worker_bins, new_free, pressured)
     if pressured:
-        log.info("node resource pressure at %.0f%%: requesting an extra host",
+        log.info("node resource pressure at %.0f%%: requesting an extra worker",
                  node_pressure)
-    return 1 + max(1, servers)
+    # Past the master's capacity, so at least one real worker is required.
+    return max(1, servers)
 
 
 def note_capacity(manager_free, worker_bins, new_free, workloads):
@@ -1039,7 +1048,7 @@ def note_capacity(manager_free, worker_bins, new_free, workloads):
         WORKER_TYPE, new_free if new_free else "unknown",
         ", ".join(f"{w.name} {w.cost}" for w in workloads) or "nothing",
     )
-    if MIN_WORKERS == 1 and workloads:
+    if MIN_WORKERS == 0 and workloads:
         floor_items = demand_items(
             workloads, {w.name: w.policy.min_replicas for w in workloads},
             pinned_names=set())
@@ -1047,8 +1056,8 @@ def note_capacity(manager_free, worker_bins, new_free, workloads):
         if unplaced:
             log.warning(
                 "the master cannot hold every component's minimum (%s), so the "
-                "cluster can never return to the free host-1 state. Give it more "
-                "CPU/RAM, lower a minimum, or shrink a reservation.",
+                "cluster can never return to the free zero-worker state. Give it "
+                "more CPU/RAM, lower a minimum, or shrink a reservation.",
                 ", ".join(f"{w.name}x{w.policy.min_replicas}" for w in workloads),
             )
 
@@ -1271,7 +1280,13 @@ def set_replicas(name, count):
 # ---------------------------------------------------------------------------
 
 def scheduled_floor():
-    """Parse SCHEDULE_FLOOR like '08:00-20:00=2,20:00-23:00=1' (UTC)."""
+    """
+    The worker floor in force right now.
+
+    Parses SCHEDULE_FLOOR like '08:00-20:00=2,20:00-23:00=1' (UTC). The numbers
+    are worker counts, so `=0` is a valid entry meaning "the master alone is
+    enough during this window".
+    """
     if not SCHEDULE_FLOOR.strip():
         return MIN_WORKERS
     now = datetime.now(timezone.utc)
@@ -1544,7 +1559,7 @@ def loop():
     # 3. DISCOVERY. An API error must never be read as "no demand".
     workloads, services, ok = discover_workloads()
     if not ok:
-        log.warning("holding at %d host(s): the service list is unreadable", current_hosts)
+        log.warning("holding at %d worker(s): the service list is unreadable", current_workers)
         return
     _GLOBAL_SERVICE_IDS.clear()
     _GLOBAL_SERVICE_IDS.update(
@@ -1633,16 +1648,19 @@ def loop():
     M_DEMAND_MEM.set(demand.mem)
 
     # 8. SIZING, from the UNCAPPED want.
-    want_hosts = hosts_needed(workloads, wants, node_pressure, manager_free,
-                              worker_bins, new_free) if workloads else 1
-    want_hosts = max(floor, min(MAX_WORKERS, want_hosts))
-    want_pinned = want_hosts > 1
-    M_DESIRED.set(want_hosts)
+    want_servers = workers_needed(workloads, wants, node_pressure, manager_free,
+                                  worker_bins, new_free) if workloads else 0
+    want_servers = max(floor, min(MAX_WORKERS, want_servers))
+    # One worker means the master is out of the request path entirely: there is
+    # no half state where both carry replicas.
+    want_pinned = want_servers >= 1
+    M_DESIRED.set(want_servers)
 
-    # 9. ADMISSION, against the CURRENTLY eligible nodes.
+    # 9. ADMISSION, against the CURRENTLY eligible nodes — which is what the
+    #    services are pinned to RIGHT NOW, not where they are heading. Mid
+    #    scale-out the master is still serving, and capping against the workers
+    #    alone would shed the replicas it is holding.
     bins = list(worker_bins)
-    if not all_unpinned or want_hosts <= 1:
-        pass
     if any(not w.pinned for w in workloads) or not workloads:
         bins.append(Bin("master", manager_free, True))
     admitted, capped, starved = admit(workloads, wants, bins, live) if workloads else ({}, {}, set())
@@ -1666,7 +1684,7 @@ def loop():
     if not want_pinned and any_pinned:
         changed = reconcile_placement(
             workloads, False,
-            f"scaling in to {want_hosts} host(s); the master takes the replicas back")
+            f"scaling in to {want_servers} worker(s); the master takes the replicas back")
         if changed:
             pinned -= set(changed)
             any_pinned = bool(pinned)
@@ -1675,17 +1693,16 @@ def loop():
     # 11. SCALE UP nodes.
     booting = len(provisioning_workers())
     owned = current_workers + booting
-    want_servers = max(0, want_hosts - 1)
     if want_servers > owned:
         age = newest_worker_age()
         if age is not None and age < COOLDOWN_UP:
             log.info("worker scale-up suppressed: newest is %.0fs old, cooldown %ds",
                      age, COOLDOWN_UP)
-        elif owned >= MAX_WORKERS - 1:
-            log.warning("at host ceiling %d (master + %d workers) — this is a budget "
-                        "cap, not capacity", MAX_WORKERS, MAX_WORKERS - 1)
+        elif owned >= MAX_WORKERS:
+            log.warning("at the worker ceiling of %d — this is a budget cap, not "
+                        "capacity", MAX_WORKERS)
         else:
-            for _ in range(min(want_servers - owned, (MAX_WORKERS - 1) - owned)):
+            for _ in range(min(want_servers - owned, MAX_WORKERS - owned)):
                 try:
                     create_worker()
                 except Exception as exc:  # noqa: BLE001
@@ -1750,7 +1767,7 @@ def loop():
 
         if since < COOLDOWN_DOWN:
             log.info("worker scale-down suppressed: %.0fs since last", since)
-        elif current_hosts <= floor:
+        elif current_workers <= floor:
             pass
         elif candidate is None:
             log.info("no worker can be removed without leaving replicas unplaceable "
@@ -1801,9 +1818,9 @@ def loop():
     export_service_metrics(workloads, wants, admitted, signals, running, pending)
 
     log.info(
-        "hosts %d/%d (floor %d) · %d component(s) · demand %s · master %s · workers %s · "
-        "new %s · placement %s%s",
-        current_hosts, MAX_WORKERS, floor, len(workloads), demand, manager_free,
+        "workers %d/%d (floor %d, ceiling %d) · %d component(s) · demand %s · master %s · "
+        "worker room %s · new %s · placement %s%s",
+        current_workers, want_servers, floor, MAX_WORKERS, len(workloads), demand, manager_free,
         " + ".join(str(b.free) for b in worker_bins) or "none",
         new_free if new_free else "unknown",
         "workers" if any_pinned else "master",
@@ -1822,18 +1839,18 @@ def loop():
 
 def main():
     start_http_server(9200)
-    log.info("autoscaler up — cluster=%s hosts=%d..%d worker_type=%s dry_run=%s",
+    log.info("autoscaler up — cluster=%s workers=%d..%d worker_type=%s dry_run=%s",
              CLUSTER, MIN_WORKERS, MAX_WORKERS, WORKER_TYPE, DRY_RUN)
     log.info("scaling targets are DISCOVERED: any service labelled %s=%s is managed, "
              "and its policy comes from its own autoscale.* labels. Nothing here "
              "names an application.", WORKLOAD_LABEL, WORKLOAD_APP)
-    if MIN_WORKERS == 1:
-        log.info("host floor is 1: the master is host #1, so an idle cluster bills no "
-                 "Hetzner servers at all. Capacity is measured, not configured — see "
-                 "the 'demand' and 'master' figures in each loop line.")
+    if MIN_WORKERS == 0:
+        log.info("worker floor is 0: an idle cluster bills no Hetzner servers at all "
+                 "and the master carries the load. Capacity is measured, not "
+                 "configured — see the 'demand' and 'master' figures in each loop line.")
     else:
-        log.info("host floor is %d: the master is never a host, so at least %d Hetzner "
-                 "worker(s) always run", MIN_WORKERS, MIN_WORKERS)
+        log.info("worker floor is %d: at least that many Hetzner workers always run, so "
+                 "the master never carries application traffic", MIN_WORKERS)
     while _running:
         started = time.time()
         try:

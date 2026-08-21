@@ -299,19 +299,45 @@
     </div>
 
     <section class="panel">
+      <div class="panel-head"><h2>Change the password</h2></div>
+      <form method="post" action="{{ creds_href(component.name) }}"
+            {% if preview %}data-preview{% endif %}>
+        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+        <div class="panel-body">
+          {% for secret in component.SECRETS %}
+          <div class="field">
+            <label for="s-{{ secret.key }}">{{ secret.label }}</label>
+            <input id="s-{{ secret.key }}" type="text" name="{{ secret.key }}"
+                   autocomplete="off" spellcheck="false"
+                   placeholder="leave blank to keep the current one">
+            <p class="hint">{{ secret.help }}</p>
+          </div>
+          {% endfor %}
+          <div class="btn-row">
+            <button class="btn btn-primary" type="submit">Save and restart</button>
+          </div>
+        </div>
+      </form>
+      <div class="panel-note">
+        Saving restarts this component with the new password and touches nothing
+        else. Your own clients need the new URL — nothing in the cluster holds a
+        copy to update.
+      </div>
+    </section>
+
+    <section class="panel danger-zone">
       <div class="panel-head"><h2>Rotate</h2></div>
       <div class="panel-body">
-        <form method="post" action="{{ action_href(component.name) }}"
+        <form method="post" action="{{ creds_href(component.name) }}"
               {% if preview %}data-preview{% endif %}
               data-confirm="Generate a new password and restart {{ component.name }} with it? Anything still using the old one will stop being able to authenticate.">
           <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-          <input type="hidden" name="action" value="rotate">
-          <button class="btn btn-danger" type="submit">Rotate password</button>
+          <input type="hidden" name="regenerate" value="1">
+          <button class="btn btn-danger" type="submit">Generate a new password</button>
         </form>
         <p class="hint">
-          Generates a new password and redeploys this component with it. Nothing else
-          holds a copy, so nothing else needs updating — and nothing else breaks. Your
-          own clients will need the new URL.
+          The same thing as the form above with a random value — there when you do
+          not want to think of one.
         </p>
       </div>
     </section>

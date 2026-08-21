@@ -3,8 +3,8 @@
     <h1>Autoscaler</h1>
     <p>Load is absorbed cheapest first: replicas in seconds, nodes in about two minutes.
        Coming down the order reverses — shed replicas first, remove the node later.
-       The master is host&nbsp;#1, so with no workers it runs your components itself and
-       nothing is billed. Capacity is measured from real CPU and memory, never configured,
+       The master is not a worker: it is the control plane, and while no worker
+       exists it carries your components itself and nothing is billed. Capacity is measured from real CPU and memory, never configured,
        and each component's scaling policy travels with it as labels on its own service.</p>
   </div>
 </div>
@@ -16,9 +16,9 @@
     <span class="m">services carrying <code>infra.workload=app</code></span>
   </div>
   <div class="tile">
-    <span class="k">Hosts</span>
+    <span class="k">Workers</span>
     <span class="v">{{ a.current_workers|int }}<span class="muted">/{{ a.desired_workers|int }}</span></span>
-    <span class="m">master is #1 · floor {{ a.min_workers|int }} · ceiling {{ a.max_workers|int }}</span>
+    <span class="m">billed servers · floor {{ a.min_workers|int }} · ceiling {{ a.max_workers|int }}</span>
     <div class="meter {% if a.current_workers >= a.max_workers %}is-warn{% endif %}">
       <i style="width: {{ (a.current_workers / a.max_workers * 100)|round|int if a.max_workers else 0 }}%"></i>
     </div>
@@ -30,7 +30,7 @@
       <span class="m">master carries no application replicas</span>
     {% else %}
       <span class="v small">Master</span>
-      <span class="m">no workers billed — the free floor</span>
+      <span class="m">zero workers billed — the free floor</span>
     {% endif %}
   </div>
   <div class="tile">

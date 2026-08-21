@@ -182,6 +182,47 @@ class ComponentTest(unittest.TestCase):
         mode = os.stat(self.components.store.path_for("cache", "secret.env")).st_mode
         self.assertEqual(mode & 0o777, 0o600)
 
+    def test_a_password_can_be_chosen_at_create_time(self):
+        """Blank generates; supplied is kept. Moving an existing database needs both."""
+        component, problems = self.components.create(
+            "redis", "mine", {"REDIS_PASSWORD": "carried-over-from-the-old-box"})
+        self.assertEqual(problems, [])
+        self.assertEqual(component.password(), "carried-over-from-the-old-box")
+
+    def test_a_weak_password_is_refused_and_nothing_is_written(self):
+        _, problems = self.components.create("redis", "weak", {"REDIS_PASSWORD": "abc"})
+        self.assertTrue(any("at least" in p for p in problems))
+        self.assertFalse(self.components.exists("weak"))
+
+    def test_a_password_with_a_line_break_is_refused(self):
+        _, problems = self.components.create(
+            "redis", "multi", {"REDIS_PASSWORD": "line-one\nline-two"})
+        self.assertTrue(any("line break" in p for p in problems))
+
+    def test_a_password_can_be_changed_afterwards(self):
+        component = self.make_redis()
+        self.assertEqual(component.set_password("a-new-password-entirely"), [])
+        self.assertEqual(self.components.load("cache").password(),
+                         "a-new-password-entirely")
+
+    def test_a_blank_submission_keeps_the_current_password(self):
+        """The credentials form's empty field means 'unchanged', not 'wipe it'."""
+        component = self.make_redis()
+        before = component.password()
+        self.assertEqual(component.apply_secrets({"REDIS_PASSWORD": ""}), [])
+        self.assertEqual(self.components.load("cache").password(), before)
+
+    def test_the_connection_url_escapes_the_password(self):
+        """
+        `redis://default:p@ss@host:6379` parses as a different host, and the
+        client's error blames DNS. A user-chosen password needs encoding.
+        """
+        component = self.make_redis()
+        component.set_password("p@ss:word/slash")
+        url = self.components.load("cache").connection_url()
+        self.assertIn("p%40ss%3Aword%2Fslash", url)
+        self.assertTrue(url.endswith("@cache_redis:6379"))
+
     def test_redis_password_expands_at_runtime(self):
         """
         The command must go through a shell, and the $ must survive compose.
@@ -219,8 +260,15 @@ class ComponentTest(unittest.TestCase):
     def test_rotation_changes_the_password(self):
         component = self.make_redis()
         before = component.password()
-        component.set_password("f" * 48)
-        self.assertNotEqual(before, self.components.load("cache").password())
+        component.rotate_secrets()
+        after = self.components.load("cache").password()
+        self.assertNotEqual(before, after)
+        self.assertEqual(len(after), 48)
+
+    def test_an_application_has_no_credentials(self):
+        """Only a type that declares SECRETS gets a credentials tab or a rotate."""
+        self.assertEqual(type(self.make_app()).SECRETS, ())
+        self.assertEqual(self.make_app("api2").apply_secrets({"anything": "x"}), [])
 
     # --- storage ----------------------------------------------------------
 

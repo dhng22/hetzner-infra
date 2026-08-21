@@ -3,6 +3,23 @@
     <div class="eyebrow">Components</div>
     <h1>What you are running</h1>
   </div>
+  {#
+    A <details> menu, not a JS dropdown. It closes on Escape and on click-away
+    for free, works with the keyboard, and cannot get stuck open if a script
+    throws — which for the one control that creates infrastructure is worth more
+    than the animation.
+  #}
+  <details class="menu">
+    <summary class="btn btn-primary">+ New</summary>
+    <div class="menu-list" role="menu">
+      {% for group, entries in new_groups %}
+      <a class="menu-item" role="menuitem" href="{{ new_href(entries[0][0]) }}">
+        <span class="menu-label">{{ group }}</span>
+        <span class="menu-sub">{{ entries[0][1].BLURB }}</span>
+      </a>
+      {% endfor %}
+    </div>
+  </details>
 </div>
 
 {% if not views %}
@@ -10,13 +27,14 @@
   <div class="panel-body stack">
     <h2>Nothing is running yet</h2>
     <p class="hint">
-      This cluster boots with monitoring, ingress and this console — and nothing else.
-      Applications and databases are yours to create, one independent stack each,
-      so a broken one cannot take anything else down with it.
+      This cluster boots with monitoring, ingress and this console — and nothing
+      else. Applications and databases are yours to create, one independent stack
+      each, so a broken one cannot take anything else down with it.
     </p>
     <div class="btn-row">
-      {% for key, cls in types.items() %}
-      <a class="btn {{ 'btn-primary' if loop.first }}" href="{{ new_href(key) }}">New {{ cls.LABEL|lower }}</a>
+      {% for group, entries in new_groups %}
+      <a class="btn {{ 'btn-primary' if loop.first }}" href="{{ new_href(entries[0][0]) }}">
+        New {{ group|lower }}</a>
       {% endfor %}
     </div>
     <p class="hint">
@@ -52,16 +70,6 @@
         </div>
       </a>
       {% endfor %}
-
-      {% if loop.first %}
-      {% for key, cls in types.items() %}
-      <a class="card card-new" href="{{ new_href(key) }}">
-        <div class="card-plus" aria-hidden="true">+</div>
-        <div class="card-name">New {{ cls.LABEL|lower }}</div>
-        <div class="card-sub">{{ cls.BLURB }}</div>
-      </a>
-      {% endfor %}
-      {% endif %}
     </div>
   </div>
 </section>

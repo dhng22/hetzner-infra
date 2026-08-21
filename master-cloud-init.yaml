@@ -135,21 +135,25 @@ write_files:
       # What is left here is the fleet: how many machines may exist, of what
       # kind, and how eagerly they come and go.
 
-      # HOSTS, not Hetzner servers. The master is host #1, so:
-      #   MIN_WORKERS=1  ->  the master alone runs your components, nothing is billed
-      #   2 hosts        ->  1 Hetzner worker, and the master runs NO application
-      #   6 hosts        ->  5 Hetzner workers
-      # An idle cluster is therefore one box, not two. Set MIN_WORKERS=2 if you
-      # would rather the master never ran application traffic at all.
+      # HETZNER WORKERS. The master is NOT one of them — it is the control
+      # plane, and it carries the load itself while no worker exists.
+      #
+      #   MIN_WORKERS=0  ->  nothing is billed; the master runs your components
+      #   MIN_WORKERS=1  ->  one worker always up, so the master runs no
+      #                      application traffic at all
+      #   MAX_WORKERS=5  ->  at most five workers
+      #
+      # An idle cluster is therefore one box and no invoice.
       #
       # How much fits on a node is NOT configured. It is measured: each node's
-      # real CPU and RAM, minus what Swarm has already reserved there, against
-      # the reservations of the replicas that have to be placed. A new worker's
-      # size comes from the Hetzner catalogue for WORKER_TYPE. Change the worker
-      # type, resize the master, or create another component, and the arithmetic
-      # just follows. Existing workers are filled before another one is bought.
-      MIN_WORKERS=1
-      MAX_WORKERS=6                  # a BUDGET cap, not a capacity plan
+      # real CPU and memory, minus what Swarm has already reserved there,
+      # against the reservations of the replicas that have to be placed. A new
+      # worker's size comes from the Hetzner catalogue for WORKER_TYPE. Change
+      # the worker type, resize the master, or create another component, and the
+      # arithmetic just follows. Existing workers are filled before another one
+      # is bought.
+      MIN_WORKERS=0
+      MAX_WORKERS=5                  # a BUDGET cap, not a capacity plan
 
       # Placement guard, not a trigger: if a node is this loaded on CPU or
       # memory, another replica physically will not fit, so ask for a node.
@@ -162,9 +166,9 @@ write_files:
       COOLDOWN_DOWN_SECONDS=900
 
       # Blank on purpose. A floor here overrides MIN_WORKERS for the hours it
-      # covers, so `08:00-20:00=2` would keep two workers alive all day and
-      # scale-to-zero would only ever happen overnight. Set it only if you have
-      # a known traffic window worth pre-warming for.
+      # covers, so `08:00-20:00=1` would keep one worker alive all day and the
+      # free floor would only ever happen overnight. Set it only if you have a
+      # known traffic window worth pre-warming for.
       SCHEDULE_FLOOR=                # UTC; "HH:MM-HH:MM=N" comma separated
       DRY_RUN=false
 
@@ -219,11 +223,11 @@ write_files:
       # Scaling numbers that have to agree with each other. The autoscaler
       # clamps rather than crashing, so without this the cluster would run
       # quietly on numbers you did not choose.
-      : "${MIN_WORKERS:=1}" "${MAX_WORKERS:=6}"
+      : "${MIN_WORKERS:=0}" "${MAX_WORKERS:=5}"
 
-      if [ "$MIN_WORKERS" -lt 1 ]; then
-        echo "FATAL: MIN_WORKERS must be at least 1. The master is host #1, so 1" >&2
-        echo "already means 'no Hetzner workers'. There is no lower state." >&2
+      if [ "$MIN_WORKERS" -lt 0 ]; then
+        echo "FATAL: MIN_WORKERS cannot be negative. 0 means 'no Hetzner workers'," >&2
+        echo "which is the free floor — the master carries the load itself." >&2
         exit 1
       fi
       if [ "$MAX_WORKERS" -lt "$MIN_WORKERS" ]; then
@@ -237,11 +241,12 @@ write_files:
       # works, it just never returns to the free single-host state and always
       # keeps at least one worker running. The autoscaler says so in its log.
       MASTER_CPUS="$(nproc)"
-      if [ "$MIN_WORKERS" -eq 1 ] && [ "$MASTER_CPUS" -lt 4 ]; then
-        echo "NOTE: this master has ${MASTER_CPUS} vCPU. After the monitoring stack," >&2
-        echo "Redis and the panel reserve theirs, there may be no room left for app" >&2
-        echo "replicas — in which case a worker always stays up. Check the" >&2
-        echo "'measured capacity' line in: docker service logs monitoring_autoscaler" >&2
+      if [ "$MIN_WORKERS" -eq 0 ] && [ "$MASTER_CPUS" -lt 4 ]; then
+        echo "NOTE: this master has ${MASTER_CPUS} vCPU. After the monitoring stack" >&2
+        echo "and the panel reserve theirs, there may be no room left for your" >&2
+        echo "components — in which case a worker always stays up and the free" >&2
+        echo "floor is unreachable. Check the 'measured capacity' line in:" >&2
+        echo "  docker service logs monitoring_autoscaler" >&2
       fi
 
       PRIVATE_IP="$(ip -4 -o addr show | awk '$4 ~ /^10\./ {print $4}' | cut -d/ -f1 | head -n1)"

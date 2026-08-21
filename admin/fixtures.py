@@ -107,8 +107,10 @@ def system_view():
 def vm_query(expr):
     return {
         "count(autoscaler_service_p95_ms > on (service) autoscaler_service_slo_p95_ms)": 1.0,
-        "autoscaler_max_workers": 6.0,
+        "autoscaler_max_workers": 5.0,
         "autoscaler_current_hosts": 4.0,
+        "autoscaler_current_workers": 3.0,
+        "autoscaler_effective_min_workers": 0.0,
         "autoscaler_cluster_cpu_percent": 71.0,
         "autoscaler_cluster_mem_percent": 58.0,
     }.get(expr)
@@ -251,8 +253,8 @@ def autoscaler_state():
         "demand_cpu": 3.6, "demand_mem": 2_684_354_560,
         "manager_free_cpu": 1.75, "manager_free_mem": 5_100_273_664,
         "worker_free_cpu": 1.1, "new_worker_cpu": 2.8,
-        "current_workers": 4, "current_servers": 3, "desired_workers": 5,
-        "max_workers": 6, "min_workers": 1,
+        "current_workers": 3, "hosts": 4, "desired_workers": 4,
+        "max_workers": 5, "min_workers": 0,
         "last_loop": 1_770_000_000.0,
     }
 

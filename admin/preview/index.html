@@ -395,6 +395,27 @@ textarea { resize: vertical; min-height: 260px; }
 [hidden] { display: none !important; }
 .bulk-in { min-height: 320px; white-space: pre; overflow-wrap: normal; overflow-x: auto; tab-size: 4; }
 
+/* --- the New menu --------------------------------------------------------- */
+/* <details>, so it closes on Escape and on click-away with no JavaScript. */
+.menu { position: relative; margin-left: auto; }
+.menu > summary { list-style: none; cursor: pointer; }
+.menu > summary::-webkit-details-marker { display: none; }
+.menu > summary::after { content: "▾"; font-size: 11px; opacity: .8; }
+.menu[open] > summary { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.menu-list {
+  position: absolute; right: 0; top: calc(100% + var(--s-2)); z-index: 30;
+  min-width: 280px; padding: var(--s-1);
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r-lg); box-shadow: var(--shadow);
+}
+.menu-item {
+  display: block; padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-md); color: var(--text);
+}
+.menu-item:hover { background: var(--surface-2); text-decoration: none; }
+.menu-label { display: block; font-weight: var(--w-bold); font-size: var(--t-md); }
+.menu-sub { display: block; color: var(--text-mute); font-size: var(--t-sm); }
+
 /* --- component cards ------------------------------------------------------ */
 .cards { display: grid; gap: var(--s-3); grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
 .card {
@@ -790,7 +811,7 @@ ul.tight li { margin-bottom: 2px; }
   <div class="tile">
     <span class="k">Workers</span>
     <span class="v">2<span class="muted">/3</span></span>
-    <span class="m">ceiling 6 · a budget cap</span>
+    <span class="m">ceiling 5 · a budget cap</span>
   </div>
 </div>
 
@@ -1187,6 +1208,23 @@ ul.tight li { margin-bottom: 2px; }
     <div class="eyebrow">Components</div>
     <h1>What you are running</h1>
   </div>
+  
+  <details class="menu">
+    <summary class="btn btn-primary">+ New</summary>
+    <div class="menu-list" role="menu">
+      
+      <a class="menu-item" role="menuitem" href="#view-new-app">
+        <span class="menu-label">Application</span>
+        <span class="menu-sub">A container image of yours, behind the tunnel.</span>
+      </a>
+      
+      <a class="menu-item" role="menuitem" href="#view-new-redis">
+        <span class="menu-label">Database</span>
+        <span class="menu-sub">A password-protected Redis, with its own volume.</span>
+      </a>
+      
+    </div>
+  </details>
 </div>
 
 
@@ -1229,22 +1267,6 @@ ul.tight li { margin-bottom: 2px; }
         </div>
       </a>
       
-
-      
-      
-      <a class="card card-new" href="#view-new-app">
-        <div class="card-plus" aria-hidden="true">+</div>
-        <div class="card-name">New application</div>
-        <div class="card-sub">A container image of yours, behind the tunnel.</div>
-      </a>
-      
-      <a class="card card-new" href="#view-new-redis">
-        <div class="card-plus" aria-hidden="true">+</div>
-        <div class="card-name">New redis</div>
-        <div class="card-sub">A password-protected Redis, with its own volume.</div>
-      </a>
-      
-      
     </div>
   </div>
 </section>
@@ -1285,8 +1307,6 @@ ul.tight li { margin-bottom: 2px; }
           
         </div>
       </a>
-      
-
       
     </div>
   </div>
@@ -1343,7 +1363,7 @@ ul.tight li { margin-bottom: 2px; }
       </div>
       <div class="tile">
         <div class="eyebrow">Created</div>
-        <div class="v small mono">2026-08-21T10:25:47Z</div>
+        <div class="v small mono">2026-08-21T11:14:40Z</div>
       </div>
       <div class="tile">
         <div class="eyebrow">Updated</div>
@@ -2302,7 +2322,7 @@ ul.tight li { margin-bottom: 2px; }
       </div>
       <div class="tile">
         <div class="eyebrow">Created</div>
-        <div class="v small mono">2026-08-21T10:25:47Z</div>
+        <div class="v small mono">2026-08-21T11:14:40Z</div>
       </div>
       <div class="tile">
         <div class="eyebrow">Updated</div>
@@ -3204,7 +3224,7 @@ ul.tight li { margin-bottom: 2px; }
       </div>
       <div class="tile">
         <div class="eyebrow">Created</div>
-        <div class="v small mono">2026-08-21T10:25:47Z</div>
+        <div class="v small mono">2026-08-21T11:14:40Z</div>
       </div>
       <div class="tile">
         <div class="eyebrow">Updated</div>
@@ -3336,9 +3356,9 @@ ul.tight li { margin-bottom: 2px; }
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis://default:a7aac99f850735afd512b3c64d1700342e09b9bbec53a43c@cache_redis:6379</code>
+              <code>redis://default:118827b0c80333d9a3c39bd1973b1cb897a743a55d649d12@cache_redis:6379</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis://default:a7aac99f850735afd512b3c64d1700342e09b9bbec53a43c@cache_redis:6379">Copy</button>
+                      data-copy-text="redis://default:118827b0c80333d9a3c39bd1973b1cb897a743a55d649d12@cache_redis:6379">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -3349,7 +3369,7 @@ ul.tight li { margin-bottom: 2px; }
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="a7aac99f850735afd512b3c64d1700342e09b9bbec53a43c">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="118827b0c80333d9a3c39bd1973b1cb897a743a55d649d12">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -3375,9 +3395,9 @@ ul.tight li { margin-bottom: 2px; }
         <div class="panel-body stack">
           
           <div class="conn">
-            <code>redis://default:a7aac99f850735afd512b3c64d1700342e09b9bbec53a43c@10.0.0.2:46379</code>
+            <code>redis://default:118827b0c80333d9a3c39bd1973b1cb897a743a55d649d12@10.0.0.2:46379</code>
             <button class="btn btn-sm" type="button" data-copy
-                    data-copy-text="redis://default:a7aac99f850735afd512b3c64d1700342e09b9bbec53a43c@10.0.0.2:46379">Copy</button>
+                    data-copy-text="redis://default:118827b0c80333d9a3c39bd1973b1cb897a743a55d649d12@10.0.0.2:46379">Copy</button>
           </div>
           <div class="table-wrap">
             <table>
@@ -3415,19 +3435,45 @@ ul.tight li { margin-bottom: 2px; }
     </div>
 
     <section class="panel">
+      <div class="panel-head"><h2>Change the password</h2></div>
+      <form method="post" action="#"
+            data-preview>
+        <input type="hidden" name="csrf" value="preview">
+        <div class="panel-body">
+          
+          <div class="field">
+            <label for="s-REDIS_PASSWORD">Password</label>
+            <input id="s-REDIS_PASSWORD" type="text" name="REDIS_PASSWORD"
+                   autocomplete="off" spellcheck="false"
+                   placeholder="leave blank to keep the current one">
+            <p class="hint">Leave blank to generate a strong one. Set it yourself if you are moving an existing database and its clients already know the password.</p>
+          </div>
+          
+          <div class="btn-row">
+            <button class="btn btn-primary" type="submit">Save and restart</button>
+          </div>
+        </div>
+      </form>
+      <div class="panel-note">
+        Saving restarts this component with the new password and touches nothing
+        else. Your own clients need the new URL — nothing in the cluster holds a
+        copy to update.
+      </div>
+    </section>
+
+    <section class="panel danger-zone">
       <div class="panel-head"><h2>Rotate</h2></div>
       <div class="panel-body">
         <form method="post" action="#"
               data-preview
               data-confirm="Generate a new password and restart cache with it? Anything still using the old one will stop being able to authenticate.">
           <input type="hidden" name="csrf" value="preview">
-          <input type="hidden" name="action" value="rotate">
-          <button class="btn btn-danger" type="submit">Rotate password</button>
+          <input type="hidden" name="regenerate" value="1">
+          <button class="btn btn-danger" type="submit">Generate a new password</button>
         </form>
         <p class="hint">
-          Generates a new password and redeploys this component with it. Nothing else
-          holds a copy, so nothing else needs updating — and nothing else breaks. Your
-          own clients will need the new URL.
+          The same thing as the form above with a random value — there when you do
+          not want to think of one.
         </p>
       </div>
     </section>
@@ -3853,7 +3899,7 @@ ul.tight li { margin-bottom: 2px; }
       </div>
       <div class="tile">
         <div class="eyebrow">Created</div>
-        <div class="v small mono">2026-08-21T10:25:47Z</div>
+        <div class="v small mono">2026-08-21T11:14:40Z</div>
       </div>
       <div class="tile">
         <div class="eyebrow">Updated</div>
@@ -3978,9 +4024,9 @@ ul.tight li { margin-bottom: 2px; }
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis://default:2f1e358855edc98ba5d2053bbc3e33b02459c0b9ede02d6a@sessions_redis:6379</code>
+              <code>redis://default:7442cd0316b55a9822cc7e5ffa57579d683b80c8f8fbf347@sessions_redis:6379</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis://default:2f1e358855edc98ba5d2053bbc3e33b02459c0b9ede02d6a@sessions_redis:6379">Copy</button>
+                      data-copy-text="redis://default:7442cd0316b55a9822cc7e5ffa57579d683b80c8f8fbf347@sessions_redis:6379">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -3991,7 +4037,7 @@ ul.tight li { margin-bottom: 2px; }
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="2f1e358855edc98ba5d2053bbc3e33b02459c0b9ede02d6a">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="7442cd0316b55a9822cc7e5ffa57579d683b80c8f8fbf347">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -4028,19 +4074,45 @@ ul.tight li { margin-bottom: 2px; }
     </div>
 
     <section class="panel">
+      <div class="panel-head"><h2>Change the password</h2></div>
+      <form method="post" action="#"
+            data-preview>
+        <input type="hidden" name="csrf" value="preview">
+        <div class="panel-body">
+          
+          <div class="field">
+            <label for="s-REDIS_PASSWORD">Password</label>
+            <input id="s-REDIS_PASSWORD" type="text" name="REDIS_PASSWORD"
+                   autocomplete="off" spellcheck="false"
+                   placeholder="leave blank to keep the current one">
+            <p class="hint">Leave blank to generate a strong one. Set it yourself if you are moving an existing database and its clients already know the password.</p>
+          </div>
+          
+          <div class="btn-row">
+            <button class="btn btn-primary" type="submit">Save and restart</button>
+          </div>
+        </div>
+      </form>
+      <div class="panel-note">
+        Saving restarts this component with the new password and touches nothing
+        else. Your own clients need the new URL — nothing in the cluster holds a
+        copy to update.
+      </div>
+    </section>
+
+    <section class="panel danger-zone">
       <div class="panel-head"><h2>Rotate</h2></div>
       <div class="panel-body">
         <form method="post" action="#"
               data-preview
               data-confirm="Generate a new password and restart sessions with it? Anything still using the old one will stop being able to authenticate.">
           <input type="hidden" name="csrf" value="preview">
-          <input type="hidden" name="action" value="rotate">
-          <button class="btn btn-danger" type="submit">Rotate password</button>
+          <input type="hidden" name="regenerate" value="1">
+          <button class="btn btn-danger" type="submit">Generate a new password</button>
         </form>
         <p class="hint">
-          Generates a new password and redeploys this component with it. Nothing else
-          holds a copy, so nothing else needs updating — and nothing else breaks. Your
-          own clients will need the new URL.
+          The same thing as the form above with a random value — there when you do
+          not want to think of one.
         </p>
       </div>
     </section>
@@ -4431,13 +4503,8 @@ ul.tight li { margin-bottom: 2px; }
     <h1>New application</h1>
     <p class="hint">A container image of yours, behind the tunnel.</p>
   </div>
-  <div class="seg" role="group" aria-label="Component type">
-    
-    <a href="#view-new-app" aria-current="true">Application</a>
-    
-    <a href="#view-new-redis" >Redis</a>
-    
-  </div>
+  
+  
 </div>
 
 
@@ -4923,8 +4990,12 @@ ul.tight li { margin-bottom: 2px; }
   <p class="hint">Lower wins when several components compete for the same node capacity. Leave it alone unless one app genuinely matters more.</p>
 </div>
         
+
+        
+        
       </div>
     </div>
+    
     <div class="panel-note">
       Reservations are not optional. Swarm subtracts them when it places a task, and
       they are the only thing the autoscaler measures node capacity with — a component
@@ -4950,16 +5021,11 @@ ul.tight li { margin-bottom: 2px; }
           <div class="page-head">
   <div>
     <div class="eyebrow"><a href="#view-components">Components</a></div>
-    <h1>New redis</h1>
+    <h1>New database</h1>
     <p class="hint">A password-protected Redis, with its own volume.</p>
   </div>
-  <div class="seg" role="group" aria-label="Component type">
-    
-    <a href="#view-new-app" >Application</a>
-    
-    <a href="#view-new-redis" aria-current="true">Redis</a>
-    
-  </div>
+  
+  
 </div>
 
 
@@ -5147,8 +5213,26 @@ ul.tight li { margin-bottom: 2px; }
   <p class="hint">Must exceed max memory with room for Redis itself and its AOF buffer, or eviction never gets the chance to run.</p>
 </div>
         
+
+        
+        
+        <div class="field">
+          <label for="s-REDIS_PASSWORD">Password</label>
+          <input id="s-REDIS_PASSWORD" type="text" name="REDIS_PASSWORD"
+                 autocomplete="off" spellcheck="false"
+                 placeholder="leave blank to generate one"
+                 value="">
+          <p class="hint">Leave blank to generate a strong one. Set it yourself if you are moving an existing database and its clients already know the password.</p>
+        </div>
+        
       </div>
     </div>
+    
+    <div class="panel-note">
+      Leave a credential blank and one is generated for you. Set it yourself if you
+      are moving an existing database whose clients already know the password.
+    </div>
+    
     <div class="panel-note">
       Reservations are not optional. Swarm subtracts them when it places a task, and
       they are the only thing the autoscaler measures node capacity with — a component
@@ -5185,7 +5269,7 @@ ul.tight li { margin-bottom: 2px; }
   </div>
   <div class="tile">
     <span class="k">Worker ceiling</span>
-    <span class="v">6</span>
+    <span class="v">5</span>
     <span class="m">a budget cap, not a capacity plan</span>
   </div>
   <div class="tile">
@@ -5511,8 +5595,8 @@ ul.tight li { margin-bottom: 2px; }
     <h1>Autoscaler</h1>
     <p>Load is absorbed cheapest first: replicas in seconds, nodes in about two minutes.
        Coming down the order reverses — shed replicas first, remove the node later.
-       The master is host&nbsp;#1, so with no workers it runs your components itself and
-       nothing is billed. Capacity is measured from real CPU and memory, never configured,
+       The master is not a worker: it is the control plane, and while no worker
+       exists it carries your components itself and nothing is billed. Capacity is measured from real CPU and memory, never configured,
        and each component's scaling policy travels with it as labels on its own service.</p>
   </div>
 </div>
@@ -5524,11 +5608,11 @@ ul.tight li { margin-bottom: 2px; }
     <span class="m">services carrying <code>infra.workload=app</code></span>
   </div>
   <div class="tile">
-    <span class="k">Hosts</span>
-    <span class="v">4<span class="muted">/5</span></span>
-    <span class="m">master is #1 · floor 1 · ceiling 6</span>
+    <span class="k">Workers</span>
+    <span class="v">3<span class="muted">/4</span></span>
+    <span class="m">billed servers · floor 0 · ceiling 5</span>
     <div class="meter ">
-      <i style="width: 67%"></i>
+      <i style="width: 60%"></i>
     </div>
   </div>
   <div class="tile">
@@ -5703,13 +5787,13 @@ ul.tight li { margin-bottom: 2px; }
       </label>
 
       
-        <input id="set-MIN_WORKERS" type="text" name="value__MIN_WORKERS" value="1">
+        <input id="set-MIN_WORKERS" type="text" name="value__MIN_WORKERS" value="0">
         <input type="hidden" name="key" value="MIN_WORKERS">
       
 
       <p class="why">
         
-        A HOST count, and the master is host #1. 1 means no Hetzner workers at all — the master runs your components and nothing is billed. 2 or more means the master never runs application traffic.
+        Hetzner workers, and the master is not one of them. 0 means none are billed and the master carries the load itself. 1 or more means the master never runs application traffic at all.
         
           <em>Saving redeploys the monitoring stack.</em>
         
@@ -5722,13 +5806,13 @@ ul.tight li { margin-bottom: 2px; }
       </label>
 
       
-        <input id="set-MAX_WORKERS" type="text" name="value__MAX_WORKERS" value="6">
+        <input id="set-MAX_WORKERS" type="text" name="value__MAX_WORKERS" value="5">
         <input type="hidden" name="key" value="MAX_WORKERS">
       
 
       <p class="why">
         
-        A budget cap, not a capacity plan. Also a host count, so 6 means the master plus up to 5 Hetzner workers.
+        A budget cap, not a capacity plan. The most Hetzner workers that may exist at once, on top of the master.
         
           <em>Saving redeploys the monitoring stack.</em>
         

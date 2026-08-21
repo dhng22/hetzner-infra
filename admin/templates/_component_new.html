@@ -1,14 +1,18 @@
 <div class="page-head">
   <div>
     <div class="eyebrow"><a href="{{ section_href({'key': 'components'}) }}">Components</a></div>
-    <h1>New {{ cls.LABEL|lower }}</h1>
+    <h1>New {{ cls.GROUP|lower }}</h1>
     <p class="hint">{{ cls.BLURB }}</p>
   </div>
-  <div class="seg" role="group" aria-label="Component type">
-    {% for key, other in types.items() %}
+  {# Only the types in this group. Offering to switch from an application to a
+     database mid-form is not a choice anyone is making at that point. #}
+  {% if siblings|length > 1 %}
+  <div class="seg" role="group" aria-label="{{ cls.GROUP }} type">
+    {% for key, other in siblings %}
     <a href="{{ new_href(key) }}" {% if key == type_name %}aria-current="true"{% endif %}>{{ other.LABEL }}</a>
     {% endfor %}
   </div>
+  {% endif %}
 </div>
 
 {% if problems %}
@@ -50,8 +54,27 @@
           {% set value = values.get(f.name, f.default) if values else f.default %}
           {% include "_field.html" %}
         {% endfor %}
+
+        {# Credentials are not spec fields: a Field's value is written to
+           component.json, and a password must never be in there. #}
+        {% for secret in cls.SECRETS %}
+        <div class="field">
+          <label for="s-{{ secret.key }}">{{ secret.label }}</label>
+          <input id="s-{{ secret.key }}" type="text" name="{{ secret.key }}"
+                 autocomplete="off" spellcheck="false"
+                 placeholder="leave blank to generate one"
+                 value="{{ values.get(secret.key, '') if values else '' }}">
+          <p class="hint">{{ secret.help }}</p>
+        </div>
+        {% endfor %}
       </div>
     </div>
+    {% if cls.SECRETS %}
+    <div class="panel-note">
+      Leave a credential blank and one is generated for you. Set it yourself if you
+      are moving an existing database whose clients already know the password.
+    </div>
+    {% endif %}
     <div class="panel-note">
       Reservations are not optional. Swarm subtracts them when it places a task, and
       they are the only thing the autoscaler measures node capacity with — a component

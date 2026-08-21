@@ -18,6 +18,7 @@ class AppComponent(Component):
     LABEL = "Application"
     BLURB = "A container image of yours, behind the tunnel."
     CATEGORY = "Application"
+    GROUP = "Application"
 
     @classmethod
     def fields(cls):

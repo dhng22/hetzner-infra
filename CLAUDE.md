@@ -98,6 +98,15 @@ a task, *and* they are the entire input to the autoscaler's capacity arithmetic.
 `Component.resources()` refuses to render a service without them. A component with none makes its
 node look idle, and app replicas get packed on top of VictoriaMetrics.
 
+**A component's credentials are `Secret` declarations, not `Field`s.** A Field's value is written to
+`component.json`, which is 0640 and is the file someone pastes into an issue; a password must never
+be in there. `SECRETS` are written to `secret.env` at 0600 by `apply_secrets()`, which treats blank
+as "generate" both at create time and afterwards — a database reachable with no password by leaving
+a form field empty is not a state worth having. The panel renders a Credentials tab for any type
+that declares them and none for a type that does not, so a future Postgres needs no route change.
+The displayed connection URL percent-encodes the password, because a user-chosen one containing `@`
+turns `redis://default:p@ss@host` into a different host and an error that blames DNS.
+
 **Capacity is measured in CPU/memory, never in replicas.** Every quantity is a `Res(nanocores, bytes)`
 integer vector: a node's free capacity is what it advertises minus the reservations of every task on
 it that is *not* an app; demand is the sum over services of replicas × that service's own
@@ -121,10 +130,12 @@ alert and query joins on.
 `http://${MASTER_PRIVATE_IP}:3100`, which is why Loki publishes port 3100 in `mode: host` and why
 the plugin is installed in both cloud-inits.
 
-**The master is host #1.** `MIN_WORKERS`/`MAX_WORKERS` count HOSTS, master included: `MIN_WORKERS=1`
-means zero Hetzner servers and the master serving, `MAX_WORKERS=6` means master + up to 5 workers.
-`MIN_WORKERS=2` opts the master out of the request path entirely. At the floor, losing the master
-costs uptime and not just scaling — the deliberate price of the free floor.
+**The master is not a worker.** `MIN_WORKERS`/`MAX_WORKERS` count Hetzner worker servers, and the
+master is the control plane that happens to carry the load while none exists. `MIN_WORKERS=0` is the
+free floor — nothing billed, master serving; `MIN_WORKERS=1` keeps one worker up, which is also the
+only way to say "the master runs no application traffic". `AutoscalerAtMax` compares workers to
+workers, so `autoscaler_current_hosts` is now purely informational and no threshold keys on it. At
+the floor, losing the master costs uptime and not just scaling — the deliberate price of it.
 
 **`cloudflared` is `mode: global` with no constraint**, in its own `ingress` stack. Global so the
 master always has a registered connector and the tunnel does not gap during a handover; its own
@@ -156,7 +167,9 @@ The ordering is the whole gaplessness argument; reversing any of it causes an ou
 6. `read_signals_batch()` — every service's p95 and CPU-per-replica in a handful of `by (service)`
    queries. Per-service queries do not fit in a 60s loop and `AutoscalerStalled` fires at 300s.
 7. Tier 1 per service, each isolated: `desired_replicas()` → **want**.
-8. `hosts_needed()` from the **uncapped** want → `servers = hosts - 1`.
+8. `workers_needed()` from the **uncapped** want. Returns 0 when the master alone can hold
+   everything, and never 1-because-one-more-would-do: past the master, the workers cover the whole
+   demand including what the master was carrying.
 9. `admit()` against the currently eligible nodes → **admitted**.
 10. Apply in order: **release the pin (scaling in) → create nodes → set replicas → add the pin
     (scaling out) → remove nodes**.
