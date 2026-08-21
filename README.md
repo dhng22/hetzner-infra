@@ -304,8 +304,10 @@ Four things to have open in other tabs:
 1. **Hetzner** — a private network `10.0.0.0/16`, and a **Read & Write** API token.
 2. **Cloudflare** — one Tunnel; copy the connector token. Hostnames come later.
 3. **GitHub** — a PAT with `read:packages`, for the cluster to pull your image.
-4. **Slack** — an incoming webhook (or a Discord one with `/slack` appended).
-   Bootstrap refuses to start without it.
+4. **Telegram** — a bot from @BotFather, added to a group. The chat id comes
+   from `curl https://api.telegram.org/bot<TOKEN>/getUpdates` after you send one
+   message there; group ids are negative. Optional at boot — the cluster comes
+   up without it and says loudly that alerts are being dropped.
 
 Anything your application itself needs — a managed database, an API key, a
 bucket — is not on this list. Those go in that component's environment after the

@@ -187,7 +187,9 @@ write_files:
       # This script is written by cloud-init, but the rest of the bundle is not.
       # Say so plainly instead of failing later on a missing stack file.
       for required in stacks/monitoring.yml stacks/ingress.yml stacks/admin.yml \
-                      config/vmagent.yml.tpl autoscaler/Dockerfile admin/Dockerfile \
+                      config/vmagent.yml.tpl config/alertmanager.yml.tpl \
+                      config/alertmanager-none.yml config/alerts.yml \
+                      autoscaler/Dockerfile admin/Dockerfile \
                       bin/component bin/stack-deploy bin/panel-hostops; do
         if [ ! -e "/opt/infra/$required" ]; then
           echo "FATAL: /opt/infra/$required is missing." >&2
@@ -208,8 +210,7 @@ write_files:
       # port, no service name, no SLO. Those arrive with the component.
       for v in APP_NAME ROOT_DOMAIN HCLOUD_TOKEN HCLOUD_NETWORK_NAME \
                GHCR_USER GHCR_TOKEN CF_TUNNEL_TOKEN \
-               GRAFANA_ADMIN_PASSWORD ALERT_WEBHOOK_URL \
-               ADMIN_USER ADMIN_PASSWORD; do
+               GRAFANA_ADMIN_PASSWORD ADMIN_USER ADMIN_PASSWORD; do
         case "${!v:-}" in
           ""|REPLACE_ME*) missing+=("$v") ;;
         esac
@@ -218,6 +219,25 @@ write_files:
         echo "FATAL: unset or still REPLACE_ME in /etc/infra/infra.env:" >&2
         printf '  - %s\n' "${missing[@]}" >&2
         exit 1
+      fi
+
+      # Alerting is NOT in that list. It used to be, and refusing to boot over
+      # it was too blunt: you cannot always have the destination ready at the
+      # moment you create the server, and a cluster you cannot bring up is worse
+      # than one that tells you what is missing. So it warns here, installs a
+      # receiver that visibly drops everything, and `smoke-test` fails on it
+      # until you fix it. The property worth keeping was never "refuse to boot"
+      # — it was "never look like it is working when it is not".
+      ALERTING=0
+      case "${ALERT_TELEGRAM_BOT_TOKEN:-}${ALERT_TELEGRAM_CHAT_ID:-}" in
+        ""|*REPLACE_ME*) ;;
+        *) ALERTING=1 ;;
+      esac
+      if [ "$ALERTING" = "0" ]; then
+        echo "WARNING: no alert destination is configured." >&2
+        echo "Alerts will be generated, grouped — and dropped. Set" >&2
+        echo "ALERT_TELEGRAM_BOT_TOKEN and ALERT_TELEGRAM_CHAT_ID in" >&2
+        echo "/etc/infra/infra.env and re-run: stack-deploy monitoring" >&2
       fi
 
       # Scaling numbers that have to agree with each other. The autoscaler
@@ -290,7 +310,10 @@ write_files:
       mk_secret CF_TUNNEL_TOKEN           "$CF_TUNNEL_TOKEN"
       mk_secret HCLOUD_TOKEN              "$HCLOUD_TOKEN"
       mk_secret GRAFANA_ADMIN_PASSWORD    "$GRAFANA_ADMIN_PASSWORD"
-      mk_secret ALERT_WEBHOOK_URL         "$ALERT_WEBHOOK_URL"
+      # The Telegram bot token is deliberately NOT here. It has to be optional
+      # (a stack cannot reference a secret that may not exist) and editable in
+      # the panel (Swarm secrets are immutable), so it is rendered into
+      # config/alertmanager.yml at 0600 by bin/stack-deploy instead.
       mk_secret ADMIN_USER                "$ADMIN_USER"
       mk_secret ADMIN_PASSWORD            "$ADMIN_PASSWORD"
       # Signs admin session cookies. Generated here, never in infra.env: it is
@@ -326,7 +349,9 @@ write_files:
       chmod 700 /opt/infra/components
 
       # --- render templates ---------------------------------------------------
-      envsubst < /opt/infra/config/vmagent.yml.tpl > /opt/infra/config/vmagent.yml
+      # vmagent.yml and alertmanager.yml are rendered by bin/stack-deploy, not
+      # here, so that editing the alert destination in the panel and redeploying
+      # monitoring actually rebuilds the config it mounts.
       cp /opt/infra/config/worker-cloud-init.yaml.tpl \
          /opt/infra/config/worker-cloud-init.yaml
 

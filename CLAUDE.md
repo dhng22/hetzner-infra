@@ -261,9 +261,19 @@ leaks into the output. Rebuild it after template changes.
 The alerting path was rebuilt after all three of its parts turned out to be inert. Keep these
 properties:
 
-- **`ALERT_WEBHOOK_URL` is required.** Bootstrap rejects unset/`REPLACE_ME` values before installing
-  anything, and Alertmanager reads the URL from a docker secret via `api_url_file`, so it refuses to
-  start rather than dropping alerts. Never reintroduce a placeholder receiver.
+- **The destination is optional, and its absence is loud.** Bootstrap used to refuse to run without
+  it; that was too blunt, because a cluster you cannot bring up is worse than one that tells you
+  what is missing. Now `bin/stack-deploy` installs `config/alertmanager-none.yml` — a receiver that
+  visibly drops everything — warns on every deploy, `smoke-test` fails on it, and the panel's Alerts
+  page says so. The property to keep is not "refuse to boot", it is **never look like it is working
+  when it is not**. Never reintroduce a placeholder receiver that looks configured.
+- **The Telegram bot token is rendered into `config/alertmanager.yml` (0600), not a docker secret.**
+  A secret cannot be absent — referencing one would stop the whole monitoring stack deploying while
+  alerting is unconfigured — and cannot be changed in place, so the panel could never edit it. That
+  is also why `bin/stack-deploy` does the rendering rather than `bootstrap.sh`: editing the
+  destination in Settings redeploys monitoring, and the config it mounts has to be rebuilt in
+  between. `parse_mode` is empty on purpose; Telegram 400s the whole message when HTML does not
+  parse, and alert text routinely contains `<`, `>` and `&`.
 - **Absent series must alert.** With components created at runtime, `or vector(0)` cannot do this —
   it can only name one service. The anchor is `autoscaler_service_running_replicas`, a gauge the
   autoscaler reads from the Docker API, which exists for as long as the component does. So "every

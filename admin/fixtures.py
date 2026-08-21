@@ -259,6 +259,10 @@ def autoscaler_state():
     }
 
 
+def alert_destination():
+    return {"configured": True, "kind": "Telegram"}
+
+
 def alerts():
     return [
         {"name": "Watchdog", "group": "meta", "state": "firing", "tone": "ok",

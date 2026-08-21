@@ -489,6 +489,30 @@ def autoscaler_state():
     }
 
 
+def alert_destination():
+    """
+    Whether alerts have anywhere to go, read from the rendered config.
+
+    Bootstrap no longer refuses to boot without one, so something has to say
+    when the last hop is missing — otherwise the pipeline looks perfect right up
+    until the moment you needed it, which is the failure this path was rebuilt
+    to remove.
+    """
+    path = os.path.join(os.environ.get("INFRA_DIR", "/opt/infra"),
+                        "config", "alertmanager.yml")
+    try:
+        with open(path) as fh:
+            body = fh.read()
+    except OSError:
+        return {"configured": False, "kind": "unreadable"}
+    for marker, kind in (("telegram_configs", "Telegram"),
+                         ("slack_configs", "Slack"),
+                         ("webhook_configs", "a webhook")):
+        if marker in body:
+            return {"configured": True, "kind": kind}
+    return {"configured": False, "kind": "none"}
+
+
 def alerts():
     """Rules and their firing state, straight from vmalert."""
     out = []

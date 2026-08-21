@@ -299,6 +299,23 @@ if vm "http://vmalert:8880/api/v1/rules" | grep -q '"name":"Watchdog"'; then
 else
   bad "vmalert loaded the rules"
 fi
+# The destination is the last hop, and the only part of this pipeline that can
+# fail while everything upstream looks perfect. Bootstrap no longer refuses to
+# run without it, so this is what makes the state visible instead.
+if grep -q "telegram_configs" "$INFRA_DIR/config/alertmanager.yml" 2>/dev/null; then
+  ok "alerts have a destination (Telegram)"
+elif grep -qE "slack_configs|webhook_configs" "$INFRA_DIR/config/alertmanager.yml" 2>/dev/null; then
+  ok "alerts have a destination"
+else
+  bad "alerts have a destination" \
+      "alertmanager.yml has a receiver with no configs — every alert is generated, grouped and then DROPPED. Set ALERT_TELEGRAM_BOT_TOKEN and ALERT_TELEGRAM_CHAT_ID, then: stack-deploy monitoring"
+fi
+# It holds a bot token now, so it must not be world-readable.
+if [ -f "$INFRA_DIR/config/alertmanager.yml" ]; then
+  mode="$(stat -c '%a' "$INFRA_DIR/config/alertmanager.yml" 2>/dev/null || stat -f '%Lp' "$INFRA_DIR/config/alertmanager.yml" 2>/dev/null)"
+  if [ "$mode" = "600" ]; then ok "alertmanager.yml is 0600"; else bad "alertmanager.yml is 0600" "found $mode — it contains the bot token"; fi
+fi
+
 if vm "http://alertmanager:9093/api/v2/status" | grep -q '"cluster"'; then
   ok "alertmanager is up"
 else

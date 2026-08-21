@@ -43,5 +43,35 @@ set -a; . "$INFRA_ENV"; set +a
 # http://:3100 and every container's logs vanish.
 [ -n "${MASTER_PRIVATE_IP:-}" ] || die "MASTER_PRIVATE_IP is not set in $INFRA_ENV"
 
+# --- rendering ---------------------------------------------------------------
+# The monitoring stack mounts two generated files, so they are regenerated HERE
+# rather than only at boot. That is what makes the panel's Settings page work:
+# changing the alert destination writes infra.env and redeploys monitoring, and
+# the config it mounts has to be rebuilt in between. Doing it only in bootstrap
+# meant an edit appeared to save and changed nothing until the next rebuild.
+if [ "$stack" = "monitoring" ]; then
+  envsubst < "$INFRA_DIR/config/vmagent.yml.tpl" > "$INFRA_DIR/config/vmagent.yml"
+
+  case "${ALERT_TELEGRAM_BOT_TOKEN:-}${ALERT_TELEGRAM_CHAT_ID:-}" in
+    ""|*REPLACE_ME*)
+      # No destination. Install the config that drops everything VISIBLY: the
+      # stack still comes up, `smoke-test` fails on it, and the panel says so.
+      # Referencing a docker secret that may not exist would take the whole
+      # monitoring stack down instead, which is a worse answer to "I have not
+      # set up Telegram yet".
+      cp "$INFRA_DIR/config/alertmanager-none.yml" "$INFRA_DIR/config/alertmanager.yml"
+      echo "WARNING: no alert destination configured — alerts will be dropped." >&2
+      ;;
+    *)
+      envsubst < "$INFRA_DIR/config/alertmanager.yml.tpl" \
+        > "$INFRA_DIR/config/alertmanager.yml"
+      ;;
+  esac
+  # It holds a bot token, so it is not world-readable. Not a docker secret,
+  # deliberately: a secret cannot be absent and cannot be changed, and this has
+  # to be both optional and editable. Same trade as a component's credentials.
+  chmod 600 "$INFRA_DIR/config/alertmanager.yml"
+fi
+
 echo "deploying $stack"
 docker stack deploy --with-registry-auth -c "$INFRA_DIR/stacks/$stack.yml" "$stack"

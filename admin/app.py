@@ -625,7 +625,8 @@ def autoscaler():
 @app.get("/alerts")
 @auth.login_required
 def alerts():
-    return render_template("page_alerts.html", section="alerts", alerts=data.alerts())
+    return render_template("page_alerts.html", section="alerts", alerts=data.alerts(),
+                           destination=data.alert_destination())
 
 
 # --- settings --------------------------------------------------------------
@@ -723,7 +724,8 @@ PREVIEW_INFRA = {
     "ADMIN_USER": "admin", "ADMIN_PASSWORD": "hunter2hunter2",
     "GRAFANA_ADMIN_USER": "admin", "GRAFANA_ADMIN_PASSWORD": "s3cr3t-grafana",
     "CF_TUNNEL_TOKEN": "eyJhIjoiN2Y0MGQ5YTIi", "CI_SSH_PUBLIC_KEY": "ssh-ed25519 AAAAC3Nza...",
-    "ALERT_WEBHOOK_URL": "https://hooks.slack.com/services/T0/B0/xY",
+    "ALERT_TELEGRAM_BOT_TOKEN": "8140000000:AAF-preview-not-a-real-token",
+    "ALERT_TELEGRAM_CHAT_ID": "-1002233445566",
 }
 # Nothing application-shaped here: no image, no port, no SLO, no replica counts.
 # The fixture stands in for the real infra.env, so an extra key would make the

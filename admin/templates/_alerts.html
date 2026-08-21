@@ -1,10 +1,22 @@
 <div class="page-head">
   <div>
     <h1>Alerts</h1>
-    <p>Rules evaluated by vmalert and routed by Alertmanager to your webhook.
+    <p>Rules evaluated by vmalert and routed by Alertmanager to Telegram.
        Firing rules reach you; this page is for checking that the ones you expect exist.</p>
   </div>
 </div>
+
+{% if not destination.configured %}
+<div class="banner bad">
+  <div>
+    <strong>Alerts have nowhere to go.</strong>
+    Every rule below is still evaluated, grouped and deduplicated — and then
+    dropped. Set the Telegram bot token and chat id under
+    <a href="{{ section_href({'key': 'settings'}) }}">Settings</a>; saving them
+    redeploys monitoring with the new destination.
+  </div>
+</div>
+{% endif %}
 
 {% set firing = alerts|selectattr('state', 'equalto', 'firing')|rejectattr('name', 'equalto', 'Watchdog')|list %}
 {% set pending = alerts|selectattr('state', 'equalto', 'pending')|list %}

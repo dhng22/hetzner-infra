@@ -3,3 +3,9 @@ __pycache__/
 
 # bin/component imports admin/components, which leaves bytecode next to it
 bin/__pycache__/
+
+# Rendered by bin/stack-deploy from the .tpl files. alertmanager.yml holds the
+# bot token, so it must never be committed — that is why the token is not in
+# the tracked template either.
+config/vmagent.yml
+config/alertmanager.yml

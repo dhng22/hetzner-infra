@@ -77,7 +77,17 @@ FIELDS = {
     "ADMIN_USER": (SECRET, "admin", "Stored as a docker secret alongside the password."),
     "ADMIN_PASSWORD": (SECRET, "admin", "The key to this panel."),
     "GRAFANA_ADMIN_PASSWORD": (SECRET, "monitoring", ""),
-    "ALERT_WEBHOOK_URL": (SECRET, "monitoring", "Where Alertmanager sends everything."),
+    # Editable, not a docker secret: the destination has to be changeable, and a
+    # Swarm secret cannot be. Saving either of these re-renders
+    # config/alertmanager.yml and redeploys monitoring, which is the whole
+    # reason bin/stack-deploy does the rendering rather than bootstrap.
+    "ALERT_TELEGRAM_BOT_TOKEN": (EDIT, "monitoring",
+                                 "From @BotFather. Rendered into a root-only config file on "
+                                 "the master, never into a container's environment."),
+    "ALERT_TELEGRAM_CHAT_ID": (EDIT, "monitoring",
+                               "The group or channel to post in. Negative for groups; get it "
+                               "from /getUpdates after sending one message there. Leave both "
+                               "blank and alerts are generated and dropped."),
     "CF_TUNNEL_TOKEN": (SECRET, "ingress", "Rotating this means re-issuing the connector token in Cloudflare."),
     "HCLOUD_TOKEN": (SECRET, "monitoring", "Lets the autoscaler create and delete servers."),
     "CI_SSH_PUBLIC_KEY": (BOOT, None, "The deploy user is created at boot. Edit authorized_keys on the master."),
@@ -96,7 +106,8 @@ GROUPS = [
     ("Fleet", ["MIN_WORKERS", "MAX_WORKERS", "NODE_PRESSURE_PCT", "COOLDOWN_UP_SECONDS",
                "COOLDOWN_DOWN_SECONDS", "SCHEDULE_FLOOR", "DRY_RUN"]),
     ("Access", ["ADMIN_USER", "ADMIN_PASSWORD", "GRAFANA_ADMIN_USER", "GRAFANA_ADMIN_PASSWORD",
-                "ALERT_WEBHOOK_URL", "CF_TUNNEL_TOKEN", "CI_SSH_PUBLIC_KEY"]),
+                "ALERT_TELEGRAM_BOT_TOKEN", "ALERT_TELEGRAM_CHAT_ID",
+                "CF_TUNNEL_TOKEN", "CI_SSH_PUBLIC_KEY"]),
     # Not shown, on purpose: GHCR_USER and GHCR_TOKEN.
     #
     # Both are read once by bootstrap and never again, so the value here stops

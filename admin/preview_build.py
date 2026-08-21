@@ -141,6 +141,7 @@ def main():
             views=views,
             grouped=ordered,
             alerts=fixtures.alerts(),
+            destination=fixtures.alert_destination(),
             nodes=fixtures.nodes(),
             system=fixtures.system_view(),
             topo=fixtures.topology(),
