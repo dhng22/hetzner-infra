@@ -73,44 +73,37 @@ write_files:
       #   staging-${APP_NAME}.${ROOT_DOMAIN}  -> http://api-staging:8080
       CF_TUNNEL_TOKEN=REPLACE_ME
 
-      # --- application credentials: deliberately NOT here ----------------------
-      # The Mongo URI and the Redis password are per-environment APPLICATION
-      # config, not infrastructure. They live in config/app-<env>.env, which the
-      # panel owns from the first boot onward, so there is nothing to fill in
-      # here and nothing that can go stale.
-      #
-      # Bootstrap seeds both files once and only once:
-      #   MONGO_URI      empty      — yours to set, in the panel
-      #   REDIS_PASSWORD generated  — a random value beats an unset one, and one
-      #                              value reaches the API, the server and the
-      #                              exporter together
-      #   LOG_LEVEL      INFO/DEBUG
-      #
-      #   Mongo URI       -> Apps > API > <env> > Environment
-      #   Redis password  -> Apps > Redis > <env> > Credentials
-      #
-      # An existing app-<env>.env always wins, so a re-run of bootstrap cannot
-      # clobber what you set in the panel.
-
       # --- Grafana ------------------------------------------------------------
       GRAFANA_ADMIN_USER=admin
       GRAFANA_ADMIN_PASSWORD=REPLACE_ME_LONG_RANDOM
 
       # --- Admin panel --------------------------------------------------------
-      # The web console at admin-${APP_NAME}.${ROOT_DOMAIN}. It can redeploy
-      # production and read every application credential, so this password is
-      # the key to the cluster: make it long and unique, and put the hostname
+      # The web console at admin-${APP_NAME}.${ROOT_DOMAIN}. It can deploy
+      # anything in the cluster and read every credential in it, so this
+      # password is the key to the whole thing: make it long and unique, and put the hostname
       # behind Cloudflare Access as a second factor.
       ADMIN_USER=admin
       ADMIN_PASSWORD=REPLACE_ME_LONG_RANDOM
 
-      # --- Alerting -----------------------------------------------------------
-      # Where alerts actually land. A Slack incoming webhook, or a Discord
-      # webhook with /slack appended. Bootstrap REFUSES to start without it.
-      # That is deliberate: an alerting stack that generates, groups, dispatches
-      # and then discards everything is worse than having none, because it looks
-      # like it is working right up until the moment you needed it.
-      ALERT_WEBHOOK_URL=REPLACE_ME
+      # --- Alerting (OPTIONAL, but you want it) ---------------------------------
+      # Where alerts actually land. Telegram: create a bot with @BotFather, add
+      # it to a group, and read the chat id from
+      #   curl https://api.telegram.org/bot<TOKEN>/getUpdates
+      # after sending one message there. Group ids are negative.
+      #
+      # Leave both blank and the cluster still boots — it just has nowhere to
+      # send alerts, which every `stack-deploy monitoring` warns about, which
+      # `smoke-test` reports as a failure rather than a skip, and which the
+      # panel's Alerts page says outright. The generating, grouping and
+      # dispatching all still work; only the last hop is missing, and that is
+      # the one state of this pipeline that looks healthy from the inside.
+      #
+      # Both are rendered into config/alertmanager.yml (0600, root only) by
+      # bin/stack-deploy — not into a docker secret, because a secret cannot be
+      # absent and cannot be edited, and this has to be both. You can change it
+      # later in the panel under Settings.
+      ALERT_TELEGRAM_BOT_TOKEN=REPLACE_ME
+      ALERT_TELEGRAM_CHAT_ID=REPLACE_ME
 
       # --- deploy access (OPTIONAL) -------------------------------------------
       # Your CI is your business, but whatever you build needs a way in that is
