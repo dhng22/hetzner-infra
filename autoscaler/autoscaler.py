@@ -474,6 +474,8 @@ S_CURRENT = Gauge("autoscaler_service_current_replicas", "Replicas in the live s
 S_DESIRED = Gauge("autoscaler_service_desired_replicas", "Replicas the signals asked for", _SVC)
 S_ADMITTED = Gauge("autoscaler_service_admitted_replicas", "Replicas that fit and were applied", _SVC)
 S_RUNNING = Gauge("autoscaler_service_running_replicas", "Tasks actually running", _SVC)
+S_ROLLBACK = Gauge("autoscaler_service_deploy_rolled_back",
+                   "1 when Swarm reverted this service's last update", _SVC)
 S_PENDING = Gauge("autoscaler_service_pending_replicas", "Tasks wanted but not placed", _SVC)
 S_MIN = Gauge("autoscaler_service_min_replicas", "Configured replica floor", _SVC)
 S_MAX = Gauge("autoscaler_service_max_replicas", "Configured replica ceiling", _SVC)
@@ -677,7 +679,7 @@ def index_tasks():
 
 Workload = namedtuple("Workload", [
     "name", "id", "policy", "spec_replicas", "cost", "cpu_limit", "pinned",
-    "rolling", "component",
+    "rolling", "component", "rolled_back",
 ])
 
 WORKER_CONSTRAINT = "node.role==worker"
@@ -708,6 +710,26 @@ def update_in_progress(service):
     """
     state = (service.attrs.get("UpdateStatus") or {}).get("State")
     return state in ("updating", "rollback_started")
+
+
+#: Swarm's terminal verdicts on a failed rollout. `paused` is included because
+#: it is what a service with no rollback configured does instead — it stops
+#: mid-update and waits, which looks identical to "deployed" from the outside.
+ROLLBACK_STATES = ("paused", "rollback_started", "rollback_completed")
+
+
+def update_rolled_back(service):
+    """
+    Did this service's last deploy fail and get reverted?
+
+    Nothing else in the cluster reports this. `docker stack deploy` is detached
+    by default, so it exits 0 the moment Swarm accepts the spec — long before
+    the tasks fail and the rollback undoes them. The panel then records a
+    successful deploy, the spec on disk still shows the change, and the running
+    service quietly holds the previous one. A deploy that silently un-happened
+    is exactly the class of failure this repo alerts on everywhere else.
+    """
+    return (service.attrs.get("UpdateStatus") or {}).get("State") in ROLLBACK_STATES
 
 
 def discover_workloads():
@@ -760,6 +782,7 @@ def discover_workloads():
                 spec_replicas=replicas, cost=cost, cpu_limit=cpu_limit,
                 pinned=is_pinned(service), rolling=update_in_progress(service),
                 component=labels.get(COMPONENT_LABEL, service.name.split("_")[0]),
+                rolled_back=update_rolled_back(service),
             ))
         except Exception as exc:  # noqa: BLE001
             M_ERRORS.labels(stage="discovery").inc()
@@ -1517,6 +1540,7 @@ def export_service_metrics(workloads, wants, admitted, signals, running, pending
         S_DESIRED.labels(w.name).set(wants.get(w.name, w.spec_replicas))
         S_ADMITTED.labels(w.name).set(admitted.get(w.name, w.spec_replicas))
         S_RUNNING.labels(w.name).set(running.get(w.name, 0))
+        S_ROLLBACK.labels(w.name).set(1 if w.rolled_back else 0)
         S_PENDING.labels(w.name).set(pending.get(w.name, 0))
         S_MIN.labels(w.name).set(w.policy.min_replicas)
         S_MAX.labels(w.name).set(w.policy.max_replicas)

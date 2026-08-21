@@ -45,6 +45,21 @@ scrape_configs:
   # Add these three labels to any future service and it is scraped
   # automatically. No edit to this file is ever needed again.
   - job_name: swarm-services
+    # A scraped metric's OWN `service` label wins over the target label below.
+    #
+    # Without this, the two collide and Prometheus renames the metric's one to
+    # `exported_service` — which silently broke every per-component alert. The
+    # autoscaler publishes autoscaler_service_*{service="<component>_app"} for
+    # each component it manages, and all of those arrived tagged
+    # service="monitoring_autoscaler" instead, because that is the Swarm
+    # service doing the exporting. NoHealthyReplicas then named the autoscaler
+    # rather than the component that was down, and `and on (service)` joined
+    # every component to every other one, since they all shared that one value.
+    #
+    # Targets that do not publish a `service` label of their own are unaffected
+    # and still get the Swarm service name, which is what `up{job=...}` and the
+    # scrape-health rules join on.
+    honor_labels: true
     dockerswarm_sd_configs:
       - host: unix:///var/run/docker.sock
         role: tasks

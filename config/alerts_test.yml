@@ -32,6 +32,49 @@ evaluation_interval: 1m
 
 tests:
 
+  # --- DEPLOY: the change that reported success and then vanished -----------
+  # A rolled-back deploy is the one failure with no error anywhere: the CLI
+  # exited 0, the files on disk hold the new spec, and the service is running
+  # the old one. Two cases, because the difference between them is the whole
+  # reason this alert is separate from NoHealthyReplicas.
+  - interval: 1m
+    input_series:
+      # Rolled back, but the previous version is still serving. A warning about
+      # a change that did not land — NOT an outage.
+      - series: 'autoscaler_service_deploy_rolled_back{service="api_app"}'
+        values: '0 0 1x20'
+      - series: 'autoscaler_service_running_replicas{service="api_app"}'
+        values: '2x22'
+      - series: 'autoscaler_service_admitted_replicas{service="api_app"}'
+        values: '2x22'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: DeployRolledBack
+        exp_alerts:
+          - exp_labels: { severity: warning, service: api_app }
+            exp_annotations:
+              summary: "api_app: last deploy failed and Swarm rolled it back"
+      # Replicas are healthy, so the outage rule must stay quiet. If these two
+      # ever fire together on this input, they are measuring the same thing and
+      # one of them is redundant.
+      - eval_time: 8m
+        alertname: NoHealthyReplicas
+        exp_alerts: []
+
+  # A successful deploy must not alert, and must not alert LATE either — the
+  # gauge going 1 -> 0 has to clear it rather than leaving it pending forever.
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_service_deploy_rolled_back{service="api_app"}'
+        values: '1 1 0x20'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: DeployRolledBack
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: DeployRolledBack
+        exp_alerts: []
+
   # --- OUTAGE: a component wants replicas and has none ----------------------
   # The anchor is autoscaler_service_running_replicas, which the autoscaler
   # reads from the Docker API. It exists for as long as the component does, so

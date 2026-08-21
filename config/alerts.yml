@@ -158,6 +158,29 @@ groups:
         annotations:
           summary: "{{ $labels.service }} wants replicas but none are running"
 
+      # A deploy that silently un-happened.
+      #
+      # `docker stack deploy` is detached by default: it exits 0 as soon as
+      # Swarm accepts the new spec, which is well before the tasks start, fail,
+      # and get reverted by the service's own `failure_action: rollback`. So the
+      # panel records a successful deploy, the component's files on disk show
+      # the change, and the running service is still on the previous spec. There
+      # is no error anywhere — the deploy reports success and the change is gone.
+      #
+      # Deliberately NOT folded into NoHealthyReplicas. A rollback is the
+      # mechanism working: the previous version is still serving, so this is a
+      # warning about a change that did not land, not a page about an outage.
+      # A component that never had a good version to fall back to trips both.
+      #
+      # 2m rather than instant because `rollback_started` is a legitimate
+      # transient — it is also how a healthy rollback begins.
+      - alert: DeployRolledBack
+        expr: autoscaler_service_deploy_rolled_back == 1
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.service }}: last deploy failed and Swarm rolled it back"
+
       # The other half of what NoHealthyReplicas used to conflate: tasks are
       # running, but nothing is scraping them. That is a monitoring failure, not
       # an outage, and it deserves a different severity and a different page.
