@@ -691,7 +691,8 @@ def save_registry():
 def cluster():
     # Nodes only. The infrastructure services moved to the Components tab.
     return render_template("page_cluster.html", section="cluster",
-                           nodes=data.topology()["nodes"], s=data.summary())
+                           nodes=data.topology()["nodes"], s=data.summary(),
+                           version=data.infra_version())
 
 
 @app.post("/cluster/stack")

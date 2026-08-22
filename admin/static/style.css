@@ -351,6 +351,11 @@ textarea { resize: vertical; min-height: 260px; }
 .field { margin-bottom: var(--s-5); }
 .field .hint { margin-top: var(--s-1); }
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0 var(--s-6); }
+/* Three across for a row of related facts — a version, when it landed, when it
+   was last confirmed — which read as one statement rather than three tiles. */
+.grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: var(--s-4); }
+@media (max-width: 720px) { .grid-3 { grid-template-columns: 1fr; } }
 
 .kv-grid { display: grid; grid-template-columns: minmax(180px, 280px) 1fr auto; gap: 8px; align-items: center; }
 .kv-grid .k-in { font-weight: 600; }

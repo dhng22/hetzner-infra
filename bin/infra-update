@@ -1,0 +1,251 @@
+#!/usr/bin/env bash
+# =============================================================================
+# infra-update — bring this master's /opt/infra up to the repo's newest commit.
+# =============================================================================
+#   infra-update            # update if the remote has moved
+#   infra-update --check    # say what would happen, change nothing
+#   infra-update --force    # re-apply the current commit anyway
+#
+# THE REPO IS THE SOURCE OF TRUTH. Without this, the only way to change a
+# running cluster's infrastructure was to copy files onto the master by hand —
+# so the box and the repo drifted apart silently, and "what is actually running"
+# stopped being a question git could answer.
+#
+# Run from a systemd timer (bootstrap installs one). Deliberately NOT run from
+# inside the admin panel: this updates the panel, and a container cannot
+# redeploy itself and still be around to report how it went.
+#
+# WHAT IT DOES NOT TOUCH
+#   /etc/infra/infra.env        per-cluster configuration, never in the repo
+#   $INFRA_DIR/components/      your components, created at runtime
+#   $INFRA_DIR/state/           deploy tokens and history
+#   docker secrets              immutable, and bootstrap's job
+#
+# It is not bootstrap. Bootstrap does the one-time things — swarm init, secrets,
+# the firewall — and must never run twice. This only refreshes files, rebuilds
+# the two local images when their source changed, and re-applies the three
+# infrastructure stacks that changed. Everything it does is idempotent.
+# =============================================================================
+
+set -euo pipefail
+
+INFRA_DIR="${INFRA_DIR:-/opt/infra}"
+INFRA_ENV="${INFRA_ENV:-/etc/infra/infra.env}"
+STATE_DIR="$INFRA_DIR/state"
+# One JSON file rather than a bare SHA, because the panel has to answer three
+# separate questions and only one of them is "which commit": an update that
+# stopped happening looks identical to an up-to-date cluster unless you can also
+# see when it last managed to CHECK.
+VERSION_FILE="$STATE_DIR/version.json"
+LOCK_FILE=/var/run/infra-update.lock
+
+MODE=apply
+case "${1:-}" in
+  --check) MODE=check ;;
+  --force) MODE=force ;;
+  "")      ;;
+  *)       echo "usage: infra-update [--check|--force]" >&2; exit 2 ;;
+esac
+
+log() { printf '%s %s\n' "$(date -Is)" "$*"; }
+
+#: Read one field out of the state file, or "" if it is absent or unreadable.
+state_get() {
+    python3 - "$VERSION_FILE" "$1" <<'PYEOF' 2>/dev/null || true
+import json, sys
+try:
+    print(json.load(open(sys.argv[1])).get(sys.argv[2]) or "")
+except Exception:
+    print("")
+PYEOF
+}
+
+#: Rewrite the state file, merging the given key=value pairs over what is there.
+#: Written on EVERY run including the ones that change nothing — `checked_at` is
+#: how you tell a cluster that is up to date from one whose updater has been
+#: dead for a week, and those look the same from the commit alone.
+state_set() {
+    mkdir -p "$STATE_DIR" && chmod 700 "$STATE_DIR"
+    python3 - "$VERSION_FILE" "$@" <<'PYEOF'
+import json, sys
+path, pairs = sys.argv[1], sys.argv[2:]
+try:
+    data = json.load(open(path))
+except Exception:
+    data = {}
+for pair in pairs:
+    key, _, value = pair.partition("=")
+    data[key] = value
+tmp = path + ".tmp"
+with open(tmp, "w") as fh:
+    json.dump(data, fh, indent=2)
+import os
+os.chmod(tmp, 0o600)
+os.replace(tmp, path)
+PYEOF
+}
+
+die() {
+    log "ERROR: $*"
+    state_set "status=error" "detail=$*" "checked_at=$(date -Is)"
+    exit 1
+}
+
+# One at a time. A timer firing while a rebuild is still running would race two
+# `docker stack deploy`s against the same stack.
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  log "another infra-update is already running; skipping this tick"
+  exit 0
+fi
+
+[ -f "$INFRA_ENV" ] || die "$INFRA_ENV not found (run this on the master)"
+set -a; . "$INFRA_ENV"; set +a
+
+# Opt-in. A cluster with no repo configured is a valid state — it was built from
+# a bundle somebody copied in — so say so once and stop, rather than failing.
+case "${INFRA_REPO_URL:-}" in
+  ""|*REPLACE_ME*)
+    log "INFRA_REPO_URL is not set in $INFRA_ENV — this cluster does not self-update."
+    exit 0
+    ;;
+esac
+BRANCH="${INFRA_REPO_BRANCH:-master}"
+
+# --- what is running, and what is upstream -----------------------------------
+running="$(state_get commit)"
+
+# ls-remote rather than a clone: one request, no working tree, and it is the
+# only thing that needs to happen on a tick where nothing has changed. A poll
+# that cloned the repo every minute would be a poll nobody left switched on.
+remote="$(git ls-remote "$INFRA_REPO_URL" "refs/heads/$BRANCH" 2>/dev/null | awk '{print $1}')" \
+  || die "cannot reach the repo. Check INFRA_REPO_URL and the token in it."
+[ -n "$remote" ] || die "branch '$BRANCH' does not exist in the repo"
+
+state_set "checked_at=$(date -Is)" "remote=$remote" "branch=$BRANCH" \
+          "status=ok" "detail="
+
+if [ "$MODE" != "force" ] && [ "$running" = "$remote" ]; then
+  [ "$MODE" = "check" ] && log "up to date at ${remote:0:12}"
+  exit 0
+fi
+
+log "running ${running:0:12}${running:+ ->} upstream ${remote:0:12} on $BRANCH"
+if [ "$MODE" = "check" ]; then
+  log "--check: stopping before any change"
+  exit 0
+fi
+
+# --- fetch into a scratch tree, never over the live one ----------------------
+# The live tree is only touched once the new one has been checked. A clone that
+# fails halfway must not be able to leave the cluster with half a bundle.
+work="$(mktemp -d /tmp/infra-update.XXXXXX)"
+cleanup() { rm -rf "$work"; }
+trap cleanup EXIT
+
+git clone --quiet --depth 1 --branch "$BRANCH" "$INFRA_REPO_URL" "$work/repo" \
+  || die "clone failed"
+got="$(git -C "$work/repo" rev-parse HEAD)"
+
+# The same preflight bootstrap runs, for the same reason: a bundle missing a
+# stack file deploys most of a cluster and leaves the rest broken.
+for required in stacks/monitoring.yml stacks/ingress.yml stacks/admin.yml \
+                config/vmagent.yml.tpl config/alertmanager.yml.tpl \
+                config/alerts.yml autoscaler/Dockerfile admin/Dockerfile \
+                bin/component bin/stack-deploy bin/infra-update; do
+  [ -e "$work/repo/$required" ] || die "the fetched tree is missing $required — refusing to apply it"
+done
+
+# --- decide what actually has to be redeployed -------------------------------
+# Per area, so an admin-only change does not restart VictoriaMetrics. Compared
+# by content rather than by `git diff`, because the live tree is not a checkout:
+# it carries generated config and runtime directories that no commit contains.
+# The live tree carries things no commit does — config rendered by
+# stack-deploy, bytecode left by a test run — and comparing those would report a
+# difference on every single tick, so every tick would redeploy monitoring. The
+# exclusions mirror rsync's below; a file skipped by one and compared by the
+# other is a permanent phantom change.
+DIFF_SKIP=(-x 'vmagent.yml' -x 'alertmanager.yml' -x 'worker-cloud-init.yaml'
+           -x '__pycache__' -x '*.pyc' -x '.git')
+
+changed() {
+  local area="$1"
+  [ -e "$INFRA_DIR/$area" ] || return 0          # new area counts as changed
+  ! diff -qr --no-dereference "${DIFF_SKIP[@]}" \
+      "$INFRA_DIR/$area" "$work/repo/$area" >/dev/null 2>&1
+}
+
+rebuild_autoscaler=false; rebuild_admin=false
+deploy_monitoring=false; deploy_ingress=false; deploy_admin=false
+
+changed autoscaler && { rebuild_autoscaler=true; deploy_monitoring=true; }
+changed admin      && { rebuild_admin=true;      deploy_admin=true; }
+changed config     && deploy_monitoring=true
+[ -e "$INFRA_DIR/stacks/monitoring.yml" ] && \
+  ! diff -q "$INFRA_DIR/stacks/monitoring.yml" "$work/repo/stacks/monitoring.yml" >/dev/null 2>&1 && deploy_monitoring=true
+[ -e "$INFRA_DIR/stacks/ingress.yml" ] && \
+  ! diff -q "$INFRA_DIR/stacks/ingress.yml" "$work/repo/stacks/ingress.yml" >/dev/null 2>&1 && deploy_ingress=true
+[ -e "$INFRA_DIR/stacks/admin.yml" ] && \
+  ! diff -q "$INFRA_DIR/stacks/admin.yml" "$work/repo/stacks/admin.yml" >/dev/null 2>&1 && deploy_admin=true
+
+# --- swap the files in -------------------------------------------------------
+# rsync with --delete so a file REMOVED upstream is removed here too; `cp -a`
+# only ever adds, which leaves a deleted stack or a renamed script behind to be
+# found months later. The excludes are the runtime state that is this cluster's
+# and not the repo's — deleting those would take your components with them.
+rsync -a --delete \
+  --exclude '.git' \
+  --exclude 'components/' \
+  --exclude 'state/' \
+  --exclude 'config/vmagent.yml' \
+  --exclude 'config/alertmanager.yml' \
+  --exclude 'config/worker-cloud-init.yaml' \
+  "$work/repo/" "$INFRA_DIR/"
+
+chmod +x "$INFRA_DIR"/bin/* 2>/dev/null || true
+# Recorded BEFORE the rebuilds, because the files on disk are already the new
+# ones: a build that fails after this point must not leave the cluster claiming
+# to run the old commit it no longer has.
+state_set "commit=$got" "updated_at=$(date -Is)" "previous=$running"
+log "files updated to ${got:0:12}"
+
+# --- rebuild and redeploy only what moved ------------------------------------
+if [ "$rebuild_autoscaler" = true ]; then
+  log "building autoscaler image"
+  docker build -q -t "${APP_NAME}/autoscaler:latest" "$INFRA_DIR/autoscaler" >/dev/null \
+    || die "autoscaler image build failed — the files are updated but the old image is still running"
+fi
+if [ "$rebuild_admin" = true ]; then
+  log "building admin image"
+  docker build -q -t "${APP_NAME}/admin:latest" "$INFRA_DIR/admin" >/dev/null \
+    || die "admin image build failed — the files are updated but the old image is still running"
+fi
+
+# monitoring first: it owns the network the other two declare external, and
+# stack-deploy re-renders vmagent.yml and alertmanager.yml on the way through.
+if [ "$deploy_monitoring" = true ]; then
+  log "deploying monitoring"
+  "$INFRA_DIR/bin/stack-deploy" monitoring >/dev/null || die "monitoring deploy failed"
+  # A bind-mounted config changes nothing in the service spec, so Swarm has
+  # nothing to update and the old config stays loaded. These two read theirs
+  # from disk and need telling.
+  docker service update --force --quiet "monitoring_vmagent" >/dev/null 2>&1 || true
+  docker service update --force --quiet "monitoring_vmalert" >/dev/null 2>&1 || true
+fi
+[ "$deploy_ingress" = true ] && { log "deploying ingress"; "$INFRA_DIR/bin/stack-deploy" ingress >/dev/null || die "ingress deploy failed"; }
+
+# admin LAST, and on purpose: it is the console you would use to find out that
+# an update went wrong, so it stays up for as much of the update as possible.
+if [ "$deploy_admin" = true ]; then
+  log "deploying admin"
+  "$INFRA_DIR/bin/stack-deploy" admin >/dev/null || die "admin deploy failed"
+fi
+
+if [ "$rebuild_autoscaler" = false ] && [ "$rebuild_admin" = false ] \
+   && [ "$deploy_monitoring" = false ] && [ "$deploy_ingress" = false ] \
+   && [ "$deploy_admin" = false ]; then
+  log "no infrastructure stack changed; files only"
+fi
+
+state_set "status=ok" "detail="
+log "updated to ${got:0:12}"

@@ -165,6 +165,29 @@ write_files:
       SCHEDULE_FLOOR=                # UTC; "HH:MM-HH:MM=N" comma separated
       DRY_RUN=false
 
+      # --- self-update --------------------------------------------------------
+      # THE REPO IS THE SOURCE OF TRUTH. A timer polls this URL, compares the
+      # commit it last applied against the branch head, and re-applies the
+      # bundle when they differ — so changing infrastructure means pushing a
+      # commit, not copying files onto a box.
+      #
+      # Without it the only way to change a running cluster was by hand, and the
+      # master drifted away from the repo silently: "what is actually running"
+      # stopped being a question git could answer.
+      #
+      # It carries a token, which is why infra.env is 0600. Use a fine-grained
+      # PAT with read-only contents access to this ONE repo — it is on every
+      # master you build, so its blast radius is every master you build.
+      #
+      # Leave it empty and the cluster simply never self-updates; that is a
+      # supported state, not a broken one.
+      INFRA_REPO_URL=https://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@github.com/dhng22/hetzner-infra.git
+      INFRA_REPO_BRANCH=master
+      # How often to ask whether the branch has moved. One `git ls-remote` per
+      # tick, which is a single request that transfers nothing when nothing has
+      # changed.
+      INFRA_UPDATE_INTERVAL=5min
+
   # ---------------------------------------------------------------------------
   - path: /opt/infra/bootstrap.sh
     permissions: "0755"
@@ -458,6 +481,56 @@ write_files:
         ln -sf /opt/infra/bin/component /usr/local/bin/component
       fi
       /opt/infra/bin/stack-deploy ingress
+
+      # --- self-update timer ---------------------------------------------------
+      # The repo is the source of truth from here on: this asks whether the
+      # branch has moved and re-applies the bundle when it has. One
+      # `git ls-remote` per tick, which transfers nothing when nothing changed.
+      #
+      # A timer rather than anything inside the panel, because an update
+      # redeploys the panel — a container cannot restart itself and still be
+      # around to report how it went.
+      cat > /etc/systemd/system/infra-update.service <<'UNIT'
+      [Unit]
+      Description=Bring /opt/infra up to the infrastructure repo's newest commit
+      After=network-online.target docker.service
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/opt/infra/bin/infra-update
+      # Nothing else may run while it does: a second copy mid-rebuild would race
+      # two `docker stack deploy`s against the same stack. The script also takes
+      # its own flock, so an operator running it by hand cannot collide either.
+      TimeoutStartSec=1800
+      UNIT
+
+      cat > /etc/systemd/system/infra-update.timer <<UNIT
+      [Unit]
+      Description=Poll the infrastructure repo for new commits
+
+      [Timer]
+      # Not OnCalendar: OnUnitActiveSec measures from the END of the last run, so
+      # a long rebuild cannot have the next tick queued up behind it.
+      OnBootSec=2min
+      OnUnitActiveSec=${INFRA_UPDATE_INTERVAL:-5min}
+      AccuracySec=30s
+
+      [Install]
+      WantedBy=timers.target
+      UNIT
+
+      systemctl daemon-reload
+      case "${INFRA_REPO_URL:-}" in
+        ""|*REPLACE_ME*)
+          echo "INFRA_REPO_URL is not set — self-update is OFF for this cluster." >&2
+          echo "Infrastructure changes will have to be copied to /opt/infra by hand." >&2
+          ;;
+        *)
+          systemctl enable --now infra-update.timer
+          echo "self-update every ${INFRA_UPDATE_INTERVAL:-5min} from ${INFRA_REPO_BRANCH:-master}"
+          ;;
+      esac
 
       # --- optional deploy user, so CI never needs root -----------------------
       if [ -n "${CI_SSH_PUBLIC_KEY:-}" ]; then

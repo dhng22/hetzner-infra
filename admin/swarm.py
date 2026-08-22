@@ -323,6 +323,11 @@ def system_view():
     return [(c, grouped[c]) for c in catalog.CATEGORIES if c in grouped]
 
 
+def infra_version():
+    import state
+    return state.infra_version()
+
+
 def history(name=None, limit=25):
     """
     Deployment history. Lives in state.py; exposed here because the panel talks

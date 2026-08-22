@@ -83,6 +83,42 @@ def verify_token(name, presented):
     return hmac.compare_digest(expected, presented)
 
 
+# --- what version of the infrastructure this cluster is running -------------
+
+VERSION_FILE = os.path.join(STATE_DIR, "version.json")
+
+
+def infra_version():
+    """
+    What `bin/infra-update` last did, for the panel to show.
+
+    Three separate facts, and the third is the one that is easy to leave out:
+    `checked_at`. A cluster that is up to date and a cluster whose updater died
+    a week ago report the same commit — the only thing that distinguishes them
+    is when the check last succeeded, so an absent or stale `checked_at` is the
+    signal, not a missing detail.
+    """
+    data = _read(VERSION_FILE, {})
+    commit = data.get("commit") or ""
+    remote = data.get("remote") or ""
+    return {
+        "configured": bool(data),
+        "commit": commit,
+        "short": commit[:12],
+        "branch": data.get("branch") or "",
+        "updated_at": data.get("updated_at") or "",
+        "checked_at": data.get("checked_at") or "",
+        "previous": (data.get("previous") or "")[:12],
+        "status": data.get("status") or "",
+        "detail": data.get("detail") or "",
+        # Known to be behind: the last check saw a commit we have not applied.
+        # Normally momentary — the same run that notices this also applies it —
+        # so seeing it persist means the apply half is failing.
+        "behind": bool(remote and commit and remote != commit),
+        "remote_short": remote[:12],
+    }
+
+
 # --- deployment history ----------------------------------------------------
 #
 # A deploy has THREE outcomes, not two, and the missing one is why this history

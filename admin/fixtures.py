@@ -388,3 +388,20 @@ def registry_logins():
         {"registry": "ghcr.io", "username": "acme-bot"},
         {"registry": "registry.gitlab.com", "username": "deploy-token-91"},
     ]
+
+
+def infra_version():
+    """Mirrors swarm.infra_version(). A cluster that is current and healthy."""
+    return {
+        "configured": True,
+        "commit": "9f2c1ab77e40c3d5b81aa0e6f4c92db3e77a1c40",
+        "short": "9f2c1ab77e40",
+        "branch": "master",
+        "updated_at": "2026-08-08T18:41:02+00:00",
+        "checked_at": "2026-08-08T19:12:44+00:00",
+        "previous": "3ab90ff21c77",
+        "status": "ok",
+        "detail": "",
+        "behind": False,
+        "remote_short": "9f2c1ab77e40",
+    }
