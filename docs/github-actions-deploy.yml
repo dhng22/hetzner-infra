@@ -7,8 +7,10 @@
 #        X-Deploy-Token: <token from that component's Deployments tab>
 #        {"image": "<immutable reference>"}
 #
-# The endpoint waits for Swarm to converge and answers 502 if the update rolled
-# back, so a bad image fails this workflow instead of quietly reverting. That
+# The deploy is TWO calls: a POST that returns 202 once Swarm accepts the spec,
+# then a poll of the status URL it hands back until the rollout is done or
+# failed. A rolling update takes minutes and Cloudflare gives an origin 100
+# seconds, so a single blocking call cannot answer in time. That
 # only works if you let curl's failure propagate — see the notes below.
 #
 # Deploying is opt-in: with no PANEL_URL / deploy token set, the deploy step
@@ -119,36 +121,77 @@ jobs:
 
           echo "Deploying $IMAGE to component $COMPONENT"
 
-          # NO `|| true`, NO `|| echo`. The endpoint blocks until Swarm has
-          # converged and returns 502 when it rolled the update back; swallowing
-          # that turns every failed deploy into a green tick.
+          # TWO STEPS, and the split is not cosmetic. A rolling update takes
+          # parallelism x (monitor + delay) x replicas — minutes, and ten of
+          # them at eight replicas. Cloudflare gives an origin 100 seconds and
+          # that is not configurable, so the request that waited for the rollout
+          # could never answer in time: the proxy returned 524, this step went
+          # red, and the deploy it was reporting on succeeded a minute later. A
+          # green deploy that fails CI is worse than no check, because it
+          # teaches you to ignore the check.
           #
-          # --max-time must exceed the real convergence budget: start_period 60s
-          # + monitor 90s per task, times the replica count, one at a time.
-          # 10 seconds would time out mid-deploy on every single run.
-          # `|| true` here is safe and deliberate: we discard curl's exit code
-          # only because the explicit HTTP_CODE check below is stricter. Without
-          # it, `set -e` would abort on a connection failure before printing
-          # anything useful.
+          # So: POST starts it and returns 202, and the poll below is where the
+          # verdict comes from. `|| true` on the curls is deliberate — the
+          # explicit HTTP_CODE tests are stricter than curl's exit code, and
+          # without it `set -e` aborts before anything useful is printed.
           HTTP_CODE=$(curl -sS -o response.json -w '%{http_code}' \
-            --max-time 900 \
-            -X POST "${PANEL_URL}/hooks/deploy/${COMPONENT}" \
+            --max-time 60 \
+            -X POST "$WEBHOOK_URL" \
             -H "X-Deploy-Token: ${TOKEN}" \
             -H 'Content-Type: application/json' \
             -d "{\"image\": \"${IMAGE}\"}" || true)
           HTTP_CODE=${HTTP_CODE:-000}
 
           echo "--- panel response (HTTP $HTTP_CODE) ---"
-          # Guard the cat. curl does not create -o's file when it never connects, so on a
-          # fresh runner a bare `cat response.json` fails under `set -e` and kills the step
-          # before the ::error:: below is printed. The deploy still fails, but the log says
-          # "cat: response.json: No such file or directory" and nothing about the panel —
-          # blind in exactly the case you need it (panel down, DNS, Access blocking CI).
+          # Guard the cat: curl does not create -o's file when it never
+          # connects, and a bare `cat` would kill the step under `set -e` before
+          # the ::error:: prints — blind in exactly the case you need it.
           cat response.json 2>/dev/null || echo "(no response body — the request never completed)"
           echo
 
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "::error::Deploy failed with HTTP $HTTP_CODE — the service was not updated, or Swarm rolled it back."
+          if [ "$HTTP_CODE" != "202" ] && [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Deploy was not accepted (HTTP $HTTP_CODE). Swarm never started the update."
             exit 1
           fi
-          echo "Deployed $IMAGE"
+
+          STATUS_URL=$(python3 -c "import json;print(json.load(open('response.json')).get('status_url',''))" 2>/dev/null || true)
+          if [ -z "$STATUS_URL" ]; then
+            STATUS_URL="${WEBHOOK_URL%/}/status"
+          fi
+
+          echo "Update accepted. Waiting for Swarm to converge..."
+
+          # Budget: comfortably past the worst rollout this service can produce,
+          # so a slow deploy is never reported as a failure. Each poll is its own
+          # short request, so no single one can hit a proxy timeout.
+          DEADLINE=$(( SECONDS + 900 ))
+          STATUS=pending
+          while [ "$SECONDS" -lt "$DEADLINE" ]; do
+            sleep 10
+            CODE=$(curl -sS -o status.json -w '%{http_code}' --max-time 30 \
+              "$STATUS_URL" -H "X-Deploy-Token: ${TOKEN}" || true)
+            [ "$CODE" = "200" ] || { echo "  (status check returned HTTP ${CODE:-000}, retrying)"; continue; }
+            STATUS=$(python3 -c "import json;print(json.load(open('status.json')).get('status','pending'))" 2>/dev/null || echo pending)
+            RUNNING=$(python3 -c "import json;print(json.load(open('status.json')).get('image',''))" 2>/dev/null || echo "")
+            echo "  status=$STATUS running=${RUNNING:-unknown}"
+            [ "$STATUS" = "pending" ] || break
+          done
+
+          if [ "$STATUS" = "failed" ]; then
+            echo "::error::Swarm rolled the update back — $IMAGE is NOT live. The previous version is still serving. Check the component's Logs tab for why the new tasks exited."
+            exit 1
+          fi
+          if [ "$STATUS" != "done" ]; then
+            echo "::error::Timed out after 15 minutes with the rollout still in progress. The deploy may yet succeed; check the panel's Deployments tab."
+            exit 1
+          fi
+
+          # Converged — but converged ON WHAT. A rollback that completes cleanly
+          # also reports done, and so does an unrelated update that overtook us,
+          # so the image is checked rather than assumed.
+          case "${RUNNING:-}" in
+            *"${IMAGE##*:}"*) echo "Deployed $IMAGE" ;;
+            "") echo "::warning::Converged, but the panel did not report which image is running." ;;
+            *) echo "::error::Converged on $RUNNING, not $IMAGE — something else deployed over this build."
+               exit 1 ;;
+          esac

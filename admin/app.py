@@ -102,11 +102,19 @@ def webhook_for(name):
     token = "preview-token-not-real-000000" if PREVIEW else state.token_for(name)
     return {
         "url": f"{base}/hooks/deploy/{name}",
+        "status_url": f"{base}/hooks/deploy/{name}/status",
         "token": token,
+        # Two steps, because the deploy returns 202 the moment Swarm accepts the
+        # spec — a rolling update takes longer than any proxy will hold a
+        # request open. The poll is where the verdict comes from.
         "curl": (f"curl -fsS -X POST {base}/hooks/deploy/{name} \\\n"
                  f"  -H 'X-Deploy-Token: {token}' \\\n"
                  f"  -H 'Content-Type: application/json' \\\n"
-                 f"  -d '{{\"image\": \"ghcr.io/you/app:sha-'\"$GITHUB_SHA\"'\"}}'"),
+                 f"  -d '{{\"image\": \"ghcr.io/you/app:sha-'\"$GITHUB_SHA\"'\"}}'\n"
+                 f"\n"
+                 f"# then poll until it is no longer 'pending'\n"
+                 f"curl -fsS {base}/hooks/deploy/{name}/status \\\n"
+                 f"  -H 'X-Deploy-Token: {token}'"),
     }
 
 
@@ -216,10 +224,17 @@ def deploy_hook(name):
     Deploy an image, called by your build pipeline. Token-authenticated, so it
     is the one route that does not need a session.
 
-    The graceful part is not implemented here — it is the service's own
-    update_config (start-first, monitor, failure_action rollback). This endpoint
-    waits for that to converge and returns 502 when Swarm rolled the update
-    back, so a bad image fails the pipeline instead of quietly reverting.
+    Returns 202 as soon as Swarm accepts the spec. It does NOT wait for the
+    rollout: that takes parallelism x (monitor + delay) x replicas, which is
+    over two minutes for two replicas and ten for eight, and Cloudflare's origin
+    timeout is 100 seconds. The waiting version could not answer in time through
+    the tunnel, so the proxy returned 524 and the pipeline failed while the
+    deploy it was reporting on went on to succeed. A green deploy that fails CI
+    is worse than no check at all.
+
+    The verdict has not been dropped, only moved: poll the `status` URL in the
+    response until it stops saying `pending`. That is the same answer the
+    attached call used to return, fetched instead of waited for.
 
     If you put the panel behind Cloudflare Access, exempt this path or give CI
     an Access service token — otherwise Access blocks the request before it ever
@@ -243,15 +258,55 @@ def deploy_hook(name):
     if problem:
         return jsonify(error=problem), 400
 
-    ok, output = data.deploy_image(component.service, image)
+    ok, output = data.deploy_image_async(component.service, image)
     if not PREVIEW:
-        # `deploy_image` runs `docker service update` ATTACHED, so it has
-        # already waited for convergence and its exit code is the real verdict.
+        # Accepted, not finished — so PENDING, and the status endpoint settles
+        # it. Recording DONE here would be the detached-exit-code lie this whole
+        # status model exists to remove.
         state.record(name, image, "ci", ok, output,
-                     status=state.DONE if ok else state.FAILED,
+                     status=None if ok else state.FAILED,
                      actor=request.headers.get("User-Agent", "")[:60])
-    return jsonify(ok=ok, component=name, service=component.service,
-                   image=image, detail=output), (200 if ok else 502)
+    if not ok:
+        return jsonify(ok=False, component=name, service=component.service,
+                       image=image, status="failed", detail=output), 502
+    return jsonify(ok=True, component=name, service=component.service,
+                   image=image, status="pending", detail=output,
+                   status_url=url_for("deploy_hook_status", name=name,
+                                      _external=True)), 202
+
+
+@app.get("/hooks/deploy/<name>/status")
+def deploy_hook_status(name):
+    """
+    How the last rollout of this component ended. Token-authenticated, same
+    token as the deploy itself.
+
+    `pending` means Swarm is still working; `done` and `failed` are terminal.
+    `image` is what is RUNNING, which is the field that matters after a
+    rollback: the status is `failed` and the image is the previous one, so a
+    pipeline can tell "my build is not live" from "my build is live".
+    """
+    try:
+        component = components.load(name)
+    except components.ComponentError:
+        abort(404)
+    if component.TYPE != "app":
+        abort(404)
+
+    presented = request.headers.get("X-Deploy-Token") or request.args.get("token", "")
+    if not (PREVIEW or state.verify_token(name, presented)):
+        return jsonify(error="unauthorized"), 401
+
+    rollout = data.update_status(component.service)
+    verdict = rollout.get("verdict")
+    if not PREVIEW and verdict:
+        state.reconcile(name, verdict, rollout.get("started_epoch"))
+
+    return jsonify(component=name, service=component.service,
+                   status=verdict or "pending",
+                   state=rollout.get("state") or "",
+                   image=rollout.get("image") or "",
+                   detail=rollout.get("message") or ""), 200
 
 
 # --- pages -----------------------------------------------------------------

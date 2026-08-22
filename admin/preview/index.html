@@ -1912,7 +1912,7 @@ ul.tight li { margin-bottom: 2px; }
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-22T04:14:18Z" data-localtime>2026-08-22T04:14:18Z</time>
+          <time datetime="2026-08-22T07:17:17Z" data-localtime>2026-08-22T07:17:17Z</time>
           
         </div>
       </div>
@@ -2153,7 +2153,7 @@ ul.tight li { margin-bottom: 2px; }
 
 <section class="panel">
   <div class="panel-head">
-    <h2>Current rollout</h2>
+    <h2>Currently running</h2>
     <span class="spacer"></span>
     <span class="pill ok">
       converged
@@ -2165,9 +2165,12 @@ ul.tight li { margin-bottom: 2px; }
       <span class="stripe"></span>
       <span class="src">swarm</span>
       <span>
-        <span class="row-title mono">completed</span>
+        
+        <span class="row-title mono" title="ghcr.io/acme/aichat-api:sha-4c9920a">
+          aichat-api:sha-4c9920a
+        </span>
         <span class="row-sub">
-          6m ago · update completed
+          completed · 6m ago · update completed
           
         </span>
       </span>
@@ -2204,11 +2207,19 @@ ul.tight li { margin-bottom: 2px; }
         <code style="white-space:pre">curl -fsS -X POST https://admin-aichat.acme.dev/hooks/deploy/api \
   -H &#39;X-Deploy-Token: preview-token-not-real-000000&#39; \
   -H &#39;Content-Type: application/json&#39; \
-  -d &#39;{&#34;image&#34;: &#34;ghcr.io/you/app:sha-&#39;&#34;$GITHUB_SHA&#34;&#39;&#34;}&#39;</code>
+  -d &#39;{&#34;image&#34;: &#34;ghcr.io/you/app:sha-&#39;&#34;$GITHUB_SHA&#34;&#39;&#34;}&#39;
+
+# then poll until it is no longer &#39;pending&#39;
+curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
+  -H &#39;X-Deploy-Token: preview-token-not-real-000000&#39;</code>
         <button class="btn btn-sm" type="button" data-copy data-copy-text="curl -fsS -X POST https://admin-aichat.acme.dev/hooks/deploy/api \
   -H &#39;X-Deploy-Token: preview-token-not-real-000000&#39; \
   -H &#39;Content-Type: application/json&#39; \
-  -d &#39;{&#34;image&#34;: &#34;ghcr.io/you/app:sha-&#39;&#34;$GITHUB_SHA&#34;&#39;&#34;}&#39;">Copy</button>
+  -d &#39;{&#34;image&#34;: &#34;ghcr.io/you/app:sha-&#39;&#34;$GITHUB_SHA&#34;&#39;&#34;}&#39;
+
+# then poll until it is no longer &#39;pending&#39;
+curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
+  -H &#39;X-Deploy-Token: preview-token-not-real-000000&#39;">Copy</button>
       </div>
     </div>
     <form method="post" action="#" data-preview
@@ -2967,7 +2978,7 @@ ul.tight li { margin-bottom: 2px; }
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-22T04:14:18Z" data-localtime>2026-08-22T04:14:18Z</time>
+          <time datetime="2026-08-22T07:17:17Z" data-localtime>2026-08-22T07:17:17Z</time>
           
         </div>
       </div>
@@ -3193,7 +3204,7 @@ ul.tight li { margin-bottom: 2px; }
 
 <section class="panel">
   <div class="panel-head">
-    <h2>Current rollout</h2>
+    <h2>Currently running</h2>
     <span class="spacer"></span>
     <span class="pill ok">
       converged
@@ -3205,9 +3216,12 @@ ul.tight li { margin-bottom: 2px; }
       <span class="stripe"></span>
       <span class="src">swarm</span>
       <span>
-        <span class="row-title mono">completed</span>
+        
+        <span class="row-title mono" title="ghcr.io/acme/aichat-api:sha-4c9920a">
+          aichat-api:sha-4c9920a
+        </span>
         <span class="row-sub">
-          6m ago · update completed
+          completed · 6m ago · update completed
           
         </span>
       </span>
@@ -3244,11 +3258,19 @@ ul.tight li { margin-bottom: 2px; }
         <code style="white-space:pre">curl -fsS -X POST https://admin-aichat.acme.dev/hooks/deploy/api-staging \
   -H &#39;X-Deploy-Token: preview-token-not-real-000000&#39; \
   -H &#39;Content-Type: application/json&#39; \
-  -d &#39;{&#34;image&#34;: &#34;ghcr.io/you/app:sha-&#39;&#34;$GITHUB_SHA&#34;&#39;&#34;}&#39;</code>
+  -d &#39;{&#34;image&#34;: &#34;ghcr.io/you/app:sha-&#39;&#34;$GITHUB_SHA&#34;&#39;&#34;}&#39;
+
+# then poll until it is no longer &#39;pending&#39;
+curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
+  -H &#39;X-Deploy-Token: preview-token-not-real-000000&#39;</code>
         <button class="btn btn-sm" type="button" data-copy data-copy-text="curl -fsS -X POST https://admin-aichat.acme.dev/hooks/deploy/api-staging \
   -H &#39;X-Deploy-Token: preview-token-not-real-000000&#39; \
   -H &#39;Content-Type: application/json&#39; \
-  -d &#39;{&#34;image&#34;: &#34;ghcr.io/you/app:sha-&#39;&#34;$GITHUB_SHA&#34;&#39;&#34;}&#39;">Copy</button>
+  -d &#39;{&#34;image&#34;: &#34;ghcr.io/you/app:sha-&#39;&#34;$GITHUB_SHA&#34;&#39;&#34;}&#39;
+
+# then poll until it is no longer &#39;pending&#39;
+curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
+  -H &#39;X-Deploy-Token: preview-token-not-real-000000&#39;">Copy</button>
       </div>
     </div>
     <form method="post" action="#" data-preview
@@ -3960,7 +3982,7 @@ ul.tight li { margin-bottom: 2px; }
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-22T04:14:18Z" data-localtime>2026-08-22T04:14:18Z</time>
+          <time datetime="2026-08-22T07:17:17Z" data-localtime>2026-08-22T07:17:17Z</time>
           
         </div>
       </div>
@@ -4121,9 +4143,9 @@ ul.tight li { margin-bottom: 2px; }
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis://default:3f39745cd4c06a05f01ecf1841d564e072981800ec71de08@cache_redis:6379</code>
+              <code>redis://default:212c282e0a207aae91d2d57e3ac7a2d9cd25bb9f1fbd3caf@cache_redis:6379</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis://default:3f39745cd4c06a05f01ecf1841d564e072981800ec71de08@cache_redis:6379">Copy</button>
+                      data-copy-text="redis://default:212c282e0a207aae91d2d57e3ac7a2d9cd25bb9f1fbd3caf@cache_redis:6379">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -4134,7 +4156,7 @@ ul.tight li { margin-bottom: 2px; }
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="3f39745cd4c06a05f01ecf1841d564e072981800ec71de08">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="212c282e0a207aae91d2d57e3ac7a2d9cd25bb9f1fbd3caf">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -4160,9 +4182,9 @@ ul.tight li { margin-bottom: 2px; }
         <div class="panel-body stack">
           
           <div class="conn">
-            <code>redis://default:3f39745cd4c06a05f01ecf1841d564e072981800ec71de08@10.0.0.2:46379</code>
+            <code>redis://default:212c282e0a207aae91d2d57e3ac7a2d9cd25bb9f1fbd3caf@10.0.0.2:46379</code>
             <button class="btn btn-sm" type="button" data-copy
-                    data-copy-text="redis://default:3f39745cd4c06a05f01ecf1841d564e072981800ec71de08@10.0.0.2:46379">Copy</button>
+                    data-copy-text="redis://default:212c282e0a207aae91d2d57e3ac7a2d9cd25bb9f1fbd3caf@10.0.0.2:46379">Copy</button>
           </div>
           <div class="table-wrap">
             <table>
@@ -4253,7 +4275,7 @@ ul.tight li { margin-bottom: 2px; }
 
 <section class="panel">
   <div class="panel-head">
-    <h2>Current rollout</h2>
+    <h2>Currently running</h2>
     <span class="spacer"></span>
     <span class="pill ok">
       converged
@@ -4265,9 +4287,12 @@ ul.tight li { margin-bottom: 2px; }
       <span class="stripe"></span>
       <span class="src">swarm</span>
       <span>
-        <span class="row-title mono">completed</span>
+        
+        <span class="row-title mono" title="ghcr.io/acme/aichat-api:sha-4c9920a">
+          aichat-api:sha-4c9920a
+        </span>
         <span class="row-sub">
-          6m ago · update completed
+          completed · 6m ago · update completed
           
         </span>
       </span>
@@ -4304,11 +4329,19 @@ ul.tight li { margin-bottom: 2px; }
         <code style="white-space:pre">curl -fsS -X POST https://admin-aichat.acme.dev/hooks/deploy/cache \
   -H &#39;X-Deploy-Token: preview-token-not-real-000000&#39; \
   -H &#39;Content-Type: application/json&#39; \
-  -d &#39;{&#34;image&#34;: &#34;ghcr.io/you/app:sha-&#39;&#34;$GITHUB_SHA&#34;&#39;&#34;}&#39;</code>
+  -d &#39;{&#34;image&#34;: &#34;ghcr.io/you/app:sha-&#39;&#34;$GITHUB_SHA&#34;&#39;&#34;}&#39;
+
+# then poll until it is no longer &#39;pending&#39;
+curl -fsS https://admin-aichat.acme.dev/hooks/deploy/cache/status \
+  -H &#39;X-Deploy-Token: preview-token-not-real-000000&#39;</code>
         <button class="btn btn-sm" type="button" data-copy data-copy-text="curl -fsS -X POST https://admin-aichat.acme.dev/hooks/deploy/cache \
   -H &#39;X-Deploy-Token: preview-token-not-real-000000&#39; \
   -H &#39;Content-Type: application/json&#39; \
-  -d &#39;{&#34;image&#34;: &#34;ghcr.io/you/app:sha-&#39;&#34;$GITHUB_SHA&#34;&#39;&#34;}&#39;">Copy</button>
+  -d &#39;{&#34;image&#34;: &#34;ghcr.io/you/app:sha-&#39;&#34;$GITHUB_SHA&#34;&#39;&#34;}&#39;
+
+# then poll until it is no longer &#39;pending&#39;
+curl -fsS https://admin-aichat.acme.dev/hooks/deploy/cache/status \
+  -H &#39;X-Deploy-Token: preview-token-not-real-000000&#39;">Copy</button>
       </div>
     </div>
     <form method="post" action="#" data-preview
@@ -4783,7 +4816,7 @@ ul.tight li { margin-bottom: 2px; }
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-22T04:14:18Z" data-localtime>2026-08-22T04:14:18Z</time>
+          <time datetime="2026-08-22T07:17:17Z" data-localtime>2026-08-22T07:17:17Z</time>
           
         </div>
       </div>
@@ -4937,9 +4970,9 @@ ul.tight li { margin-bottom: 2px; }
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis://default:a93aa783edb962e3f9f9e3132a602412b75e4b9b7b53a5e3@sessions_redis:6379</code>
+              <code>redis://default:3c00274ef1777b63ec03441184e5ad7720265ddd43edf1e8@sessions_redis:6379</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis://default:a93aa783edb962e3f9f9e3132a602412b75e4b9b7b53a5e3@sessions_redis:6379">Copy</button>
+                      data-copy-text="redis://default:3c00274ef1777b63ec03441184e5ad7720265ddd43edf1e8@sessions_redis:6379">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -4950,7 +4983,7 @@ ul.tight li { margin-bottom: 2px; }
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="a93aa783edb962e3f9f9e3132a602412b75e4b9b7b53a5e3">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="3c00274ef1777b63ec03441184e5ad7720265ddd43edf1e8">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -5040,7 +5073,7 @@ ul.tight li { margin-bottom: 2px; }
 
 <section class="panel">
   <div class="panel-head">
-    <h2>Current rollout</h2>
+    <h2>Currently running</h2>
     <span class="spacer"></span>
     <span class="pill ok">
       converged
@@ -5052,9 +5085,12 @@ ul.tight li { margin-bottom: 2px; }
       <span class="stripe"></span>
       <span class="src">swarm</span>
       <span>
-        <span class="row-title mono">completed</span>
+        
+        <span class="row-title mono" title="ghcr.io/acme/aichat-api:sha-4c9920a">
+          aichat-api:sha-4c9920a
+        </span>
         <span class="row-sub">
-          6m ago · update completed
+          completed · 6m ago · update completed
           
         </span>
       </span>
@@ -5091,11 +5127,19 @@ ul.tight li { margin-bottom: 2px; }
         <code style="white-space:pre">curl -fsS -X POST https://admin-aichat.acme.dev/hooks/deploy/sessions \
   -H &#39;X-Deploy-Token: preview-token-not-real-000000&#39; \
   -H &#39;Content-Type: application/json&#39; \
-  -d &#39;{&#34;image&#34;: &#34;ghcr.io/you/app:sha-&#39;&#34;$GITHUB_SHA&#34;&#39;&#34;}&#39;</code>
+  -d &#39;{&#34;image&#34;: &#34;ghcr.io/you/app:sha-&#39;&#34;$GITHUB_SHA&#34;&#39;&#34;}&#39;
+
+# then poll until it is no longer &#39;pending&#39;
+curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
+  -H &#39;X-Deploy-Token: preview-token-not-real-000000&#39;</code>
         <button class="btn btn-sm" type="button" data-copy data-copy-text="curl -fsS -X POST https://admin-aichat.acme.dev/hooks/deploy/sessions \
   -H &#39;X-Deploy-Token: preview-token-not-real-000000&#39; \
   -H &#39;Content-Type: application/json&#39; \
-  -d &#39;{&#34;image&#34;: &#34;ghcr.io/you/app:sha-&#39;&#34;$GITHUB_SHA&#34;&#39;&#34;}&#39;">Copy</button>
+  -d &#39;{&#34;image&#34;: &#34;ghcr.io/you/app:sha-&#39;&#34;$GITHUB_SHA&#34;&#39;&#34;}&#39;
+
+# then poll until it is no longer &#39;pending&#39;
+curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
+  -H &#39;X-Deploy-Token: preview-token-not-real-000000&#39;">Copy</button>
       </div>
     </div>
     <form method="post" action="#" data-preview

@@ -327,6 +327,10 @@ def master_ip():
     return "10.0.0.2"
 
 
+def deploy_image_async(service_name, image):
+    return True, f"preview: would start updating {service_name} to {image}"
+
+
 def deploy_image(service_name, image):
     return True, f"{service_name}: image updated to {image}\nverify: Service converged"
 

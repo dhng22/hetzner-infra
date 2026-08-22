@@ -985,6 +985,40 @@ def master_ip():
     return os.environ.get("MASTER_PRIVATE_IP", "10.0.0.2")
 
 
+def deploy_image_async(service_name, image):
+    """
+    Point a service at a new image and return as soon as Swarm accepts it.
+
+    Detached on purpose. The attached form waits for the whole rollout, which is
+    parallelism x (monitor + delay) x replicas — over two minutes for two
+    replicas and ten for eight. Behind Cloudflare, whose origin timeout is 100
+    seconds and not configurable on any plan you are likely to have, that
+    request cannot complete: the proxy returns 524, the pipeline reports a
+    failure, and the deploy it was reporting on succeeds anyway a minute later.
+    A green deploy that fails CI is worse than no check, because it teaches you
+    to ignore the check.
+
+    So acceptance and outcome are split. This starts it; the status endpoint
+    reports how it ended, which is the same verdict the attached call used to
+    return, just fetched rather than waited for.
+    """
+    import subprocess
+    try:
+        proc = subprocess.run(
+            ["docker", "service", "update", "--with-registry-auth", "--detach=true",
+             "--image", image, service_name],
+            capture_output=True, text=True, timeout=60,
+        )
+        out = (proc.stdout + proc.stderr).strip()
+        if proc.returncode != 0:
+            return False, out or "docker service update failed."
+        return True, out
+    except subprocess.TimeoutExpired:
+        return False, "Timed out asking Swarm to start the update."
+    except OSError as exc:
+        return False, f"Could not run docker: {exc}"
+
+
 def deploy_image(service_name, image):
     """
     Point a service at a new image, gracefully.

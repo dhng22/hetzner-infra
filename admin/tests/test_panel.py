@@ -267,15 +267,50 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(r.status_code, 400)
         self.assertIn("moving tag", r.get_json()["error"])
 
-    def test_webhook_deploys_with_a_good_token(self):
+    def test_webhook_accepts_and_returns_where_to_poll(self):
+        """
+        202, not 200: the rollout has started, not finished.
+
+        Waiting for it would take parallelism x (monitor + delay) x replicas —
+        minutes — and Cloudflare's origin timeout is 100 seconds, so the
+        attached version returned 524 to the pipeline while the deploy it was
+        reporting on succeeded anyway.
+        """
         self.create_app("hooked3")
         import state
         token = state.token_for("hooked3")
         r = self.client.post("/hooks/deploy/hooked3",
                              headers={"X-Deploy-Token": token},
                              json={"image": "ghcr.io/you/app:sha-abc1234"})
+        self.assertEqual(r.status_code, 202)
+        body = r.get_json()
+        self.assertEqual(body["service"], "hooked3_app")
+        self.assertEqual(body["status"], "pending")
+        # Without this the caller has no way to learn the outcome, and 202
+        # would just be a deploy with the verdict thrown away.
+        self.assertIn("/hooks/deploy/hooked3/status", body["status_url"])
+
+    def test_webhook_status_needs_the_same_token(self):
+        self.create_app("hooked4")
+        r = self.client.get("/hooks/deploy/hooked4/status",
+                            headers={"X-Deploy-Token": "wrong"})
+        self.assertEqual(r.status_code, 401)
+
+    def test_webhook_status_reports_the_running_image(self):
+        """
+        After a rollback the status is `failed` and the image is the PREVIOUS
+        one, which is how a pipeline tells "my build is not live" from "my build
+        is live".
+        """
+        self.create_app("hooked5")
+        import state
+        token = state.token_for("hooked5")
+        r = self.client.get("/hooks/deploy/hooked5/status",
+                            headers={"X-Deploy-Token": token})
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.get_json()["service"], "hooked3_app")
+        body = r.get_json()
+        self.assertIn("status", body)
+        self.assertIn("image", body)
 
     def test_webhook_on_a_database_is_404(self):
         csrf = self.login()
