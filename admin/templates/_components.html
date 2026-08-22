@@ -68,6 +68,15 @@
             <span class="muted">not deployed</span>
           {% endif %}
         </div>
+        {% if v.reserved and (v.reserved.cpu or v.reserved.mem_mb) %}
+        {# What the whole component holds — replicas x reservation across every
+           service it owns. The cluster map counts per task; this is the bill. #}
+        <div class="card-foot subtle"
+             data-tip="Reserved by every replica of every service in {{ v.name }}: {{ v.reserved.cpu }} vCPU and {{ v.reserved.mem_mb }} MB of cluster capacity">
+          <span class="muted">reserved</span>
+          <span class="mono">{{ v.reserved.cpu }} vCPU · {{ v.reserved.mem_mb }} MB</span>
+        </div>
+        {% endif %}
       </a>
       {% endfor %}
     </div>

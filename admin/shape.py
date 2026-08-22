@@ -18,6 +18,69 @@ stays split.
 _RANK = {"ok": 0, "mute": 0, "warn": 1, "bad": 2}
 
 
+#: Managed spec field -> where its LIVE value actually lives.
+#:
+#: The spec's copy is a seed, not the truth. The autoscaler re-sizes
+#: reservations on the running service and CI moves the image, so a panel that
+#: reads the file shows whatever was last written there — which for a
+#: right-sized component was 0.36 CPU against a service actually reserving 0.02.
+#: A section headed "managed for you" showing the one number nobody manages is
+#: worse than showing nothing.
+_LIVE_OF = {
+    "cpu_reservation":      lambda s: s["resources"].get("cpu_res"),
+    "memory_reservation_mb": lambda s: s["resources"].get("mem_res"),
+    "cpu_limit":            lambda s: s["resources"].get("cpu_limit"),
+    "memory_limit_mb":      lambda s: s["resources"].get("mem_limit"),
+    "replicas":             lambda s: s.get("desired"),
+    "image":                lambda s: s.get("image_short"),
+}
+
+
+def managed_values(component, primary):
+    """
+    {field name: value as it IS} for every managed field.
+
+    Falls back to the spec when the service does not exist yet — before a first
+    deploy the file genuinely is the only thing that knows.
+    """
+    out = {}
+    for field in type(component).fields():
+        if not getattr(field, "managed", None):
+            continue
+        value = None
+        if primary and primary.get("exists"):
+            reader = _LIVE_OF.get(field.name)
+            if reader:
+                try:
+                    value = reader(primary)
+                except Exception:  # noqa: BLE001
+                    value = None
+        if value in (None, ""):
+            value = component.spec.get(field.name)
+        out[field.name] = value
+    return out
+
+
+def component_reserved(services):
+    """
+    What this component has promised across ALL of its services and replicas.
+
+    The map on the Overview shows one chip per task, so the number on it is per
+    REPLICA. That answers "how much of this node is this one task holding" and
+    not "what is this component costing me", which is replicas x reservation
+    summed over the app, its database and any sidecar.
+    """
+    cpu = mem = 0.0
+    for svc in services:
+        if not svc.get("exists"):
+            continue
+        count = max(svc.get("desired") or 0, 0)
+        res = svc.get("resources") or {}
+        cpu += (res.get("cpu_res") or 0) * count
+        mem += (res.get("mem_res") or 0) * count
+    return {"cpu": round(cpu, 3), "mem_mb": int(mem)}
+
+
 def component_view(component, service_fn):
     """
     A component's live state, merged with its spec.
@@ -65,6 +128,8 @@ def component_view(component, service_fn):
         "primary": primary,
         "tone": worst,
         "state": state,
+        "managed": managed_values(component, primary),
+        "reserved": component_reserved(services),
         "running": primary["running"] if primary else 0,
         "desired": primary["desired"] if primary else 0,
     }
@@ -77,6 +142,9 @@ def broken_view(name, problem):
         "blurb": problem, "created_at": None, "summary": problem, "access": None,
         "services": [], "primary": None, "tone": "bad", "state": "broken spec",
         "running": 0, "desired": 0,
+        # Same keys as a healthy view: a template that reaches for these must
+        # not have to know it is looking at a broken component.
+        "managed": {}, "reserved": {"cpu": 0, "mem_mb": 0},
     }
 
 

@@ -296,6 +296,53 @@
   // brings the disabled state of their controls into line with it on load.
   initToggleSections(document);
 
+  // --- tooltips that appear immediately -------------------------------------
+  // The native `title` attribute waits about a second before showing, which is
+  // useless for a gauge you are sweeping across to compare nodes. This is one
+  // element parented to <body> rather than a CSS ::after on the trigger,
+  // because the cluster map scrolls inside an overflow container and an
+  // absolutely positioned tooltip would be clipped by it.
+  var tipEl = null;
+
+  function hideTip() {
+    if (tipEl) { tipEl.classList.remove("is-on"); }
+  }
+
+  function showTip(target) {
+    var text = target.getAttribute("data-tip");
+    if (!text) { return; }
+    if (!tipEl) {
+      tipEl = document.createElement("div");
+      tipEl.className = "tip";
+      tipEl.setAttribute("role", "tooltip");
+      document.body.appendChild(tipEl);
+    }
+    tipEl.textContent = text;                    // never innerHTML
+    tipEl.classList.add("is-on");
+
+    var r = target.getBoundingClientRect();
+    var t = tipEl.getBoundingClientRect();
+    var left = r.left + r.width / 2 - t.width / 2;
+    var top = r.top - t.height - 8;
+    if (top < 4) { top = r.bottom + 8; }         // flip under when it would clip
+    left = Math.max(6, Math.min(left, window.innerWidth - t.width - 6));
+    tipEl.style.transform = "translate(" + Math.round(left) + "px," + Math.round(top) + "px)";
+  }
+
+  document.addEventListener("mouseover", function (ev) {
+    var el = ev.target.closest ? ev.target.closest("[data-tip]") : null;
+    if (el) { showTip(el); }
+  });
+  document.addEventListener("mouseout", function (ev) {
+    if (ev.target.closest && ev.target.closest("[data-tip]")) { hideTip(); }
+  });
+  document.addEventListener("focusin", function (ev) {
+    var el = ev.target.closest ? ev.target.closest("[data-tip]") : null;
+    if (el) { showTip(el); }
+  });
+  document.addEventListener("focusout", hideTip);
+  window.addEventListener("scroll", hideTip, true);
+
   // --- timestamps in the reader's own timezone ------------------------------
   // The server renders UTC, because the server does not know where you are and
   // a wrong local time is worse than an explicit UTC one. Once here, we do
@@ -383,9 +430,10 @@
     // entirely in the stylesheet.
     el.style.setProperty("--cpu", t.cpu_share);
     el.style.setProperty("--mem", t.mem_share);
-    el.title = t.service + " — task " + t.id + "\nstate: " + t.state +
-               "\nreserves " + t.cpu_share + "% of this node's CPU, " +
-               t.mem_share + "% of its memory";
+    el.setAttribute("data-tip", t.service + " — task " + t.id +
+                    " · state: " + t.state +
+                    " · reserves " + t.cpu_share + "% of this node's CPU and " +
+                    t.mem_share + "% of its memory");
     var dot = document.createElement("i");
     dot.className = "dot dot-" + t.tone;      // what it is DOING; the chip tint
     el.appendChild(dot);                      // already says what it IS
@@ -432,8 +480,9 @@
         var el = row.querySelector(sel);
         if (!el) { return; }
         el.style.setProperty("--v", value == null ? 0 : value);
-        el.title = label + " reserved: " + (value == null ? "—" : value + "%") +
-                   (absolute ? " — " + absolute : "");
+        el.setAttribute("data-tip",
+                        label + " reserved: " + (value == null ? "—" : value + "%") +
+                        (absolute ? " — " + absolute : ""));
       };
       gauge('[data-f="cpures"]', n.cpu_reserved_pct, "CPU",
             n.cpu_reserved + " of " + n.cpus + " vCPU promised to tasks here");

@@ -100,6 +100,26 @@
       </section>
 
       <section class="panel">
+        <div class="panel-head">
+          <h2>Reserved</h2>
+          <span class="spacer"></span>
+          <span class="eyebrow">whole component</span>
+        </div>
+        <div class="panel-body stack">
+          <div class="conn">
+            <code class="mono">{{ view.reserved.cpu }} vCPU · {{ view.reserved.mem_mb }} MB</code>
+          </div>
+          <p class="hint">
+            Replicas &times; what one replica reserves, across every service this
+            component owns. The blocks on the cluster map are per <em>task</em>,
+            which is a different question — that one is "how much of this node is
+            this one replica holding", this one is what the component costs the
+            cluster in capacity it can no longer give to anything else.
+          </p>
+        </div>
+      </section>
+
+      <section class="panel">
         <div class="panel-head"><h2>Placement</h2></div>
         <div class="panel-body stack">
           {% if view.primary and view.primary.placement %}
@@ -471,7 +491,9 @@
               <span class="src">{{ f.managed }}</span>
               <span>
                 <span class="row-title">{{ f.label }}</span>
-                <span class="row-sub mono">{{ component.spec.get(f.name) if component.spec.get(f.name) not in (None, '') else '—' }}</span>
+                {# The LIVE value, not the spec's copy. The spec is a seed and
+                   goes stale the moment the autoscaler re-sizes anything. #}
+                <span class="row-sub mono">{{ view.managed.get(f.name) if view.managed.get(f.name) not in (None, '') else '—' }}</span>
               </span>
             </div>
             {% endfor %}

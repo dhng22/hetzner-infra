@@ -825,6 +825,30 @@ ul.tight li { margin-bottom: 2px; }
 
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
            overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* --- tooltips that show at once ------------------------------------------ */
+/* Parented to <body> and positioned with a transform, so it is never clipped
+   by the cluster map's scroll container and never reflows the page. No delay:
+   these label gauges you sweep across to compare, and a one-second wait makes
+   that comparison impossible. */
+.tip {
+  position: fixed; top: 0; left: 0; z-index: 90;
+  max-width: 44ch; padding: 6px 9px;
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--surface); color: var(--text);
+  box-shadow: var(--shadow);
+  font: 500 12px/1.45 var(--ui);
+  opacity: 0; visibility: hidden;
+  transition: opacity .08s ease;
+}
+.tip.is-on { opacity: 1; visibility: visible; }
+@media (prefers-reduced-motion: reduce) { .tip { transition: none; } }
+
+[data-tip] { cursor: help; }
+.slot[data-tip] { cursor: default; }
+
+.card-foot.subtle { border-top: 1px dashed var(--line); margin-top: 2px;
+                    padding-top: 6px; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -992,9 +1016,9 @@ ul.tight li { margin-bottom: 2px; }
 
               
               <span class="gauge gauge-cpu" data-f="cpures" style="--v:62.0"
-                    title="CPU reserved: 62.0% — 1.2 of 4 vCPU promised to tasks here"></span>
+                    data-tip="CPU reserved: 62.0% — 1.2 of 4 vCPU promised to tasks here"></span>
               <span class="gauge gauge-mem" data-f="memres" style="--v:48.0"
-                    title="Memory reserved: 48.0% — 1400 MB of 7.6 GB promised to tasks here"></span>
+                    data-tip="Memory reserved: 48.0% — 1400 MB of 7.6 GB promised to tasks here"></span>
             </div>
 
             <!-- data-sig matches the signature the poller computes, so the first
@@ -1005,98 +1029,98 @@ ul.tight li { margin-bottom: 2px; }
                 
                 <span class="slot slot-data" tabindex="0"
                       style="--cpu:10.5;--mem:16.8"
-                      title="cache_redis — task cache0kd93jf on aichat-master&#10;state: running&#10;reserves 10.5% of this node's CPU, 16.8% of its memory">
+                      data-tip="cache_redis — task cache0kd93jf on aichat-master&#10;state: running&#10;reserves 10.5% of this node's CPU, 16.8% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>cache
                 </span>
               
                 
                 <span class="slot slot-data" tabindex="0"
                       style="--cpu:1.5;--mem:2.5"
-                      title="sessions_redis — task sessio0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      data-tip="sessions_redis — task sessio0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>sessions
                 </span>
               
                 
                 <span class="slot slot-staging" tabindex="0"
                       style="--cpu:1.5;--mem:2.5"
-                      title="ingress_cloudflared — task cloudf0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      data-tip="ingress_cloudflared — task cloudf0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>cloudflared
                 </span>
               
                 
                 <span class="slot slot-observe" tabindex="0"
                       style="--cpu:1.5;--mem:2.5"
-                      title="monitoring_alertmanager — task alertm0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      data-tip="monitoring_alertmanager — task alertm0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>alertmanager
                 </span>
               
                 
                 <span class="slot slot-observe" tabindex="0"
                       style="--cpu:1.5;--mem:2.5"
-                      title="monitoring_cadvisor — task cadvis0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      data-tip="monitoring_cadvisor — task cadvis0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>cadvisor
                 </span>
               
                 
                 <span class="slot slot-observe" tabindex="0"
                       style="--cpu:2.5;--mem:3.4"
-                      title="monitoring_grafana — task grafan0kd93j on aichat-master&#10;state: running&#10;reserves 2.5% of this node's CPU, 3.4% of its memory">
+                      data-tip="monitoring_grafana — task grafan0kd93j on aichat-master&#10;state: running&#10;reserves 2.5% of this node's CPU, 3.4% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>grafana
                 </span>
               
                 
                 <span class="slot slot-observe" tabindex="0"
                       style="--cpu:5.0;--mem:8.4"
-                      title="monitoring_loki — task loki0kd93jf0 on aichat-master&#10;state: running&#10;reserves 5.0% of this node's CPU, 8.4% of its memory">
+                      data-tip="monitoring_loki — task loki0kd93jf0 on aichat-master&#10;state: running&#10;reserves 5.0% of this node's CPU, 8.4% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>loki
                 </span>
               
                 
                 <span class="slot slot-observe" tabindex="0"
                       style="--cpu:1.5;--mem:2.5"
-                      title="monitoring_node-exporter — task node-e0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      data-tip="monitoring_node-exporter — task node-e0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>node-exporter
                 </span>
               
                 
                 <span class="slot slot-observe" tabindex="0"
                       style="--cpu:1.5;--mem:2.5"
-                      title="monitoring_redis-exporter — task redis-0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      data-tip="monitoring_redis-exporter — task redis-0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>redis-exporter
                 </span>
               
                 
                 <span class="slot slot-observe" tabindex="0"
                       style="--cpu:7.5;--mem:10.1"
-                      title="monitoring_victoriametrics — task victor0kd93j on aichat-master&#10;state: running&#10;reserves 7.5% of this node's CPU, 10.1% of its memory">
+                      data-tip="monitoring_victoriametrics — task victor0kd93j on aichat-master&#10;state: running&#10;reserves 7.5% of this node's CPU, 10.1% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>victoriametrics
                 </span>
               
                 
                 <span class="slot slot-observe" tabindex="0"
                       style="--cpu:1.5;--mem:2.5"
-                      title="monitoring_vmagent — task vmagen0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      data-tip="monitoring_vmagent — task vmagen0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>vmagent
                 </span>
               
                 
                 <span class="slot slot-observe" tabindex="0"
                       style="--cpu:1.5;--mem:2.5"
-                      title="monitoring_vmalert — task vmaler0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      data-tip="monitoring_vmalert — task vmaler0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>vmalert
                 </span>
               
                 
                 <span class="slot slot-platform" tabindex="0"
                       style="--cpu:1.5;--mem:2.5"
-                      title="monitoring_autoscaler — task autosc0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      data-tip="monitoring_autoscaler — task autosc0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>autoscaler
                 </span>
               
                 
                 <span class="slot slot-platform" tabindex="0"
                       style="--cpu:1.5;--mem:2.5"
-                      title="admin_ui — task ui0kd93jf01 on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      data-tip="admin_ui — task ui0kd93jf01 on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>ui
                 </span>
               
@@ -1120,9 +1144,9 @@ ul.tight li { margin-bottom: 2px; }
 
               
               <span class="gauge gauge-cpu" data-f="cpures" style="--v:62.0"
-                    title="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks here"></span>
+                    data-tip="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks here"></span>
               <span class="gauge gauge-mem" data-f="memres" style="--v:48.0"
-                    title="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks here"></span>
+                    data-tip="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks here"></span>
             </div>
 
             <!-- data-sig matches the signature the poller computes, so the first
@@ -1133,42 +1157,42 @@ ul.tight li { margin-bottom: 2px; }
                 
                 <span class="slot slot-prod" tabindex="0"
                       style="--cpu:18.0;--mem:12.0"
-                      title="api_app — task api0kd93jf01 on aichat-worker-1754812203&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
+                      data-tip="api_app — task api0kd93jf01 on aichat-worker-1754812203&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>api
                 </span>
               
                 
                 <span class="slot slot-prod" tabindex="0"
                       style="--cpu:18.0;--mem:12.0"
-                      title="api_app — task api1kd93jf01 on aichat-worker-1754812203&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
+                      data-tip="api_app — task api1kd93jf01 on aichat-worker-1754812203&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>api
                 </span>
               
                 
                 <span class="slot slot-prod" tabindex="0"
                       style="--cpu:18.0;--mem:12.0"
-                      title="api_app — task api2kd93jf01 on aichat-worker-1754812203&#10;state: starting&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
+                      data-tip="api_app — task api2kd93jf01 on aichat-worker-1754812203&#10;state: starting&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
                   <i class="dot dot-warn" aria-hidden="true"></i>api
                 </span>
               
                 
                 <span class="slot slot-staging" tabindex="0"
                       style="--cpu:1.5;--mem:2.5"
-                      title="ingress_cloudflared — task cloudf0kd93j on aichat-worker-1754812203&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      data-tip="ingress_cloudflared — task cloudf0kd93j on aichat-worker-1754812203&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>cloudflared
                 </span>
               
                 
                 <span class="slot slot-observe" tabindex="0"
                       style="--cpu:1.5;--mem:2.5"
-                      title="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754812203&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      data-tip="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754812203&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>cadvisor
                 </span>
               
                 
                 <span class="slot slot-observe" tabindex="0"
                       style="--cpu:1.5;--mem:2.5"
-                      title="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754812203&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      data-tip="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754812203&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>node-exporter
                 </span>
               
@@ -1192,9 +1216,9 @@ ul.tight li { margin-bottom: 2px; }
 
               
               <span class="gauge gauge-cpu" data-f="cpures" style="--v:62.0"
-                    title="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks here"></span>
+                    data-tip="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks here"></span>
               <span class="gauge gauge-mem" data-f="memres" style="--v:48.0"
-                    title="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks here"></span>
+                    data-tip="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks here"></span>
             </div>
 
             <!-- data-sig matches the signature the poller computes, so the first
@@ -1205,42 +1229,42 @@ ul.tight li { margin-bottom: 2px; }
                 
                 <span class="slot slot-prod" tabindex="0"
                       style="--cpu:18.0;--mem:12.0"
-                      title="api_app — task api0kd93jf01 on aichat-worker-1754819114&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
+                      data-tip="api_app — task api0kd93jf01 on aichat-worker-1754819114&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>api
                 </span>
               
                 
                 <span class="slot slot-prod" tabindex="0"
                       style="--cpu:18.0;--mem:12.0"
-                      title="api_app — task api1kd93jf01 on aichat-worker-1754819114&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
+                      data-tip="api_app — task api1kd93jf01 on aichat-worker-1754819114&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>api
                 </span>
               
                 
                 <span class="slot slot-prod" tabindex="0"
                       style="--cpu:1.5;--mem:2.5"
-                      title="api-staging_app — task api-st0kd93j on aichat-worker-1754819114&#10;state: failed&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      data-tip="api-staging_app — task api-st0kd93j on aichat-worker-1754819114&#10;state: failed&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
                   <i class="dot dot-bad" aria-hidden="true"></i>api-staging
                 </span>
               
                 
                 <span class="slot slot-staging" tabindex="0"
                       style="--cpu:1.5;--mem:2.5"
-                      title="ingress_cloudflared — task cloudf0kd93j on aichat-worker-1754819114&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      data-tip="ingress_cloudflared — task cloudf0kd93j on aichat-worker-1754819114&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>cloudflared
                 </span>
               
                 
                 <span class="slot slot-observe" tabindex="0"
                       style="--cpu:1.5;--mem:2.5"
-                      title="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754819114&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      data-tip="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754819114&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>cadvisor
                 </span>
               
                 
                 <span class="slot slot-observe" tabindex="0"
                       style="--cpu:1.5;--mem:2.5"
-                      title="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754819114&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      data-tip="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754819114&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>node-exporter
                 </span>
               
@@ -1264,9 +1288,9 @@ ul.tight li { margin-bottom: 2px; }
 
               
               <span class="gauge gauge-cpu" data-f="cpures" style="--v:62.0"
-                    title="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks here"></span>
+                    data-tip="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks here"></span>
               <span class="gauge gauge-mem" data-f="memres" style="--v:48.0"
-                    title="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks here"></span>
+                    data-tip="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks here"></span>
             </div>
 
             <!-- data-sig matches the signature the poller computes, so the first
@@ -1277,21 +1301,21 @@ ul.tight li { margin-bottom: 2px; }
                 
                 <span class="slot slot-prod" tabindex="0"
                       style="--cpu:18.0;--mem:12.0"
-                      title="api_app — task api0kd93jf01 on aichat-worker-1754823887&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
+                      data-tip="api_app — task api0kd93jf01 on aichat-worker-1754823887&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>api
                 </span>
               
                 
                 <span class="slot slot-observe" tabindex="0"
                       style="--cpu:1.5;--mem:2.5"
-                      title="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754823887&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      data-tip="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754823887&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>cadvisor
                 </span>
               
                 
                 <span class="slot slot-observe" tabindex="0"
                       style="--cpu:1.5;--mem:2.5"
-                      title="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754823887&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      data-tip="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754823887&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>node-exporter
                 </span>
               
@@ -1443,6 +1467,14 @@ ul.tight li { margin-bottom: 2px; }
             <span class="mono">6/6 replicas</span>
           
         </div>
+        
+        
+        <div class="card-foot subtle"
+             data-tip="Reserved by every replica of every service in api: 3.0 vCPU and 2304 MB of cluster capacity">
+          <span class="muted">reserved</span>
+          <span class="mono">3.0 vCPU · 2304 MB</span>
+        </div>
+        
       </a>
       
       <a class="card" href="#view-component-api-staging">
@@ -1457,6 +1489,14 @@ ul.tight li { margin-bottom: 2px; }
             <span class="mono">1/1 replicas</span>
           
         </div>
+        
+        
+        <div class="card-foot subtle"
+             data-tip="Reserved by every replica of every service in api-staging: 0.1 vCPU and 128 MB of cluster capacity">
+          <span class="muted">reserved</span>
+          <span class="mono">0.1 vCPU · 128 MB</span>
+        </div>
+        
       </a>
       
     </div>
@@ -1484,6 +1524,14 @@ ul.tight li { margin-bottom: 2px; }
             <span class="mono">1/1 replicas</span>
           
         </div>
+        
+        
+        <div class="card-foot subtle"
+             data-tip="Reserved by every replica of every service in cache: 0.25 vCPU and 672 MB of cluster capacity">
+          <span class="muted">reserved</span>
+          <span class="mono">0.25 vCPU · 672 MB</span>
+        </div>
+        
       </a>
       
       <a class="card" href="#view-component-sessions">
@@ -1498,6 +1546,14 @@ ul.tight li { margin-bottom: 2px; }
             <span class="mono">1/1 replicas</span>
           
         </div>
+        
+        
+        <div class="card-foot subtle"
+             data-tip="Reserved by every replica of every service in sessions: 0.1 vCPU and 256 MB of cluster capacity">
+          <span class="muted">reserved</span>
+          <span class="mono">0.1 vCPU · 256 MB</span>
+        </div>
+        
       </a>
       
     </div>
@@ -1817,7 +1873,7 @@ ul.tight li { margin-bottom: 2px; }
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-22T03:30:35Z" data-localtime>2026-08-22T03:30:35Z</time>
+          <time datetime="2026-08-22T03:44:17Z" data-localtime>2026-08-22T03:44:17Z</time>
           
         </div>
       </div>
@@ -1860,6 +1916,26 @@ ul.tight li { margin-bottom: 2px; }
               </tbody>
             </table>
           </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Reserved</h2>
+          <span class="spacer"></span>
+          <span class="eyebrow">whole component</span>
+        </div>
+        <div class="panel-body stack">
+          <div class="conn">
+            <code class="mono">3.0 vCPU · 2304 MB</code>
+          </div>
+          <p class="hint">
+            Replicas &times; what one replica reserves, across every service this
+            component owns. The blocks on the cluster map are per <em>task</em>,
+            which is a different question — that one is "how much of this node is
+            this one replica holding", this one is what the component costs the
+            cluster in capacity it can no longer give to anything else.
+          </p>
         </div>
       </section>
 
@@ -2659,6 +2735,7 @@ ul.tight li { margin-bottom: 2px; }
               <span class="src">convention</span>
               <span>
                 <span class="row-title">Health path</span>
+                
                 <span class="row-sub mono">/health</span>
               </span>
             </div>
@@ -2668,6 +2745,7 @@ ul.tight li { margin-bottom: 2px; }
               <span class="src">convention</span>
               <span>
                 <span class="row-title">Metrics path</span>
+                
                 <span class="row-sub mono">/metrics</span>
               </span>
             </div>
@@ -2677,6 +2755,7 @@ ul.tight li { margin-bottom: 2px; }
               <span class="src">autoscaler</span>
               <span>
                 <span class="row-title">Replicas</span>
+                
                 <span class="row-sub mono">6</span>
               </span>
             </div>
@@ -2686,6 +2765,7 @@ ul.tight li { margin-bottom: 2px; }
               <span class="src">autoscaler</span>
               <span>
                 <span class="row-title">CPU reserved</span>
+                
                 <span class="row-sub mono">0.5</span>
               </span>
             </div>
@@ -2695,6 +2775,7 @@ ul.tight li { margin-bottom: 2px; }
               <span class="src">autoscaler</span>
               <span>
                 <span class="row-title">Memory reserved (MB)</span>
+                
                 <span class="row-sub mono">384</span>
               </span>
             </div>
@@ -2704,6 +2785,7 @@ ul.tight li { margin-bottom: 2px; }
               <span class="src">autoscaler</span>
               <span>
                 <span class="row-title">CPU limit</span>
+                
                 <span class="row-sub mono">1.0</span>
               </span>
             </div>
@@ -2713,6 +2795,7 @@ ul.tight li { margin-bottom: 2px; }
               <span class="src">autoscaler</span>
               <span>
                 <span class="row-title">Memory limit (MB)</span>
+                
                 <span class="row-sub mono">768</span>
               </span>
             </div>
@@ -2856,7 +2939,7 @@ ul.tight li { margin-bottom: 2px; }
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-22T03:30:35Z" data-localtime>2026-08-22T03:30:35Z</time>
+          <time datetime="2026-08-22T03:44:17Z" data-localtime>2026-08-22T03:44:17Z</time>
           
         </div>
       </div>
@@ -2899,6 +2982,26 @@ ul.tight li { margin-bottom: 2px; }
               </tbody>
             </table>
           </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Reserved</h2>
+          <span class="spacer"></span>
+          <span class="eyebrow">whole component</span>
+        </div>
+        <div class="panel-body stack">
+          <div class="conn">
+            <code class="mono">0.1 vCPU · 128 MB</code>
+          </div>
+          <p class="hint">
+            Replicas &times; what one replica reserves, across every service this
+            component owns. The blocks on the cluster map are per <em>task</em>,
+            which is a different question — that one is "how much of this node is
+            this one replica holding", this one is what the component costs the
+            cluster in capacity it can no longer give to anything else.
+          </p>
         </div>
       </section>
 
@@ -3641,6 +3744,7 @@ ul.tight li { margin-bottom: 2px; }
               <span class="src">convention</span>
               <span>
                 <span class="row-title">Health path</span>
+                
                 <span class="row-sub mono">/health</span>
               </span>
             </div>
@@ -3650,6 +3754,7 @@ ul.tight li { margin-bottom: 2px; }
               <span class="src">convention</span>
               <span>
                 <span class="row-title">Metrics path</span>
+                
                 <span class="row-sub mono">/metrics</span>
               </span>
             </div>
@@ -3659,6 +3764,7 @@ ul.tight li { margin-bottom: 2px; }
               <span class="src">autoscaler</span>
               <span>
                 <span class="row-title">Replicas</span>
+                
                 <span class="row-sub mono">1</span>
               </span>
             </div>
@@ -3668,6 +3774,7 @@ ul.tight li { margin-bottom: 2px; }
               <span class="src">autoscaler</span>
               <span>
                 <span class="row-title">CPU reserved</span>
+                
                 <span class="row-sub mono">0.1</span>
               </span>
             </div>
@@ -3677,6 +3784,7 @@ ul.tight li { margin-bottom: 2px; }
               <span class="src">autoscaler</span>
               <span>
                 <span class="row-title">Memory reserved (MB)</span>
+                
                 <span class="row-sub mono">128</span>
               </span>
             </div>
@@ -3686,6 +3794,7 @@ ul.tight li { margin-bottom: 2px; }
               <span class="src">autoscaler</span>
               <span>
                 <span class="row-title">CPU limit</span>
+                
                 <span class="row-sub mono">0.5</span>
               </span>
             </div>
@@ -3695,6 +3804,7 @@ ul.tight li { margin-bottom: 2px; }
               <span class="src">autoscaler</span>
               <span>
                 <span class="row-title">Memory limit (MB)</span>
+                
                 <span class="row-sub mono">512</span>
               </span>
             </div>
@@ -3833,7 +3943,7 @@ ul.tight li { margin-bottom: 2px; }
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-22T03:30:35Z" data-localtime>2026-08-22T03:30:35Z</time>
+          <time datetime="2026-08-22T03:44:17Z" data-localtime>2026-08-22T03:44:17Z</time>
           
         </div>
       </div>
@@ -3883,6 +3993,26 @@ ul.tight li { margin-bottom: 2px; }
               </tbody>
             </table>
           </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Reserved</h2>
+          <span class="spacer"></span>
+          <span class="eyebrow">whole component</span>
+        </div>
+        <div class="panel-body stack">
+          <div class="conn">
+            <code class="mono">0.25 vCPU · 672 MB</code>
+          </div>
+          <p class="hint">
+            Replicas &times; what one replica reserves, across every service this
+            component owns. The blocks on the cluster map are per <em>task</em>,
+            which is a different question — that one is "how much of this node is
+            this one replica holding", this one is what the component costs the
+            cluster in capacity it can no longer give to anything else.
+          </p>
         </div>
       </section>
 
@@ -3994,9 +4124,9 @@ ul.tight li { margin-bottom: 2px; }
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis://default:b74dae7958fe237c62f6b76f1583b3b1c7aeaff767225df5@cache_redis:6379</code>
+              <code>redis://default:b8daa0c32be383dad07e810a18bf2e75a359ebf7b9c9c29b@cache_redis:6379</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis://default:b74dae7958fe237c62f6b76f1583b3b1c7aeaff767225df5@cache_redis:6379">Copy</button>
+                      data-copy-text="redis://default:b8daa0c32be383dad07e810a18bf2e75a359ebf7b9c9c29b@cache_redis:6379">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -4007,7 +4137,7 @@ ul.tight li { margin-bottom: 2px; }
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="b74dae7958fe237c62f6b76f1583b3b1c7aeaff767225df5">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="b8daa0c32be383dad07e810a18bf2e75a359ebf7b9c9c29b">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -4033,9 +4163,9 @@ ul.tight li { margin-bottom: 2px; }
         <div class="panel-body stack">
           
           <div class="conn">
-            <code>redis://default:b74dae7958fe237c62f6b76f1583b3b1c7aeaff767225df5@10.0.0.2:46379</code>
+            <code>redis://default:b8daa0c32be383dad07e810a18bf2e75a359ebf7b9c9c29b@10.0.0.2:46379</code>
             <button class="btn btn-sm" type="button" data-copy
-                    data-copy-text="redis://default:b74dae7958fe237c62f6b76f1583b3b1c7aeaff767225df5@10.0.0.2:46379">Copy</button>
+                    data-copy-text="redis://default:b8daa0c32be383dad07e810a18bf2e75a359ebf7b9c9c29b@10.0.0.2:46379">Copy</button>
           </div>
           <div class="table-wrap">
             <table>
@@ -4647,7 +4777,7 @@ ul.tight li { margin-bottom: 2px; }
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-22T03:30:35Z" data-localtime>2026-08-22T03:30:35Z</time>
+          <time datetime="2026-08-22T03:44:17Z" data-localtime>2026-08-22T03:44:17Z</time>
           
         </div>
       </div>
@@ -4690,6 +4820,26 @@ ul.tight li { margin-bottom: 2px; }
               </tbody>
             </table>
           </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Reserved</h2>
+          <span class="spacer"></span>
+          <span class="eyebrow">whole component</span>
+        </div>
+        <div class="panel-body stack">
+          <div class="conn">
+            <code class="mono">0.1 vCPU · 256 MB</code>
+          </div>
+          <p class="hint">
+            Replicas &times; what one replica reserves, across every service this
+            component owns. The blocks on the cluster map are per <em>task</em>,
+            which is a different question — that one is "how much of this node is
+            this one replica holding", this one is what the component costs the
+            cluster in capacity it can no longer give to anything else.
+          </p>
         </div>
       </section>
 
@@ -4801,9 +4951,9 @@ ul.tight li { margin-bottom: 2px; }
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis://default:c245893bc02850296ced8ed018cf9d04997ac862b36c835e@sessions_redis:6379</code>
+              <code>redis://default:84e6c4a4e9b22489904c19e21787b0049b38d0211086cafc@sessions_redis:6379</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis://default:c245893bc02850296ced8ed018cf9d04997ac862b36c835e@sessions_redis:6379">Copy</button>
+                      data-copy-text="redis://default:84e6c4a4e9b22489904c19e21787b0049b38d0211086cafc@sessions_redis:6379">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -4814,7 +4964,7 @@ ul.tight li { margin-bottom: 2px; }
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="c245893bc02850296ced8ed018cf9d04997ac862b36c835e">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="84e6c4a4e9b22489904c19e21787b0049b38d0211086cafc">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -6285,9 +6435,9 @@ ul.tight li { margin-bottom: 2px; }
 
             
             <span class="gauge gauge-cpu" style="--v:62.0"
-                  title="CPU reserved: 62.0% — 1.2 of 4 vCPU promised to tasks on this node"></span>
+                  data-tip="CPU reserved: 62.0% — 1.2 of 4 vCPU promised to tasks on this node"></span>
             <span class="gauge gauge-mem" style="--v:48.0"
-                  title="Memory reserved: 48.0% — 1400 MB of 7.6 GB promised to tasks on this node"></span>
+                  data-tip="Memory reserved: 48.0% — 1400 MB of 7.6 GB promised to tasks on this node"></span>
           </div>
         </div>
         
@@ -6308,9 +6458,9 @@ ul.tight li { margin-bottom: 2px; }
 
             
             <span class="gauge gauge-cpu" style="--v:62.0"
-                  title="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks on this node"></span>
+                  data-tip="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks on this node"></span>
             <span class="gauge gauge-mem" style="--v:48.0"
-                  title="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks on this node"></span>
+                  data-tip="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks on this node"></span>
           </div>
         </div>
         
@@ -6331,9 +6481,9 @@ ul.tight li { margin-bottom: 2px; }
 
             
             <span class="gauge gauge-cpu" style="--v:62.0"
-                  title="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks on this node"></span>
+                  data-tip="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks on this node"></span>
             <span class="gauge gauge-mem" style="--v:48.0"
-                  title="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks on this node"></span>
+                  data-tip="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks on this node"></span>
           </div>
         </div>
         
@@ -6354,9 +6504,9 @@ ul.tight li { margin-bottom: 2px; }
 
             
             <span class="gauge gauge-cpu" style="--v:62.0"
-                  title="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks on this node"></span>
+                  data-tip="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks on this node"></span>
             <span class="gauge gauge-mem" style="--v:48.0"
-                  title="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks on this node"></span>
+                  data-tip="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks on this node"></span>
           </div>
         </div>
         
@@ -7634,6 +7784,53 @@ ul.tight li { margin-bottom: 2px; }
   // brings the disabled state of their controls into line with it on load.
   initToggleSections(document);
 
+  // --- tooltips that appear immediately -------------------------------------
+  // The native `title` attribute waits about a second before showing, which is
+  // useless for a gauge you are sweeping across to compare nodes. This is one
+  // element parented to <body> rather than a CSS ::after on the trigger,
+  // because the cluster map scrolls inside an overflow container and an
+  // absolutely positioned tooltip would be clipped by it.
+  var tipEl = null;
+
+  function hideTip() {
+    if (tipEl) { tipEl.classList.remove("is-on"); }
+  }
+
+  function showTip(target) {
+    var text = target.getAttribute("data-tip");
+    if (!text) { return; }
+    if (!tipEl) {
+      tipEl = document.createElement("div");
+      tipEl.className = "tip";
+      tipEl.setAttribute("role", "tooltip");
+      document.body.appendChild(tipEl);
+    }
+    tipEl.textContent = text;                    // never innerHTML
+    tipEl.classList.add("is-on");
+
+    var r = target.getBoundingClientRect();
+    var t = tipEl.getBoundingClientRect();
+    var left = r.left + r.width / 2 - t.width / 2;
+    var top = r.top - t.height - 8;
+    if (top < 4) { top = r.bottom + 8; }         // flip under when it would clip
+    left = Math.max(6, Math.min(left, window.innerWidth - t.width - 6));
+    tipEl.style.transform = "translate(" + Math.round(left) + "px," + Math.round(top) + "px)";
+  }
+
+  document.addEventListener("mouseover", function (ev) {
+    var el = ev.target.closest ? ev.target.closest("[data-tip]") : null;
+    if (el) { showTip(el); }
+  });
+  document.addEventListener("mouseout", function (ev) {
+    if (ev.target.closest && ev.target.closest("[data-tip]")) { hideTip(); }
+  });
+  document.addEventListener("focusin", function (ev) {
+    var el = ev.target.closest ? ev.target.closest("[data-tip]") : null;
+    if (el) { showTip(el); }
+  });
+  document.addEventListener("focusout", hideTip);
+  window.addEventListener("scroll", hideTip, true);
+
   // --- timestamps in the reader's own timezone ------------------------------
   // The server renders UTC, because the server does not know where you are and
   // a wrong local time is worse than an explicit UTC one. Once here, we do
@@ -7721,9 +7918,10 @@ ul.tight li { margin-bottom: 2px; }
     // entirely in the stylesheet.
     el.style.setProperty("--cpu", t.cpu_share);
     el.style.setProperty("--mem", t.mem_share);
-    el.title = t.service + " — task " + t.id + "\nstate: " + t.state +
-               "\nreserves " + t.cpu_share + "% of this node's CPU, " +
-               t.mem_share + "% of its memory";
+    el.setAttribute("data-tip", t.service + " — task " + t.id +
+                    " · state: " + t.state +
+                    " · reserves " + t.cpu_share + "% of this node's CPU and " +
+                    t.mem_share + "% of its memory");
     var dot = document.createElement("i");
     dot.className = "dot dot-" + t.tone;      // what it is DOING; the chip tint
     el.appendChild(dot);                      // already says what it IS
@@ -7770,8 +7968,9 @@ ul.tight li { margin-bottom: 2px; }
         var el = row.querySelector(sel);
         if (!el) { return; }
         el.style.setProperty("--v", value == null ? 0 : value);
-        el.title = label + " reserved: " + (value == null ? "—" : value + "%") +
-                   (absolute ? " — " + absolute : "");
+        el.setAttribute("data-tip",
+                        label + " reserved: " + (value == null ? "—" : value + "%") +
+                        (absolute ? " — " + absolute : ""));
       };
       gauge('[data-f="cpures"]', n.cpu_reserved_pct, "CPU",
             n.cpu_reserved + " of " + n.cpus + " vCPU promised to tasks here");

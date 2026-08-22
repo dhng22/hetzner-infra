@@ -76,9 +76,9 @@
 
             {# bottom-start: CPU reserved. bottom-end: memory reserved. #}
             <span class="gauge gauge-cpu" style="--v:{{ n.cpu_reserved_pct }}"
-                  title="CPU reserved: {{ n.cpu_reserved_pct }}% — {{ n.cpu_reserved }} of {{ n.cpus }} vCPU promised to tasks on this node"></span>
+                  data-tip="CPU reserved: {{ n.cpu_reserved_pct }}% — {{ n.cpu_reserved }} of {{ n.cpus }} vCPU promised to tasks on this node"></span>
             <span class="gauge gauge-mem" style="--v:{{ n.mem_reserved_pct }}"
-                  title="Memory reserved: {{ n.mem_reserved_pct }}% — {{ n.mem_reserved_mb }} MB of {{ n.memory_gb }} GB promised to tasks on this node"></span>
+                  data-tip="Memory reserved: {{ n.mem_reserved_pct }}% — {{ n.mem_reserved_mb }} MB of {{ n.memory_gb }} GB promised to tasks on this node"></span>
           </div>
         </div>
         {% endfor %}
