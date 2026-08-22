@@ -143,7 +143,11 @@ def main():
             grouped=ordered,
             alerts=fixtures.alerts(),
             destination=fixtures.alert_destination(),
-            nodes=fixtures.nodes(),
+            # topology()["nodes"], not nodes(): the Cluster tab renders the
+            # reserved-capacity rings and the per-node task counts, and those
+            # only exist on the topology shape. The live route passes the same
+            # thing, and the preview exists to catch exactly this kind of drift.
+            nodes=fixtures.topology()["nodes"],
             system=fixtures.system_view(),
             topo=fixtures.topology(),
             a=fixtures.autoscaler_state(),

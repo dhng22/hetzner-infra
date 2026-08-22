@@ -10,6 +10,11 @@
   <label for="f-{{ f.name }}">{{ f.label }}</label>
 
   {% if f.kind == "bool" %}
+    {# A checkbox submits nothing when it is off, and the spec is merged over
+       rather than replaced — so without this marker a bool could be switched ON
+       and never OFF again. The marker says "this field was on the form", which
+       is what distinguishes unchecked from absent. #}
+    <input type="hidden" name="__bool__" value="{{ f.name }}">
     <label class="check">
       <input type="checkbox" id="f-{{ f.name }}" name="{{ f.name }}" value="true"
              {% if value %}checked{% endif %}>

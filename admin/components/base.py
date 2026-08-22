@@ -46,7 +46,8 @@ class Field:
 
     def __init__(self, name, label, kind="text", default=None, help="",
                  required=False, choices=(), minimum=None, maximum=None,
-                 placeholder="", secret=False, immutable=False, managed=None):
+                 placeholder="", secret=False, immutable=False, managed=None,
+                 group=None):
         self.name = name
         self.label = label
         self.kind = kind          # text | number | bool | choice | port | cpu | memory
@@ -67,6 +68,11 @@ class Field:
         # is worse than no form. Still shown at CREATE, where the value is the
         # only one anybody has.
         self.managed = managed
+        # Which section of the settings form this belongs in. Everything
+        # ungrouped is plain configuration; a group is rendered as its own
+        # panel, which is how the scaling policy stopped being twelve more
+        # inputs in a list of twenty.
+        self.group = group
 
     def coerce(self, raw):
         """Text (from a form or argv) to the stored type. Raises ValueError."""

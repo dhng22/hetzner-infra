@@ -47,7 +47,7 @@ def workload(name, cores=0.5, mb=384, **policy):
         policy=A.policy_from_labels(name, labels, spec_replicas),
         spec_replicas=spec_replicas, cost=res(cores, mb), cpu_limit=cores * 2,
         pinned=False, rolling=False, component=name.split("_")[0],
-        rolled_back=False,
+        rolled_back=False, placement_pinned=False,
     )
 
 

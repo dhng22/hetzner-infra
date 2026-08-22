@@ -290,8 +290,12 @@ def components_index():
     order = ["Application", "Data"]
     ordered = ([(c, grouped[c]) for c in order if c in grouped]
                + [(c, v) for c, v in grouped.items() if c not in order])
+    # The infrastructure catalog lives here rather than on the Cluster tab.
+    # Both are things running in this cluster, and the question "what is
+    # deployed" has one answer; Cluster is about the machines underneath.
     return render_template("page_components.html", section="components",
-                           grouped=ordered, views=views, new_groups=components.groups())
+                           grouped=ordered, views=views, new_groups=components.groups(),
+                           system=data.system_view(), stacks=catalog.SYSTEM_STACKS)
 
 
 @app.get("/components/new")
@@ -318,7 +322,7 @@ def component_create():
     cls = components.TYPES[type_name]
 
     try:
-        component, problems = components.create(type_name, name, request.form)
+        component, problems = components.create(type_name, name, _form_spec(request.form))
     except components.ComponentError as exc:
         problems, component = [str(exc)], None
 
@@ -340,6 +344,23 @@ def component_create():
     else:
         flash(f"Created {name}. It is not deployed yet.", "ok")
     return redirect(_component_href(name))
+
+
+def _form_spec(form):
+    """
+    Form values as a plain dict, with an unchecked checkbox meaning False.
+
+    components.update() merges over the stored spec, which is what makes it safe
+    to leave managed fields off the form — but it also meant a bool that was
+    simply absent kept its old value, so `autoscale` could be turned on and
+    never off. Each bool renders a hidden `__bool__` marker naming itself; a
+    name that is marked but not present was unchecked.
+    """
+    data = form.to_dict()
+    data.pop("__bool__", None)
+    for name in form.getlist("__bool__"):
+        data[name] = name in form
+    return data
 
 
 #: Tabs whose content this route fetches only when they are the open tab. They
@@ -455,7 +476,7 @@ def save_component_spec(name):
     _require_csrf()
     _no_writes_in_preview()
     _load(name)
-    component, problems = components.update(name, request.form)
+    component, problems = components.update(name, _form_spec(request.form))
     if problems:
         for problem in problems:
             flash(problem, "bad")
@@ -613,9 +634,9 @@ def save_registry():
 @app.get("/cluster")
 @auth.login_required
 def cluster():
+    # Nodes only. The infrastructure services moved to the Components tab.
     return render_template("page_cluster.html", section="cluster",
-                           nodes=data.nodes(), s=data.summary(),
-                           system=data.system_view())
+                           nodes=data.topology()["nodes"], s=data.summary())
 
 
 @app.post("/cluster/stack")
@@ -629,7 +650,7 @@ def deploy_system():
         abort(400, "Not an infrastructure stack.")
     ok, output = data.deploy_system_stack(stack)
     flash(output or (f"{stack} redeployed." if ok else "Failed."), "ok" if ok else "bad")
-    return redirect(url_for("cluster"))
+    return redirect(url_for("components_index"))
 
 
 @app.get("/autoscaler")

@@ -136,19 +136,23 @@ def nodes():
         {"id": "k39dl2mzq018", "full_id": "k39dl2mzq018aa", "hostname": "aichat-master",
          "role": "manager", "state": "ready",
          "availability": "active", "tone": "ok", "cpus": 4, "memory_gb": 7.6,
-         "engine": "27.3.1", "addr": "10.0.0.2"},
+         "engine": "27.3.1", "cpu_reserved": 1.2, "mem_reserved_mb": 1400,
+         "cpu_reserved_pct": 62.0, "mem_reserved_pct": 48.0, "addr": "10.0.0.2"},
         {"id": "w1af02c9be47", "full_id": "w1af02c9be47aa",
          "hostname": "aichat-worker-1754812203", "role": "worker",
          "state": "ready", "availability": "active", "tone": "ok", "cpus": 3, "memory_gb": 3.8,
-         "engine": "27.3.1", "addr": "10.0.0.5"},
+         "engine": "27.3.1", "cpu_reserved": 1.2, "mem_reserved_mb": 1400,
+         "cpu_reserved_pct": 62.0, "mem_reserved_pct": 48.0, "addr": "10.0.0.5"},
         {"id": "w2bc71d0aa93", "full_id": "w2bc71d0aa93aa",
          "hostname": "aichat-worker-1754819114", "role": "worker",
          "state": "ready", "availability": "active", "tone": "ok", "cpus": 3, "memory_gb": 3.8,
-         "engine": "27.3.1", "addr": "10.0.0.6"},
+         "engine": "27.3.1", "cpu_reserved": 1.2, "mem_reserved_mb": 1400,
+         "cpu_reserved_pct": 62.0, "mem_reserved_pct": 48.0, "addr": "10.0.0.6"},
         {"id": "w3de92f1cc05", "full_id": "w3de92f1cc05aa",
          "hostname": "aichat-worker-1754823887", "role": "worker",
          "state": "ready", "availability": "drain", "tone": "warn", "cpus": 3, "memory_gb": 3.8,
-         "engine": "27.3.1", "addr": "10.0.0.7"},
+         "engine": "27.3.1", "cpu_reserved": 1.2, "mem_reserved_mb": 1400,
+         "cpu_reserved_pct": 62.0, "mem_reserved_pct": 48.0, "addr": "10.0.0.7"},
     ]
 
 
@@ -180,9 +184,26 @@ def _tasks(spec):
     for name, count in spec:
         band, key = _BAND_OF.get(name, ("observability", "observe"))
         full = _SERVICE_OF.get(name, f"monitoring_{name}")
+        # Varied so the preview exercises every branch the live panel can hit:
+        # a failing task, a starting one, and a range of reservation sizes.
+        states = ["running"] * count
+        if name == "api" and count > 2:
+            states[-1] = "starting"
+        if name == "api-staging":
+            states[0] = "failed"
         for i in range(count):
+            state = states[i]
+            share = {"victoriametrics": (7.5, 10.1), "loki": (5.0, 8.4),
+                     "api": (18.0, 12.0), "grafana": (2.5, 3.4),
+                     "cache": (10.5, 16.8)}.get(name, (1.5, 2.5))
             out.append({"id": f"{name[:6]}{i}kd93jf01"[:12], "name": name,
-                        "service": full, "band": band, "key": key})
+                        "service": full, "band": band, "key": key,
+                        "state": state,
+                        "tone": {"running": "ok", "starting": "warn",
+                                 "failed": "bad"}.get(state, "mute"),
+                        "cpu_res": int(share[0] / 100 * 4e9),
+                        "mem_res": int(share[1] / 100 * 7.6 * 1024 ** 3),
+                        "cpu_share": share[0], "mem_share": share[1]})
     out.sort(key=lambda x: (rank.get(x["band"], 99), x["name"], x["id"]))
     return out
 

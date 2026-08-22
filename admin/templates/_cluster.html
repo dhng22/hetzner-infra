@@ -30,96 +30,65 @@
 </div>
 
 <section class="panel">
-  <div class="panel-head"><h2>Nodes</h2></div>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Hostname</th><th>Role</th><th>State</th><th>Availability</th>
-          <th>Address</th><th class="num">vCPU</th><th class="num">Memory</th><th>Engine</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for n in nodes %}
-        <tr>
-          <td><strong>{{ n.hostname }}</strong><div class="row-sub">{{ n.id }}</div></td>
-          <td><span class="pill {{ 'ok' if n.role == 'manager' else 'mute' }} plain">{{ n.role }}</span></td>
-          <td><span class="pill {{ n.tone }}">{{ n.state }}</span></td>
-          <td class="mono {{ 'muted' if n.availability == 'active' }}">{{ n.availability }}</td>
-          <td class="mono">{{ n.addr }}</td>
-          <td class="num">{{ n.cpus }}</td>
-          <td class="num">{{ n.memory_gb }} GB</td>
-          <td class="mono muted">{{ n.engine }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  <div class="panel-head">
+    <h2>Nodes</h2>
+    <span class="spacer"></span>
+    <span class="legend-item"><i class="gauge-key gauge-key-cpu"></i>CPU reserved</span>
+    <span class="legend-item"><i class="gauge-key gauge-key-mem"></i>memory reserved</span>
   </div>
+
+  <p class="panel-intro">
+    The two rings on each node are <strong>reserved</strong> capacity, not usage. A full ring
+    means every core or byte on that machine is already promised to something, and no further
+    replica can be placed there however idle it looks — a node routinely reads 4% busy while
+    being 100% reserved. This is the pair the autoscaler buys and deletes servers on.
+  </p>
+
+  <div class="tree-scroll">
+    <div class="tree">
+      <div class="tree-top">
+        <div class="tnode tnode-root">
+          <span class="tnode-title">{{ cluster_name }}</span>
+          <span class="tnode-sub">
+            <b>{{ nodes|length }}</b> node{{ '' if nodes|length == 1 else 's' }}
+            · <b>{{ nodes|sum(attribute='cpus') }}</b> vCPU
+            · <b>{{ nodes|sum(attribute='memory_gb')|round(1) }}</b> GB
+          </span>
+        </div>
+      </div>
+
+      <div class="tree-kids">
+        {% for n in nodes %}
+        <div class="tree-branch">
+          <div class="tnode tnode-host has-gauges {{ 'is-manager' if n.role == 'manager' }}">
+            <span class="tnode-head">
+              <span class="pill {{ 'accent' if n.role == 'manager' else n.tone }}">{{ n.role }}</span>
+              <span class="pill {{ n.tone }}">{{ n.state }}</span>
+              {% if n.availability != 'active' %}<span class="pill warn">{{ n.availability }}</span>{% endif %}
+            </span>
+            <span class="tnode-title" title="{{ n.hostname }}">{{ n.hostname }}</span>
+            <span class="tnode-sub mono">{{ n.addr }} · {{ n.cpus }} vCPU · {{ n.memory_gb }} GB</span>
+            <span class="tnode-sub muted">{{ n.tasks_total }} tasks · engine {{ n.engine }}</span>
+            <span class="tnode-meters">
+              <span title="node CPU utilisation">used cpu <b>{% if n.cpu_pct is not none %}{{ n.cpu_pct|round|int }}%{% else %}—{% endif %}</b></span>
+              <span title="node memory utilisation">used mem <b>{% if n.mem_pct is not none %}{{ n.mem_pct|round|int }}%{% else %}—{% endif %}</b></span>
+            </span>
+
+            {# bottom-start: CPU reserved. bottom-end: memory reserved. #}
+            <span class="gauge gauge-cpu" style="--v:{{ n.cpu_reserved_pct }}"
+                  title="CPU reserved: {{ n.cpu_reserved_pct }}% — {{ n.cpu_reserved }} of {{ n.cpus }} vCPU promised to tasks on this node"></span>
+            <span class="gauge gauge-mem" style="--v:{{ n.mem_reserved_pct }}"
+                  title="Memory reserved: {{ n.mem_reserved_pct }}% — {{ n.mem_reserved_mb }} MB of {{ n.memory_gb }} GB promised to tasks on this node"></span>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
   <div class="panel-note">
     A worker in <code>drain</code> is being removed: its tasks have been rescheduled and the
     server is deleted once they have all left, plus a grace period for the tunnel connector
     to release its edge connections.
-  </div>
-</section>
-
-<div class="page-head section-gap">
-  <div>
-    <h1 class="sub">Infrastructure</h1>
-    <p>The three stacks that come up before anything else exists. They are shown read-only:
-       they have no spec file and no delete button, because they are the thing that runs
-       your components. Redeploying one re-applies its file and nothing else.</p>
-  </div>
-</div>
-
-{% for category, group in system %}
-<section class="panel">
-  <div class="panel-head">
-    <h2>{{ category }}</h2>
-    <span class="spacer"></span>
-    <span class="muted">{{ group|length }}</span>
-  </div>
-  <div class="rows">
-    {% for entry in group %}
-    {% set access = system_access(entry) %}
-    <div class="row {{ entry.tone }}">
-      <span class="stripe"></span>
-      <span>
-        <span class="row-title">{{ entry.display }}</span>
-        <span class="row-sub">{{ entry.blurb }}</span>
-      </span>
-      <span class="row-metric hide-sm">
-        <span class="k">Tasks</span>
-        <span class="v num">{{ entry.svc.running }}/{{ entry.svc.desired }}</span>
-      </span>
-      {% if access and access.reachable %}
-      <a class="btn btn-sm" href="{{ access.url }}" target="_blank" rel="noopener">Open</a>
-      {% elif access %}
-      <span class="pill mute plain mono" title="{{ access.note }}">{{ access.url }}</span>
-      {% endif %}
-      <span class="pill {{ entry.tone }}">{{ entry.svc.state }}</span>
-    </div>
-    {% endfor %}
-  </div>
-</section>
-{% endfor %}
-
-<section class="panel">
-  <div class="panel-head"><h2>Redeploy a stack</h2></div>
-  <div class="panel-body">
-    <div class="btn-row">
-      {% for stack in ['monitoring', 'ingress', 'admin'] %}
-      <form method="post" action="{{ stack_href() }}" {% if preview %}data-preview{% endif %}
-            data-confirm="Re-apply the {{ stack }} stack file?">
-        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-        <input type="hidden" name="stack" value="{{ stack }}">
-        <button class="btn" type="submit">{{ stack }}</button>
-      </form>
-      {% endfor %}
-    </div>
-    <p class="hint">
-      Safe to run at any time: these stacks hold no state anything else owns. Your components
-      are not stacks in this sense and are not touched — each one deploys itself, reading its
-      live image and replica count back first.
-    </p>
   </div>
 </section>

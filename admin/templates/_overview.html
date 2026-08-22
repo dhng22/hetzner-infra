@@ -64,7 +64,9 @@
     carry none.
   </p>
 
-  <!-- Colour groups the blocks; the name on each block is what identifies it. -->
+  <!-- Colour groups the blocks; the name on each block is what identifies it.
+       The dot on each block is its task state, and the ring and fill are what
+       it reserves of the node it sits on. -->
   <div class="legend" data-topo-legend>
     {% for b in topo.bands %}
       <span class="legend-item"><i class="sw sw-{{ b.key }}"></i>{{ b.band }}</span>
@@ -88,7 +90,7 @@
       <div class="tree-kids">
         {% for n in topo.nodes %}
           <div class="tree-branch" data-node="{{ n.id }}">
-            <div class="tnode tnode-host {{ 'is-manager' if n.role == 'manager' }}">
+            <div class="tnode tnode-host has-gauges {{ 'is-manager' if n.role == 'manager' }}">
               <span class="tnode-head">
                 <span class="pill {{ 'accent' if n.role == 'manager' else n.tone }}">{{ n.role }}</span>
                 {% if n.availability != 'active' %}<span class="pill warn">{{ n.availability }}</span>{% endif %}
@@ -98,19 +100,33 @@
                 <b data-f="tasks">{{ n.tasks_total }}</b> tasks · {{ n.cpus }} vCPU · {{ n.memory_gb }} GB
               </span>
               <span class="tnode-meters">
-                <span title="node CPU utilisation">cpu <b data-f="cpu">{% if n.cpu_pct is not none %}{{ n.cpu_pct|round|int }}%{% else %}—{% endif %}</b></span>
-                <span title="node memory utilisation">mem <b data-f="mem">{% if n.mem_pct is not none %}{{ n.mem_pct|round|int }}%{% else %}—{% endif %}</b></span>
+                <span title="node CPU utilisation — how busy it is right now">cpu <b data-f="cpu">{% if n.cpu_pct is not none %}{{ n.cpu_pct|round|int }}%{% else %}—{% endif %}</b></span>
+                <span title="node memory utilisation — how much is in use right now">mem <b data-f="mem">{% if n.mem_pct is not none %}{{ n.mem_pct|round|int }}%{% else %}—{% endif %}</b></span>
               </span>
+
+              {# Reserved, not used: the pair that decides whether anything else
+                 can be placed here. A node can be 4% busy and 100% reserved. #}
+              <span class="gauge gauge-cpu" data-f="cpures" style="--v:{{ n.cpu_reserved_pct }}"
+                    title="CPU reserved: {{ n.cpu_reserved_pct }}% — {{ n.cpu_reserved }} of {{ n.cpus }} vCPU promised to tasks here"></span>
+              <span class="gauge gauge-mem" data-f="memres" style="--v:{{ n.mem_reserved_pct }}"
+                    title="Memory reserved: {{ n.mem_reserved_pct }}% — {{ n.mem_reserved_mb }} MB of {{ n.memory_gb }} GB promised to tasks here"></span>
             </div>
 
             <!-- data-sig matches the signature the poller computes, so the first
                  tick on an unchanged cluster rebuilds nothing at all. -->
             <div class="slots" data-slots
-                 data-sig="{% for t in n.tasks %}{{ t.name }}|{{ t.key }};{% endfor %}">
+                 data-sig="{% for t in n.tasks %}{{ t.name }}|{{ t.key }}|{{ t.tone }}|{{ t.cpu_share }}|{{ t.mem_share }};{% endfor %}">
               {% for t in n.tasks %}
+                {# The chip's own colour already says WHAT this is, so the dot
+                   is spent on what it is DOING. The ring is the share of this
+                   machine's CPU the task reserves — a full ring means it has
+                   claimed the whole box — and the fill behind the label is the
+                   same for memory, laid over the band colour rather than
+                   replacing it. #}
                 <span class="slot slot-{{ t.key }}" tabindex="0"
-                      title="{{ t.service }} — task {{ t.id }} on {{ n.hostname }}">
-                  <i class="sw sw-{{ t.key }}"></i>{{ t.name }}
+                      style="--cpu:{{ t.cpu_share }};--mem:{{ t.mem_share }}"
+                      title="{{ t.service }} — task {{ t.id }} on {{ n.hostname }}&#10;state: {{ t.state }}&#10;reserves {{ t.cpu_share }}% of this node's CPU, {{ t.mem_share }}% of its memory">
+                  <i class="dot dot-{{ t.tone }}" aria-hidden="true"></i>{{ t.name }}
                 </span>
               {% else %}
                 <span class="slot is-empty">no running tasks</span>

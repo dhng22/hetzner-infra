@@ -520,8 +520,47 @@ def logs(service_name, lines=200):
 
 # --- cluster ---------------------------------------------------------------
 
+def _reserved_fields(reserved, node_cpu, node_mem):
+    """The reserved pair as absolutes AND as a percentage of the machine."""
+    cpu_res, mem_res = reserved
+    return {
+        "cpu_reserved": round(cpu_res / 1e9, 2),
+        "mem_reserved_mb": mem_res // (1024 * 1024),
+        "cpu_reserved_pct": round(cpu_res / node_cpu * 100, 1) if node_cpu else 0,
+        "mem_reserved_pct": round(mem_res / node_mem * 100, 1) if node_mem else 0,
+    }
+
+
+def node_reservations():
+    """
+    {node id: (reserved nanocores, reserved bytes)} across running tasks.
+
+    Reserved, not used. Whether another replica fits on a box is decided by
+    what is already promised on it, and a node can read 4% busy while having no
+    room at all — which is exactly the state that had a worker billed to hold
+    one idle replica while the master looked empty.
+    """
+    totals = {}
+    try:
+        tasks = client().api.tasks(filters={"desired-state": "running"})
+    except Exception:
+        return totals
+    for t in tasks:
+        if (t.get("Status") or {}).get("State") != "running":
+            continue
+        node_id = t.get("NodeID")
+        if not node_id:
+            continue
+        res = ((t.get("Spec") or {}).get("Resources") or {}).get("Reservations") or {}
+        cpu, mem = totals.get(node_id, (0, 0))
+        totals[node_id] = (cpu + int(res.get("NanoCPUs", 0) or 0),
+                           mem + int(res.get("MemoryBytes", 0) or 0))
+    return totals
+
+
 def nodes():
     out = []
+    reserved = node_reservations()
     try:
         for n in client().nodes.list():
             attrs, spec = n.attrs, n.attrs.get("Spec", {})
@@ -544,6 +583,9 @@ def nodes():
                 "memory_gb": round((resources.get("MemoryBytes", 0) or 0) / 1024 ** 3, 1),
                 "engine": desc.get("Engine", {}).get("EngineVersion", "—"),
                 "addr": attrs.get("Status", {}).get("Addr", "—"),
+                **_reserved_fields(reserved.get(n.id, (0, 0)),
+                                   resources.get("NanoCPUs", 0) or 0,
+                                   resources.get("MemoryBytes", 0) or 0),
             })
     except Exception:
         pass
@@ -576,6 +618,17 @@ PLATFORM_BAND = ("platform", "platform")
 #: band label -> colour key, for the legend. One dict so the chart and the
 #: legend cannot disagree about which hue means what.
 _BAND_KEYS = dict([*_SYSTEM_BANDS.values(), *_TYPE_BANDS.values(), PLATFORM_BAND])
+
+
+#: Task state -> tone. The chip's background already carries what a task IS;
+#: this is what it is DOING, which is the thing you scan a node for.
+_TASK_TONES = {
+    "running": "ok",
+    "starting": "warn", "preparing": "warn", "ready": "warn",
+    "assigned": "warn", "accepted": "warn", "pending": "warn", "new": "warn",
+    "failed": "bad", "rejected": "bad", "orphaned": "bad",
+    "shutdown": "mute", "complete": "mute", "remove": "mute",
+}
 
 
 def _band_of(service_name, component_types=None):
@@ -643,19 +696,30 @@ def topology():
 
     by_node = {}
     for t in tasks:
-        if t.get("Status", {}).get("State") != "running":
+        state = t.get("Status", {}).get("State")
+        if state != "running":
             continue
         node_id = t.get("NodeID")
         if not node_id:
             continue
         full = svc_names.get(t.get("ServiceID"), "unknown")
         band, key = _band_of(full, types)
+        # What this task RESERVES, which is the number placement is decided on.
+        # Utilisation says how busy a box is; reservation says whether another
+        # replica can go on it at all, and the two routinely disagree by an
+        # order of magnitude — a node can read 4% busy and still have no room.
+        res = (t.get("Spec", {}) or {}).get("Resources", {}) or {}
+        reservations = res.get("Reservations") or {}
         by_node.setdefault(node_id, []).append({
             "id": (t.get("ID") or "")[:12],
             "name": short_service(full),
             "service": full,
             "band": band,
             "key": key,
+            "state": state,
+            "tone": _TASK_TONES.get(state, "mute"),
+            "cpu_res": int(reservations.get("NanoCPUs", 0) or 0),
+            "mem_res": int(reservations.get("MemoryBytes", 0) or 0),
         })
 
     cpu = vm_query_by('100 - (avg by (instance) '
@@ -666,12 +730,22 @@ def topology():
     out = []
     for n in nodes():
         items = by_node.get(n["full_id"], [])
+        node_cpu = (n.get("cpus") or 0) * 1_000_000_000
+        node_mem = (n.get("memory_gb") or 0) * 1024 ** 3
+        for it in items:
+            # As a fraction of the machine, so a chip can draw "how much of this
+            # box am I holding" without the template doing arithmetic.
+            it["cpu_share"] = round(it["cpu_res"] / node_cpu * 100, 1) if node_cpu else 0
+            it["mem_share"] = round(it["mem_res"] / node_mem * 100, 1) if node_mem else 0
         # Grouped by band, then by name, so replicas of one service sit together
         # and the bands read as blocks without needing colour to do the work.
         items.sort(key=lambda x: (band_rank.get(x["band"], 99), x["name"], x["id"]))
         counts = {}
         for it in items:
             counts[it["name"]] = counts.get(it["name"], 0) + 1
+        # The reserved pair comes from nodes() via **n — one source, so the
+        # Cluster tab and the Overview map cannot disagree about whether a box
+        # is full.
         out.append({
             **n,
             "tasks_total": len(items),

@@ -828,8 +828,12 @@ def index_tasks():
 
 Workload = namedtuple("Workload", [
     "name", "id", "policy", "spec_replicas", "cost", "cpu_limit", "pinned",
-    "rolling", "component", "rolled_back",
+    "rolling", "component", "rolled_back", "placement_pinned",
 ])
+
+#: Set by a component whose placement was chosen by hand in the panel. The
+#: autoscaler reads it and stops moving that service between master and workers.
+PLACEMENT_PIN_LABEL = "infra.placement.pinned"
 
 WORKER_CONSTRAINT = "node.role==worker"
 # Swarm normalises whitespace differently across versions, so recognise any
@@ -932,6 +936,7 @@ def discover_workloads():
                 pinned=is_pinned(service), rolling=update_in_progress(service),
                 component=labels.get(COMPONENT_LABEL, service.name.split("_")[0]),
                 rolled_back=update_rolled_back(service),
+                placement_pinned=labels.get(PLACEMENT_PIN_LABEL) == "true",
             ))
         except Exception as exc:  # noqa: BLE001
             M_ERRORS.labels(stage="discovery").inc()
@@ -1304,6 +1309,12 @@ def reconcile_placement(workloads, want_pinned, reason, skip_rolling=True):
     """
     changed = []
     for w in workloads:
+        if w.placement_pinned:
+            # Somebody chose this placement deliberately. Moving it anyway would
+            # make the setting in the panel a lie, and for a component pinned to
+            # the master that is the difference between "stays put" and "gets
+            # migrated onto a worker that is about to be deleted".
+            continue
         if w.pinned == want_pinned:
             continue
         if skip_rolling and w.rolling:

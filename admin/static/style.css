@@ -36,6 +36,10 @@
   --ok:   var(--grass);
   --warn: var(--sodium);
   --bad:  var(--ember);
+  /* Reserved-capacity gauges: red is CPU, blue is memory. Blue is its own token
+     rather than the accent, because the accent already means "interactive" and
+     a gauge is not something you click. */
+  --info: #4f8ff0;
 
   --rail: 252px;
   --r-sm: 5px;
@@ -80,6 +84,7 @@
     --ok:   #3f9757;
     --warn: #ad741a;
     --bad:  #c4453c;
+    --info: #2f6fd0;
   }
 }
 
@@ -88,14 +93,14 @@
   --bg: #eff4f6; --surface: #ffffff; --surface-2: #f4f8f9; --line: #d6e2e7;
   --text: #16242b; --text-mute: #5a6f7a; --accent: #0e9c90; --accent-ink: #fff;
   --shadow: 0 1px 2px rgb(16 40 50 / .06), 0 8px 24px -14px rgb(16 40 50 / .22);
-  --ok: #3f9757; --warn: #ad741a; --bad: #c4453c;
+  --ok: #3f9757; --warn: #ad741a; --bad: #c4453c; --info: #2f6fd0;
 }
 :root[data-theme="dark"] {
   --bg: var(--abyss); --surface: var(--steel); --surface-2: var(--steel-2);
   --line: var(--hairline); --text: var(--chalk); --text-mute: var(--mist);
   --accent: var(--beacon); --accent-ink: #04211f;
   --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 8px 24px -12px rgb(0 0 0 / .6);
-  --ok: var(--grass); --warn: var(--sodium); --bad: var(--ember);
+  --ok: var(--grass); --warn: var(--sodium); --bad: var(--ember); --info: #4f8ff0;
 }
 
 /* The panel's own theme button writes a class to <body>, not <html>.
@@ -106,14 +111,14 @@ body.theme-light {
   --bg: #eff4f6; --surface: #ffffff; --surface-2: #f4f8f9; --line: #d6e2e7;
   --text: #16242b; --text-mute: #5a6f7a; --accent: #0e9c90; --accent-ink: #fff;
   --shadow: 0 1px 2px rgb(16 40 50 / .06), 0 8px 24px -14px rgb(16 40 50 / .22);
-  --ok: #3f9757; --warn: #ad741a; --bad: #c4453c;
+  --ok: #3f9757; --warn: #ad741a; --bad: #c4453c; --info: #2f6fd0;
 }
 body.theme-dark {
   --bg: var(--abyss); --surface: var(--steel); --surface-2: var(--steel-2);
   --line: var(--hairline); --text: var(--chalk); --text-mute: var(--mist);
   --accent: var(--beacon); --accent-ink: #04211f;
   --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 8px 24px -12px rgb(0 0 0 / .6);
-  --ok: var(--grass); --warn: var(--sodium); --bad: var(--ember);
+  --ok: var(--grass); --warn: var(--sodium); --bad: var(--ember); --info: #4f8ff0;
 }
 
 * { box-sizing: border-box; }
@@ -661,19 +666,122 @@ ul.tight li { margin-bottom: 2px; }
 }
 .slot.is-empty { color: var(--text-mute); font-style: italic; border-style: dashed; }
 
-/* Tint per band. Kept low so the mono label stays the loudest thing in the
-   block; the dot is the saturated mark. */
-.slot-prod     { background: color-mix(in srgb, var(--s-prod) 14%, var(--surface));
-                 border-color: color-mix(in srgb, var(--s-prod) 34%, transparent); }
-.slot-staging  { background: color-mix(in srgb, var(--s-staging) 14%, var(--surface));
-                 border-color: color-mix(in srgb, var(--s-staging) 34%, transparent); }
-.slot-data     { background: color-mix(in srgb, var(--s-data) 14%, var(--surface));
-                 border-color: color-mix(in srgb, var(--s-data) 34%, transparent); }
-.slot-observe  { background: color-mix(in srgb, var(--s-observe) 14%, var(--surface));
-                 border-color: color-mix(in srgb, var(--s-observe) 34%, transparent); }
-.slot-platform { background: color-mix(in srgb, var(--s-platform) 14%, var(--surface));
-                 border-color: color-mix(in srgb, var(--s-platform) 34%, transparent); }
+
+/* --- reserved capacity --------------------------------------------------- */
+/* RESERVED, not used. Whether another replica fits on a box is decided by what
+   is already promised on it, and the two numbers routinely disagree by an order
+   of magnitude — a node reading 4% busy can be 100% reserved and take nothing
+   more. Red is CPU, blue is memory, a full circle is a full machine. */
+.gauge {
+  --v: 0;
+  position: absolute; bottom: 8px;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: conic-gradient(var(--gauge-fill) calc(var(--v) * 1%),
+                             var(--gauge-track) 0);
+  cursor: help;
+}
+/* The hole, so it reads as a ring rather than a pie. Filled with the card's own
+   background so it disappears into whatever surface it sits on. */
+.gauge::after {
+  content: ""; position: absolute; inset: 4px; border-radius: 50%;
+  background: var(--surface);
+}
+.gauge-cpu { inset-inline-start: 10px; --gauge-fill: var(--bad);
+             --gauge-track: color-mix(in srgb, var(--bad) 18%, transparent); }
+.gauge-mem { inset-inline-end: 10px;  --gauge-fill: var(--info);
+             --gauge-track: color-mix(in srgb, var(--info) 18%, transparent); }
+.tnode.has-gauges { position: relative; padding-bottom: 30px; }
+.tnode-root .gauge::after,
+.tnode-host .gauge::after { background: var(--surface-2); }
+.tnode-host.is-manager .gauge::after { background: var(--surface); }
+
+.gauge-key { width: 10px; height: 10px; border-radius: 50%; flex: none;
+             display: inline-block; }
+.gauge-key-cpu { background: var(--bad); }
+.gauge-key-mem { background: var(--info); }
+
+/* --- task state, and what a task reserves -------------------------------- */
+/* The chip's tint already says what a task IS, so the dot says what it is
+   DOING. */
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: block; }
+.dot-ok   { background: var(--ok); }
+.dot-warn { background: var(--warn); }
+.dot-bad  { background: var(--bad); }
+.dot-mute { background: var(--text-mute); }
+
+/* The ring is the share of the node's CPU this task reserves; a complete ring
+   means it has claimed the whole machine. Drawn as a conic gradient in the
+   border box, so it follows the chip's rounded corners instead of needing a
+   second element. */
+.slot {
+  --cpu: 0; --mem: 0;
+  border: 2px solid transparent;
+  background:
+    /* memory fill, laid OVER the band tint so the type colour survives */
+    linear-gradient(90deg,
+      color-mix(in srgb, var(--text) 12%, transparent) calc(var(--mem) * 1%),
+      transparent 0) padding-box,
+    linear-gradient(var(--slot-bg, var(--surface-2)), var(--slot-bg, var(--surface-2))) padding-box,
+    conic-gradient(from 180deg,
+      var(--slot-ring, var(--accent)) calc(var(--cpu) * 1%),
+      color-mix(in srgb, var(--line) 70%, transparent) 0) border-box;
+}
+.slot-prod     { --slot-bg: color-mix(in srgb, var(--s-prod) 14%, var(--surface));
+                 --slot-ring: var(--s-prod); }
+.slot-staging  { --slot-bg: color-mix(in srgb, var(--s-staging) 14%, var(--surface));
+                 --slot-ring: var(--s-staging); }
+.slot-data     { --slot-bg: color-mix(in srgb, var(--s-data) 14%, var(--surface));
+                 --slot-ring: var(--s-data); }
+.slot-observe  { --slot-bg: color-mix(in srgb, var(--s-observe) 14%, var(--surface));
+                 --slot-ring: var(--s-observe); }
+.slot-platform { --slot-bg: color-mix(in srgb, var(--s-platform) 14%, var(--surface));
+                 --slot-ring: var(--s-platform); }
+.slot.is-empty { --slot-bg: transparent; }
 
 @media (max-width: 720px) {
   .topo-facts { margin-left: 0; gap: 10px; }
 }
+
+/* --- a section with its own on/off switch -------------------------------- */
+/* The switch lives in the panel title because it decides whether everything
+   below it means anything; as the first of thirteen inputs it read as just
+   another setting. */
+.switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+          user-select: none; }
+.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.switch-track { width: 34px; height: 18px; border-radius: 999px; flex: none;
+                background: color-mix(in srgb, var(--text-mute) 40%, transparent);
+                position: relative; transition: background .15s ease; }
+.switch-track::after { content: ""; position: absolute; top: 2px; inset-inline-start: 2px;
+                       width: 14px; height: 14px; border-radius: 50%;
+                       background: var(--surface); transition: transform .15s ease; }
+.switch input:checked + .switch-track { background: var(--accent); }
+.switch input:checked + .switch-track::after { transform: translateX(16px); }
+.switch input:focus-visible + .switch-track { outline: 2px solid var(--accent);
+                                              outline-offset: 2px; }
+.switch-label { font: 600 12px/1 var(--mono); color: var(--text-mute); }
+
+/* Off: still readable, plainly inert. Not hidden — the values are worth seeing
+   even when nothing is acting on them. */
+[data-toggle-section].is-off [data-toggle-body] { opacity: .45; }
+[data-toggle-section].is-off [data-toggle-body] input,
+[data-toggle-section].is-off [data-toggle-body] select { cursor: not-allowed; }
+
+/* --- the running image, in the page header ------------------------------- */
+/* What is deployed belongs where you look for identity, not buried in a
+   settings list — for an application it changes every time CI ships. */
+.head-image { display: flex; align-items: center; gap: 8px; margin-top: 6px;
+              font-size: 12px; flex-wrap: wrap; }
+.head-image code { font: 500 12px/1.4 var(--mono); color: var(--text);
+                   background: var(--surface-2); border: 1px solid var(--line);
+                   border-radius: var(--r-sm); padding: 2px 6px;
+                   max-width: 46ch; overflow: hidden; text-overflow: ellipsis;
+                   white-space: nowrap; }
+.btn-xs { padding: 1px 6px; font-size: 11px; }
+
+/* --- an edit control living inside a read-only card ---------------------- */
+.inline-form { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.inline-form select, .inline-form input[type="text"] { min-width: 0; flex: 1 1 12ch; }
+
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+           overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }

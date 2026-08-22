@@ -76,6 +76,10 @@
   --ok:   var(--grass);
   --warn: var(--sodium);
   --bad:  var(--ember);
+  /* Reserved-capacity gauges: red is CPU, blue is memory. Blue is its own token
+     rather than the accent, because the accent already means "interactive" and
+     a gauge is not something you click. */
+  --info: #4f8ff0;
 
   --rail: 252px;
   --r-sm: 5px;
@@ -120,6 +124,7 @@
     --ok:   #3f9757;
     --warn: #ad741a;
     --bad:  #c4453c;
+    --info: #2f6fd0;
   }
 }
 
@@ -128,14 +133,14 @@
   --bg: #eff4f6; --surface: #ffffff; --surface-2: #f4f8f9; --line: #d6e2e7;
   --text: #16242b; --text-mute: #5a6f7a; --accent: #0e9c90; --accent-ink: #fff;
   --shadow: 0 1px 2px rgb(16 40 50 / .06), 0 8px 24px -14px rgb(16 40 50 / .22);
-  --ok: #3f9757; --warn: #ad741a; --bad: #c4453c;
+  --ok: #3f9757; --warn: #ad741a; --bad: #c4453c; --info: #2f6fd0;
 }
 :root[data-theme="dark"] {
   --bg: var(--abyss); --surface: var(--steel); --surface-2: var(--steel-2);
   --line: var(--hairline); --text: var(--chalk); --text-mute: var(--mist);
   --accent: var(--beacon); --accent-ink: #04211f;
   --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 8px 24px -12px rgb(0 0 0 / .6);
-  --ok: var(--grass); --warn: var(--sodium); --bad: var(--ember);
+  --ok: var(--grass); --warn: var(--sodium); --bad: var(--ember); --info: #4f8ff0;
 }
 
 /* The panel's own theme button writes a class to <body>, not <html>.
@@ -146,14 +151,14 @@ body.theme-light {
   --bg: #eff4f6; --surface: #ffffff; --surface-2: #f4f8f9; --line: #d6e2e7;
   --text: #16242b; --text-mute: #5a6f7a; --accent: #0e9c90; --accent-ink: #fff;
   --shadow: 0 1px 2px rgb(16 40 50 / .06), 0 8px 24px -14px rgb(16 40 50 / .22);
-  --ok: #3f9757; --warn: #ad741a; --bad: #c4453c;
+  --ok: #3f9757; --warn: #ad741a; --bad: #c4453c; --info: #2f6fd0;
 }
 body.theme-dark {
   --bg: var(--abyss); --surface: var(--steel); --surface-2: var(--steel-2);
   --line: var(--hairline); --text: var(--chalk); --text-mute: var(--mist);
   --accent: var(--beacon); --accent-ink: #04211f;
   --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 8px 24px -12px rgb(0 0 0 / .6);
-  --ok: var(--grass); --warn: var(--sodium); --bad: var(--ember);
+  --ok: var(--grass); --warn: var(--sodium); --bad: var(--ember); --info: #4f8ff0;
 }
 
 * { box-sizing: border-box; }
@@ -701,22 +706,125 @@ ul.tight li { margin-bottom: 2px; }
 }
 .slot.is-empty { color: var(--text-mute); font-style: italic; border-style: dashed; }
 
-/* Tint per band. Kept low so the mono label stays the loudest thing in the
-   block; the dot is the saturated mark. */
-.slot-prod     { background: color-mix(in srgb, var(--s-prod) 14%, var(--surface));
-                 border-color: color-mix(in srgb, var(--s-prod) 34%, transparent); }
-.slot-staging  { background: color-mix(in srgb, var(--s-staging) 14%, var(--surface));
-                 border-color: color-mix(in srgb, var(--s-staging) 34%, transparent); }
-.slot-data     { background: color-mix(in srgb, var(--s-data) 14%, var(--surface));
-                 border-color: color-mix(in srgb, var(--s-data) 34%, transparent); }
-.slot-observe  { background: color-mix(in srgb, var(--s-observe) 14%, var(--surface));
-                 border-color: color-mix(in srgb, var(--s-observe) 34%, transparent); }
-.slot-platform { background: color-mix(in srgb, var(--s-platform) 14%, var(--surface));
-                 border-color: color-mix(in srgb, var(--s-platform) 34%, transparent); }
+
+/* --- reserved capacity --------------------------------------------------- */
+/* RESERVED, not used. Whether another replica fits on a box is decided by what
+   is already promised on it, and the two numbers routinely disagree by an order
+   of magnitude — a node reading 4% busy can be 100% reserved and take nothing
+   more. Red is CPU, blue is memory, a full circle is a full machine. */
+.gauge {
+  --v: 0;
+  position: absolute; bottom: 8px;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: conic-gradient(var(--gauge-fill) calc(var(--v) * 1%),
+                             var(--gauge-track) 0);
+  cursor: help;
+}
+/* The hole, so it reads as a ring rather than a pie. Filled with the card's own
+   background so it disappears into whatever surface it sits on. */
+.gauge::after {
+  content: ""; position: absolute; inset: 4px; border-radius: 50%;
+  background: var(--surface);
+}
+.gauge-cpu { inset-inline-start: 10px; --gauge-fill: var(--bad);
+             --gauge-track: color-mix(in srgb, var(--bad) 18%, transparent); }
+.gauge-mem { inset-inline-end: 10px;  --gauge-fill: var(--info);
+             --gauge-track: color-mix(in srgb, var(--info) 18%, transparent); }
+.tnode.has-gauges { position: relative; padding-bottom: 30px; }
+.tnode-root .gauge::after,
+.tnode-host .gauge::after { background: var(--surface-2); }
+.tnode-host.is-manager .gauge::after { background: var(--surface); }
+
+.gauge-key { width: 10px; height: 10px; border-radius: 50%; flex: none;
+             display: inline-block; }
+.gauge-key-cpu { background: var(--bad); }
+.gauge-key-mem { background: var(--info); }
+
+/* --- task state, and what a task reserves -------------------------------- */
+/* The chip's tint already says what a task IS, so the dot says what it is
+   DOING. */
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: block; }
+.dot-ok   { background: var(--ok); }
+.dot-warn { background: var(--warn); }
+.dot-bad  { background: var(--bad); }
+.dot-mute { background: var(--text-mute); }
+
+/* The ring is the share of the node's CPU this task reserves; a complete ring
+   means it has claimed the whole machine. Drawn as a conic gradient in the
+   border box, so it follows the chip's rounded corners instead of needing a
+   second element. */
+.slot {
+  --cpu: 0; --mem: 0;
+  border: 2px solid transparent;
+  background:
+    /* memory fill, laid OVER the band tint so the type colour survives */
+    linear-gradient(90deg,
+      color-mix(in srgb, var(--text) 12%, transparent) calc(var(--mem) * 1%),
+      transparent 0) padding-box,
+    linear-gradient(var(--slot-bg, var(--surface-2)), var(--slot-bg, var(--surface-2))) padding-box,
+    conic-gradient(from 180deg,
+      var(--slot-ring, var(--accent)) calc(var(--cpu) * 1%),
+      color-mix(in srgb, var(--line) 70%, transparent) 0) border-box;
+}
+.slot-prod     { --slot-bg: color-mix(in srgb, var(--s-prod) 14%, var(--surface));
+                 --slot-ring: var(--s-prod); }
+.slot-staging  { --slot-bg: color-mix(in srgb, var(--s-staging) 14%, var(--surface));
+                 --slot-ring: var(--s-staging); }
+.slot-data     { --slot-bg: color-mix(in srgb, var(--s-data) 14%, var(--surface));
+                 --slot-ring: var(--s-data); }
+.slot-observe  { --slot-bg: color-mix(in srgb, var(--s-observe) 14%, var(--surface));
+                 --slot-ring: var(--s-observe); }
+.slot-platform { --slot-bg: color-mix(in srgb, var(--s-platform) 14%, var(--surface));
+                 --slot-ring: var(--s-platform); }
+.slot.is-empty { --slot-bg: transparent; }
 
 @media (max-width: 720px) {
   .topo-facts { margin-left: 0; gap: 10px; }
 }
+
+/* --- a section with its own on/off switch -------------------------------- */
+/* The switch lives in the panel title because it decides whether everything
+   below it means anything; as the first of thirteen inputs it read as just
+   another setting. */
+.switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+          user-select: none; }
+.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.switch-track { width: 34px; height: 18px; border-radius: 999px; flex: none;
+                background: color-mix(in srgb, var(--text-mute) 40%, transparent);
+                position: relative; transition: background .15s ease; }
+.switch-track::after { content: ""; position: absolute; top: 2px; inset-inline-start: 2px;
+                       width: 14px; height: 14px; border-radius: 50%;
+                       background: var(--surface); transition: transform .15s ease; }
+.switch input:checked + .switch-track { background: var(--accent); }
+.switch input:checked + .switch-track::after { transform: translateX(16px); }
+.switch input:focus-visible + .switch-track { outline: 2px solid var(--accent);
+                                              outline-offset: 2px; }
+.switch-label { font: 600 12px/1 var(--mono); color: var(--text-mute); }
+
+/* Off: still readable, plainly inert. Not hidden — the values are worth seeing
+   even when nothing is acting on them. */
+[data-toggle-section].is-off [data-toggle-body] { opacity: .45; }
+[data-toggle-section].is-off [data-toggle-body] input,
+[data-toggle-section].is-off [data-toggle-body] select { cursor: not-allowed; }
+
+/* --- the running image, in the page header ------------------------------- */
+/* What is deployed belongs where you look for identity, not buried in a
+   settings list — for an application it changes every time CI ships. */
+.head-image { display: flex; align-items: center; gap: 8px; margin-top: 6px;
+              font-size: 12px; flex-wrap: wrap; }
+.head-image code { font: 500 12px/1.4 var(--mono); color: var(--text);
+                   background: var(--surface-2); border: 1px solid var(--line);
+                   border-radius: var(--r-sm); padding: 2px 6px;
+                   max-width: 46ch; overflow: hidden; text-overflow: ellipsis;
+                   white-space: nowrap; }
+.btn-xs { padding: 1px 6px; font-size: 11px; }
+
+/* --- an edit control living inside a read-only card ---------------------- */
+.inline-form { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.inline-form select, .inline-form input[type="text"] { min-width: 0; flex: 1 1 12ch; }
+
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+           overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 </style>
 </head>
 <body>
@@ -834,7 +942,9 @@ ul.tight li { margin-bottom: 2px; }
     carry none.
   </p>
 
-  <!-- Colour groups the blocks; the name on each block is what identifies it. -->
+  <!-- Colour groups the blocks; the name on each block is what identifies it.
+       The dot on each block is its task state, and the ring and fill are what
+       it reserves of the node it sits on. -->
   <div class="legend" data-topo-legend>
     
       <span class="legend-item"><i class="sw sw-prod"></i>applications</span>
@@ -866,7 +976,7 @@ ul.tight li { margin-bottom: 2px; }
       <div class="tree-kids">
         
           <div class="tree-branch" data-node="k39dl2mzq018">
-            <div class="tnode tnode-host is-manager">
+            <div class="tnode tnode-host has-gauges is-manager">
               <span class="tnode-head">
                 <span class="pill accent">manager</span>
                 
@@ -876,91 +986,125 @@ ul.tight li { margin-bottom: 2px; }
                 <b data-f="tasks">14</b> tasks · 4 vCPU · 7.6 GB
               </span>
               <span class="tnode-meters">
-                <span title="node CPU utilisation">cpu <b data-f="cpu">78%</b></span>
-                <span title="node memory utilisation">mem <b data-f="mem">61%</b></span>
+                <span title="node CPU utilisation — how busy it is right now">cpu <b data-f="cpu">78%</b></span>
+                <span title="node memory utilisation — how much is in use right now">mem <b data-f="mem">61%</b></span>
               </span>
+
+              
+              <span class="gauge gauge-cpu" data-f="cpures" style="--v:62.0"
+                    title="CPU reserved: 62.0% — 1.2 of 4 vCPU promised to tasks here"></span>
+              <span class="gauge gauge-mem" data-f="memres" style="--v:48.0"
+                    title="Memory reserved: 48.0% — 1400 MB of 7.6 GB promised to tasks here"></span>
             </div>
 
             <!-- data-sig matches the signature the poller computes, so the first
                  tick on an unchanged cluster rebuilds nothing at all. -->
             <div class="slots" data-slots
-                 data-sig="cache|data;sessions|data;cloudflared|staging;alertmanager|observe;cadvisor|observe;grafana|observe;loki|observe;node-exporter|observe;redis-exporter|observe;victoriametrics|observe;vmagent|observe;vmalert|observe;autoscaler|platform;ui|platform;">
+                 data-sig="cache|data|ok|10.5|16.8;sessions|data|ok|1.5|2.5;cloudflared|staging|ok|1.5|2.5;alertmanager|observe|ok|1.5|2.5;cadvisor|observe|ok|1.5|2.5;grafana|observe|ok|2.5|3.4;loki|observe|ok|5.0|8.4;node-exporter|observe|ok|1.5|2.5;redis-exporter|observe|ok|1.5|2.5;victoriametrics|observe|ok|7.5|10.1;vmagent|observe|ok|1.5|2.5;vmalert|observe|ok|1.5|2.5;autoscaler|platform|ok|1.5|2.5;ui|platform|ok|1.5|2.5;">
               
+                
                 <span class="slot slot-data" tabindex="0"
-                      title="cache_redis — task cache0kd93jf on aichat-master">
-                  <i class="sw sw-data"></i>cache
+                      style="--cpu:10.5;--mem:16.8"
+                      title="cache_redis — task cache0kd93jf on aichat-master&#10;state: running&#10;reserves 10.5% of this node's CPU, 16.8% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>cache
                 </span>
               
+                
                 <span class="slot slot-data" tabindex="0"
-                      title="sessions_redis — task sessio0kd93j on aichat-master">
-                  <i class="sw sw-data"></i>sessions
+                      style="--cpu:1.5;--mem:2.5"
+                      title="sessions_redis — task sessio0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>sessions
                 </span>
               
+                
                 <span class="slot slot-staging" tabindex="0"
-                      title="ingress_cloudflared — task cloudf0kd93j on aichat-master">
-                  <i class="sw sw-staging"></i>cloudflared
+                      style="--cpu:1.5;--mem:2.5"
+                      title="ingress_cloudflared — task cloudf0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>cloudflared
                 </span>
               
+                
                 <span class="slot slot-observe" tabindex="0"
-                      title="monitoring_alertmanager — task alertm0kd93j on aichat-master">
-                  <i class="sw sw-observe"></i>alertmanager
+                      style="--cpu:1.5;--mem:2.5"
+                      title="monitoring_alertmanager — task alertm0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>alertmanager
                 </span>
               
+                
                 <span class="slot slot-observe" tabindex="0"
-                      title="monitoring_cadvisor — task cadvis0kd93j on aichat-master">
-                  <i class="sw sw-observe"></i>cadvisor
+                      style="--cpu:1.5;--mem:2.5"
+                      title="monitoring_cadvisor — task cadvis0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>cadvisor
                 </span>
               
+                
                 <span class="slot slot-observe" tabindex="0"
-                      title="monitoring_grafana — task grafan0kd93j on aichat-master">
-                  <i class="sw sw-observe"></i>grafana
+                      style="--cpu:2.5;--mem:3.4"
+                      title="monitoring_grafana — task grafan0kd93j on aichat-master&#10;state: running&#10;reserves 2.5% of this node's CPU, 3.4% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>grafana
                 </span>
               
+                
                 <span class="slot slot-observe" tabindex="0"
-                      title="monitoring_loki — task loki0kd93jf0 on aichat-master">
-                  <i class="sw sw-observe"></i>loki
+                      style="--cpu:5.0;--mem:8.4"
+                      title="monitoring_loki — task loki0kd93jf0 on aichat-master&#10;state: running&#10;reserves 5.0% of this node's CPU, 8.4% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>loki
                 </span>
               
+                
                 <span class="slot slot-observe" tabindex="0"
-                      title="monitoring_node-exporter — task node-e0kd93j on aichat-master">
-                  <i class="sw sw-observe"></i>node-exporter
+                      style="--cpu:1.5;--mem:2.5"
+                      title="monitoring_node-exporter — task node-e0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>node-exporter
                 </span>
               
+                
                 <span class="slot slot-observe" tabindex="0"
-                      title="monitoring_redis-exporter — task redis-0kd93j on aichat-master">
-                  <i class="sw sw-observe"></i>redis-exporter
+                      style="--cpu:1.5;--mem:2.5"
+                      title="monitoring_redis-exporter — task redis-0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>redis-exporter
                 </span>
               
+                
                 <span class="slot slot-observe" tabindex="0"
-                      title="monitoring_victoriametrics — task victor0kd93j on aichat-master">
-                  <i class="sw sw-observe"></i>victoriametrics
+                      style="--cpu:7.5;--mem:10.1"
+                      title="monitoring_victoriametrics — task victor0kd93j on aichat-master&#10;state: running&#10;reserves 7.5% of this node's CPU, 10.1% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>victoriametrics
                 </span>
               
+                
                 <span class="slot slot-observe" tabindex="0"
-                      title="monitoring_vmagent — task vmagen0kd93j on aichat-master">
-                  <i class="sw sw-observe"></i>vmagent
+                      style="--cpu:1.5;--mem:2.5"
+                      title="monitoring_vmagent — task vmagen0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>vmagent
                 </span>
               
+                
                 <span class="slot slot-observe" tabindex="0"
-                      title="monitoring_vmalert — task vmaler0kd93j on aichat-master">
-                  <i class="sw sw-observe"></i>vmalert
+                      style="--cpu:1.5;--mem:2.5"
+                      title="monitoring_vmalert — task vmaler0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>vmalert
                 </span>
               
+                
                 <span class="slot slot-platform" tabindex="0"
-                      title="monitoring_autoscaler — task autosc0kd93j on aichat-master">
-                  <i class="sw sw-platform"></i>autoscaler
+                      style="--cpu:1.5;--mem:2.5"
+                      title="monitoring_autoscaler — task autosc0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>autoscaler
                 </span>
               
+                
                 <span class="slot slot-platform" tabindex="0"
-                      title="admin_ui — task ui0kd93jf01 on aichat-master">
-                  <i class="sw sw-platform"></i>ui
+                      style="--cpu:1.5;--mem:2.5"
+                      title="admin_ui — task ui0kd93jf01 on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>ui
                 </span>
               
             </div>
           </div>
         
           <div class="tree-branch" data-node="w1af02c9be47">
-            <div class="tnode tnode-host ">
+            <div class="tnode tnode-host has-gauges ">
               <span class="tnode-head">
                 <span class="pill ok">worker</span>
                 
@@ -970,51 +1114,69 @@ ul.tight li { margin-bottom: 2px; }
                 <b data-f="tasks">6</b> tasks · 3 vCPU · 3.8 GB
               </span>
               <span class="tnode-meters">
-                <span title="node CPU utilisation">cpu <b data-f="cpu">64%</b></span>
-                <span title="node memory utilisation">mem <b data-f="mem">47%</b></span>
+                <span title="node CPU utilisation — how busy it is right now">cpu <b data-f="cpu">64%</b></span>
+                <span title="node memory utilisation — how much is in use right now">mem <b data-f="mem">47%</b></span>
               </span>
+
+              
+              <span class="gauge gauge-cpu" data-f="cpures" style="--v:62.0"
+                    title="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks here"></span>
+              <span class="gauge gauge-mem" data-f="memres" style="--v:48.0"
+                    title="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks here"></span>
             </div>
 
             <!-- data-sig matches the signature the poller computes, so the first
                  tick on an unchanged cluster rebuilds nothing at all. -->
             <div class="slots" data-slots
-                 data-sig="api|prod;api|prod;api|prod;cloudflared|staging;cadvisor|observe;node-exporter|observe;">
+                 data-sig="api|prod|ok|18.0|12.0;api|prod|ok|18.0|12.0;api|prod|warn|18.0|12.0;cloudflared|staging|ok|1.5|2.5;cadvisor|observe|ok|1.5|2.5;node-exporter|observe|ok|1.5|2.5;">
               
+                
                 <span class="slot slot-prod" tabindex="0"
-                      title="api_app — task api0kd93jf01 on aichat-worker-1754812203">
-                  <i class="sw sw-prod"></i>api
+                      style="--cpu:18.0;--mem:12.0"
+                      title="api_app — task api0kd93jf01 on aichat-worker-1754812203&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>api
                 </span>
               
+                
                 <span class="slot slot-prod" tabindex="0"
-                      title="api_app — task api1kd93jf01 on aichat-worker-1754812203">
-                  <i class="sw sw-prod"></i>api
+                      style="--cpu:18.0;--mem:12.0"
+                      title="api_app — task api1kd93jf01 on aichat-worker-1754812203&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>api
                 </span>
               
+                
                 <span class="slot slot-prod" tabindex="0"
-                      title="api_app — task api2kd93jf01 on aichat-worker-1754812203">
-                  <i class="sw sw-prod"></i>api
+                      style="--cpu:18.0;--mem:12.0"
+                      title="api_app — task api2kd93jf01 on aichat-worker-1754812203&#10;state: starting&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
+                  <i class="dot dot-warn" aria-hidden="true"></i>api
                 </span>
               
+                
                 <span class="slot slot-staging" tabindex="0"
-                      title="ingress_cloudflared — task cloudf0kd93j on aichat-worker-1754812203">
-                  <i class="sw sw-staging"></i>cloudflared
+                      style="--cpu:1.5;--mem:2.5"
+                      title="ingress_cloudflared — task cloudf0kd93j on aichat-worker-1754812203&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>cloudflared
                 </span>
               
+                
                 <span class="slot slot-observe" tabindex="0"
-                      title="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754812203">
-                  <i class="sw sw-observe"></i>cadvisor
+                      style="--cpu:1.5;--mem:2.5"
+                      title="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754812203&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>cadvisor
                 </span>
               
+                
                 <span class="slot slot-observe" tabindex="0"
-                      title="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754812203">
-                  <i class="sw sw-observe"></i>node-exporter
+                      style="--cpu:1.5;--mem:2.5"
+                      title="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754812203&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>node-exporter
                 </span>
               
             </div>
           </div>
         
           <div class="tree-branch" data-node="w2bc71d0aa93">
-            <div class="tnode tnode-host ">
+            <div class="tnode tnode-host has-gauges ">
               <span class="tnode-head">
                 <span class="pill ok">worker</span>
                 
@@ -1024,51 +1186,69 @@ ul.tight li { margin-bottom: 2px; }
                 <b data-f="tasks">6</b> tasks · 3 vCPU · 3.8 GB
               </span>
               <span class="tnode-meters">
-                <span title="node CPU utilisation">cpu <b data-f="cpu">71%</b></span>
-                <span title="node memory utilisation">mem <b data-f="mem">52%</b></span>
+                <span title="node CPU utilisation — how busy it is right now">cpu <b data-f="cpu">71%</b></span>
+                <span title="node memory utilisation — how much is in use right now">mem <b data-f="mem">52%</b></span>
               </span>
+
+              
+              <span class="gauge gauge-cpu" data-f="cpures" style="--v:62.0"
+                    title="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks here"></span>
+              <span class="gauge gauge-mem" data-f="memres" style="--v:48.0"
+                    title="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks here"></span>
             </div>
 
             <!-- data-sig matches the signature the poller computes, so the first
                  tick on an unchanged cluster rebuilds nothing at all. -->
             <div class="slots" data-slots
-                 data-sig="api|prod;api|prod;api-staging|prod;cloudflared|staging;cadvisor|observe;node-exporter|observe;">
+                 data-sig="api|prod|ok|18.0|12.0;api|prod|ok|18.0|12.0;api-staging|prod|bad|1.5|2.5;cloudflared|staging|ok|1.5|2.5;cadvisor|observe|ok|1.5|2.5;node-exporter|observe|ok|1.5|2.5;">
               
+                
                 <span class="slot slot-prod" tabindex="0"
-                      title="api_app — task api0kd93jf01 on aichat-worker-1754819114">
-                  <i class="sw sw-prod"></i>api
+                      style="--cpu:18.0;--mem:12.0"
+                      title="api_app — task api0kd93jf01 on aichat-worker-1754819114&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>api
                 </span>
               
+                
                 <span class="slot slot-prod" tabindex="0"
-                      title="api_app — task api1kd93jf01 on aichat-worker-1754819114">
-                  <i class="sw sw-prod"></i>api
+                      style="--cpu:18.0;--mem:12.0"
+                      title="api_app — task api1kd93jf01 on aichat-worker-1754819114&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>api
                 </span>
               
+                
                 <span class="slot slot-prod" tabindex="0"
-                      title="api-staging_app — task api-st0kd93j on aichat-worker-1754819114">
-                  <i class="sw sw-prod"></i>api-staging
+                      style="--cpu:1.5;--mem:2.5"
+                      title="api-staging_app — task api-st0kd93j on aichat-worker-1754819114&#10;state: failed&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                  <i class="dot dot-bad" aria-hidden="true"></i>api-staging
                 </span>
               
+                
                 <span class="slot slot-staging" tabindex="0"
-                      title="ingress_cloudflared — task cloudf0kd93j on aichat-worker-1754819114">
-                  <i class="sw sw-staging"></i>cloudflared
+                      style="--cpu:1.5;--mem:2.5"
+                      title="ingress_cloudflared — task cloudf0kd93j on aichat-worker-1754819114&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>cloudflared
                 </span>
               
+                
                 <span class="slot slot-observe" tabindex="0"
-                      title="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754819114">
-                  <i class="sw sw-observe"></i>cadvisor
+                      style="--cpu:1.5;--mem:2.5"
+                      title="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754819114&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>cadvisor
                 </span>
               
+                
                 <span class="slot slot-observe" tabindex="0"
-                      title="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754819114">
-                  <i class="sw sw-observe"></i>node-exporter
+                      style="--cpu:1.5;--mem:2.5"
+                      title="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754819114&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>node-exporter
                 </span>
               
             </div>
           </div>
         
           <div class="tree-branch" data-node="w3de92f1cc05">
-            <div class="tnode tnode-host ">
+            <div class="tnode tnode-host has-gauges ">
               <span class="tnode-head">
                 <span class="pill warn">worker</span>
                 <span class="pill warn">drain</span>
@@ -1078,29 +1258,41 @@ ul.tight li { margin-bottom: 2px; }
                 <b data-f="tasks">3</b> tasks · 3 vCPU · 3.8 GB
               </span>
               <span class="tnode-meters">
-                <span title="node CPU utilisation">cpu <b data-f="cpu">12%</b></span>
-                <span title="node memory utilisation">mem <b data-f="mem">19%</b></span>
+                <span title="node CPU utilisation — how busy it is right now">cpu <b data-f="cpu">12%</b></span>
+                <span title="node memory utilisation — how much is in use right now">mem <b data-f="mem">19%</b></span>
               </span>
+
+              
+              <span class="gauge gauge-cpu" data-f="cpures" style="--v:62.0"
+                    title="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks here"></span>
+              <span class="gauge gauge-mem" data-f="memres" style="--v:48.0"
+                    title="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks here"></span>
             </div>
 
             <!-- data-sig matches the signature the poller computes, so the first
                  tick on an unchanged cluster rebuilds nothing at all. -->
             <div class="slots" data-slots
-                 data-sig="api|prod;cadvisor|observe;node-exporter|observe;">
+                 data-sig="api|prod|ok|18.0|12.0;cadvisor|observe|ok|1.5|2.5;node-exporter|observe|ok|1.5|2.5;">
               
+                
                 <span class="slot slot-prod" tabindex="0"
-                      title="api_app — task api0kd93jf01 on aichat-worker-1754823887">
-                  <i class="sw sw-prod"></i>api
+                      style="--cpu:18.0;--mem:12.0"
+                      title="api_app — task api0kd93jf01 on aichat-worker-1754823887&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>api
                 </span>
               
+                
                 <span class="slot slot-observe" tabindex="0"
-                      title="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754823887">
-                  <i class="sw sw-observe"></i>cadvisor
+                      style="--cpu:1.5;--mem:2.5"
+                      title="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754823887&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>cadvisor
                 </span>
               
+                
                 <span class="slot slot-observe" tabindex="0"
-                      title="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754823887">
-                  <i class="sw sw-observe"></i>node-exporter
+                      style="--cpu:1.5;--mem:2.5"
+                      title="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754823887&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>node-exporter
                 </span>
               
             </div>
@@ -1311,7 +1503,248 @@ ul.tight li { margin-bottom: 2px; }
     </div>
   </div>
 </section>
+
+
+<div class="page-head section-gap">
+  <div>
+    <h1 class="sub">Infrastructure</h1>
+    <p>The three stacks that come up before anything else exists. They are shown read-only:
+       they have no spec file and no delete button, because they are the thing that runs
+       your components. Redeploying one re-applies its file and nothing else.</p>
+  </div>
+</div>
+
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Ingress</h2>
+    <span class="spacer"></span>
+    <span class="muted">1</span>
+  </div>
+  <div class="rows">
+    
+    
+    <div class="row ok">
+      <span class="stripe"></span>
+      <span>
+        <span class="row-title">Cloudflare Tunnel</span>
+        <span class="row-sub">One connector per node, master included. All inbound traffic arrives here. Routes are configured in the Cloudflare dashboard, not here.</span>
+      </span>
+      <span class="row-metric hide-sm">
+        <span class="k">Tasks</span>
+        <span class="v num">4/4</span>
+      </span>
+      
+      <span class="pill ok">healthy</span>
+    </div>
+    
+  </div>
 </section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Observability</h2>
+    <span class="spacer"></span>
+    <span class="muted">6</span>
+  </div>
+  <div class="rows">
+    
+    
+    <div class="row ok">
+      <span class="stripe"></span>
+      <span>
+        <span class="row-title">Grafana</span>
+        <span class="row-sub">Dashboards over VictoriaMetrics and Loki.</span>
+      </span>
+      <span class="row-metric hide-sm">
+        <span class="k">Tasks</span>
+        <span class="v num">1/1</span>
+      </span>
+      
+      <a class="btn btn-sm" href="https://grafana-aichat.acme.dev" target="_blank" rel="noopener">Open</a>
+      
+      <span class="pill ok">healthy</span>
+    </div>
+    
+    
+    <div class="row ok">
+      <span class="stripe"></span>
+      <span>
+        <span class="row-title">VictoriaMetrics</span>
+        <span class="row-sub">Metric storage. Every scaling decision is read from here.</span>
+      </span>
+      <span class="row-metric hide-sm">
+        <span class="k">Tasks</span>
+        <span class="v num">1/1</span>
+      </span>
+      
+      <span class="pill mute plain mono" title="Overlay network only — this address resolves inside the cluster, not from your machine. Reach it with an SSH tunnel to the master.">http://victoriametrics:8428</span>
+      
+      <span class="pill ok">healthy</span>
+    </div>
+    
+    
+    <div class="row ok">
+      <span class="stripe"></span>
+      <span>
+        <span class="row-title">vmagent</span>
+        <span class="row-sub">Scrapes anything carrying the prometheus.* deploy labels. Components get them automatically.</span>
+      </span>
+      <span class="row-metric hide-sm">
+        <span class="k">Tasks</span>
+        <span class="v num">1/1</span>
+      </span>
+      
+      <span class="pill mute plain mono" title="Overlay network only — this address resolves inside the cluster, not from your machine. Reach it with an SSH tunnel to the master.">http://vmagent:8429</span>
+      
+      <span class="pill ok">healthy</span>
+    </div>
+    
+    
+    <div class="row ok">
+      <span class="stripe"></span>
+      <span>
+        <span class="row-title">vmalert</span>
+        <span class="row-sub">Evaluates config/alerts.yml against VictoriaMetrics.</span>
+      </span>
+      <span class="row-metric hide-sm">
+        <span class="k">Tasks</span>
+        <span class="v num">1/1</span>
+      </span>
+      
+      <span class="pill mute plain mono" title="Overlay network only — this address resolves inside the cluster, not from your machine. Reach it with an SSH tunnel to the master.">http://vmalert:8880</span>
+      
+      <span class="pill ok">healthy</span>
+    </div>
+    
+    
+    <div class="row ok">
+      <span class="stripe"></span>
+      <span>
+        <span class="row-title">Alertmanager</span>
+        <span class="row-sub">Groups and dispatches alerts to your webhook.</span>
+      </span>
+      <span class="row-metric hide-sm">
+        <span class="k">Tasks</span>
+        <span class="v num">1/1</span>
+      </span>
+      
+      <span class="pill mute plain mono" title="Overlay network only — this address resolves inside the cluster, not from your machine. Reach it with an SSH tunnel to the master.">http://alertmanager:9093</span>
+      
+      <span class="pill ok">healthy</span>
+    </div>
+    
+    
+    <div class="row ok">
+      <span class="stripe"></span>
+      <span>
+        <span class="row-title">Loki</span>
+        <span class="row-sub">Log storage. Every container ships to it directly through the log driver.</span>
+      </span>
+      <span class="row-metric hide-sm">
+        <span class="k">Tasks</span>
+        <span class="v num">1/1</span>
+      </span>
+      
+      <span class="pill ok">healthy</span>
+    </div>
+    
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Platform</h2>
+    <span class="spacer"></span>
+    <span class="muted">3</span>
+  </div>
+  <div class="rows">
+    
+    
+    <div class="row ok">
+      <span class="stripe"></span>
+      <span>
+        <span class="row-title">Autoscaler</span>
+        <span class="row-sub">Discovers components by label, scales their replicas, and buys and sells Hetzner workers to fit them.</span>
+      </span>
+      <span class="row-metric hide-sm">
+        <span class="k">Tasks</span>
+        <span class="v num">1/1</span>
+      </span>
+      
+      <span class="pill ok">healthy</span>
+    </div>
+    
+    
+    <div class="row ok">
+      <span class="stripe"></span>
+      <span>
+        <span class="row-title">Node exporters</span>
+        <span class="row-sub">node-exporter and cadvisor, one of each per node.</span>
+      </span>
+      <span class="row-metric hide-sm">
+        <span class="k">Tasks</span>
+        <span class="v num">1/1</span>
+      </span>
+      
+      <span class="pill ok">healthy</span>
+    </div>
+    
+    
+    <div class="row ok">
+      <span class="stripe"></span>
+      <span>
+        <span class="row-title">Admin panel</span>
+        <span class="row-sub">This console. It holds the docker socket, so its password is the cluster.</span>
+      </span>
+      <span class="row-metric hide-sm">
+        <span class="k">Tasks</span>
+        <span class="v num">1/1</span>
+      </span>
+      
+      <a class="btn btn-sm" href="https://admin-aichat.acme.dev" target="_blank" rel="noopener">Open</a>
+      
+      <span class="pill ok">healthy</span>
+    </div>
+    
+  </div>
+</section>
+
+
+<section class="panel">
+  <div class="panel-head"><h2>Redeploy a stack</h2></div>
+  <div class="panel-body">
+    <div class="btn-row">
+      
+      <form method="post" action="#" data-preview
+            data-confirm="Re-apply the monitoring stack file?">
+        <input type="hidden" name="csrf" value="preview">
+        <input type="hidden" name="stack" value="monitoring">
+        <button class="btn" type="submit">monitoring</button>
+      </form>
+      
+      <form method="post" action="#" data-preview
+            data-confirm="Re-apply the ingress stack file?">
+        <input type="hidden" name="csrf" value="preview">
+        <input type="hidden" name="stack" value="ingress">
+        <button class="btn" type="submit">ingress</button>
+      </form>
+      
+      <form method="post" action="#" data-preview
+            data-confirm="Re-apply the admin stack file?">
+        <input type="hidden" name="csrf" value="preview">
+        <input type="hidden" name="stack" value="admin">
+        <button class="btn" type="submit">admin</button>
+      </form>
+      
+    </div>
+    <p class="hint">
+      Safe to run at any time: these stacks hold no state anything else owns. Your components
+      are not stacks in this sense and are not touched — each one deploys itself, reading its
+      live image and replica count back first.
+    </p>
+  </div>
+</section></section>
 
       
       <section data-view="component-api" hidden>
@@ -1322,6 +1755,15 @@ ul.tight li { margin-bottom: 2px; }
     <div class="eyebrow"><a href="#view-components">Components</a></div>
     <h1>api</h1>
     <p class="hint">A container image of yours, behind the tunnel.</p>
+    
+    
+    <p class="head-image">
+      <span class="muted">running</span>
+      <code class="mono" title="ghcr.io/acme/aichat-api:sha-9f3ac21">aichat-api:sha-9f3ac21</code>
+      <button class="btn btn-ghost btn-xs" type="button"
+              data-copy="ghcr.io/acme/aichat-api:sha-9f3ac21" title="Copy the full reference">copy</button>
+    </p>
+    
   </div>
   <div class="head-side">
     <span class="pill ok">healthy</span>
@@ -1373,7 +1815,11 @@ ul.tight li { margin-bottom: 2px; }
       </div>
       <div class="tile">
         <div class="eyebrow">Created</div>
-        <div class="v small mono">2026-08-22T02:24:11Z</div>
+        <div class="v small mono">
+          
+          <time datetime="2026-08-22T03:30:35Z" data-localtime>2026-08-22T03:30:35Z</time>
+          
+        </div>
       </div>
       <div class="tile">
         <div class="eyebrow">Updated</div>
@@ -1423,12 +1869,51 @@ ul.tight li { margin-bottom: 2px; }
           
             <div class="mono">node.role == worker</div>
           
+
+          
+          
+          
+          <form method="post" action="#" class="inline-form"
+                data-preview>
+            <input type="hidden" name="csrf" value="preview">
+            <label class="sr-only" for="pm-api">Placement mode</label>
+            <select id="pm-api" name="placement_mode">
+              
+              <option value="auto"
+                      selected>
+                auto
+              </option>
+              
+              <option value="master"
+                      >
+                master
+              </option>
+              
+              <option value="workers"
+                      >
+                workers
+              </option>
+              
+              <option value="any"
+                      >
+                any
+              </option>
+              
+            </select>
+            <input type="text" name="placement_extra" class="mono"
+                   value=""
+                   placeholder="extra constraints, comma separated">
+            <button class="btn btn-sm" type="submit">Apply</button>
+          </form>
+          
           
           <p class="hint">
-            The autoscaler owns this. It adds <code>node.role == worker</code> once
-            workers exist and removes it when the pool empties, so the master serves
-            at the free floor and never during a scale-out. Deploys re-state whatever
-            is live rather than applying a stored copy.
+            On <code>auto</code> the autoscaler owns this: it adds
+            <code>node.role == worker</code> once workers exist and removes it when the
+            pool empties, so the master serves at the free floor and never during a
+            scale-out, and deploys re-state whatever is live rather than applying a
+            stored copy. Choose anything else and it stops moving this component at
+            all — including away from a worker that is about to be deleted.
           </p>
           
         </div>
@@ -1569,6 +2054,33 @@ ul.tight li { margin-bottom: 2px; }
   
   <div data-panel="deployments" hidden>
     
+
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Current rollout</h2>
+    <span class="spacer"></span>
+    <span class="pill ok">
+      converged
+      
+    </span>
+  </div>
+  <div class="rows">
+    <div class="deploy-row ok">
+      <span class="stripe"></span>
+      <span class="src">swarm</span>
+      <span>
+        <span class="row-title mono">completed</span>
+        <span class="row-sub">
+          6m ago · update completed
+          
+        </span>
+      </span>
+    </div>
+  </div>
+</section>
+
+
 <section class="panel">
   <div class="panel-head">
     <h2>CI webhook</h2>
@@ -1688,34 +2200,6 @@ ul.tight li { margin-bottom: 2px; }
   </form>
 </section>
 
-
-
-
-<section class="panel">
-  <div class="panel-head">
-    <h2>Current rollout</h2>
-    <span class="spacer"></span>
-    <span class="pill ok">
-      converged
-      
-    </span>
-  </div>
-  <div class="rows">
-    <div class="deploy-row ok">
-      <span class="stripe"></span>
-      <span class="src">swarm</span>
-      <span>
-        <span class="row-title mono">completed</span>
-        <span class="row-sub">
-          6m ago · update completed
-          
-        </span>
-      </span>
-    </div>
-  </div>
-</section>
-
-
 <section class="panel">
   <div class="panel-head">
     <h2>History</h2>
@@ -1731,7 +2215,7 @@ ul.tight li { margin-bottom: 2px; }
       <span>
         <span class="row-title mono">ghcr.io/acme/aichat-api:sha-9f3ac21</span>
         <span class="row-sub">
-          2026-08-10 13:41 UTC · github-actions
+          <time datetime="2026-08-10T13:41:58+00:00" data-localtime>2026-08-10 13:41 UTC</time> · github-actions
            · api_app: image updated
         </span>
       </span>
@@ -1745,7 +2229,7 @@ ul.tight li { margin-bottom: 2px; }
       <span>
         <span class="row-title mono">ghcr.io/acme/aichat-api:sha-77b1e05</span>
         <span class="row-sub">
-          2026-08-09 16:20 UTC · github-actions
+          <time datetime="2026-08-09T16:20:44+00:00" data-localtime>2026-08-09 16:20 UTC</time> · github-actions
            · update paused due to failure; rolled back to sha-4c9920a
         </span>
       </span>
@@ -1759,7 +2243,7 @@ ul.tight li { margin-bottom: 2px; }
       <span>
         <span class="row-title mono">ghcr.io/acme/aichat-api:sha-4c9920a</span>
         <span class="row-sub">
-          2026-08-09 09:14 UTC · admin
+          <time datetime="2026-08-09T09:14:02+00:00" data-localtime>2026-08-09 09:14 UTC</time> · admin
            · configuration change: LOG_LEVEL, OPENAI_TIMEOUT_MS
         </span>
       </span>
@@ -1773,7 +2257,7 @@ ul.tight li { margin-bottom: 2px; }
       <span>
         <span class="row-title mono">ghcr.io/acme/aichat-api:sha-4c9920a</span>
         <span class="row-sub">
-          2026-08-08 18:47 UTC · github-actions
+          <time datetime="2026-08-08T18:47:30+00:00" data-localtime>2026-08-08 18:47 UTC</time> · github-actions
            · api_app: image updated
         </span>
       </span>
@@ -1836,6 +2320,48 @@ ul.tight li { margin-bottom: 2px; }
               
               
 <div class="field">
+  <label for="f-placement_mode">Placement</label>
+
+  
+    <select id="f-placement_mode" name="placement_mode">
+      
+      <option value="auto" selected>auto</option>
+      
+      <option value="master" >master</option>
+      
+      <option value="workers" >workers</option>
+      
+      <option value="any" >any</option>
+      
+    </select>
+
+  
+
+  <p class="hint">auto lets the autoscaler move this between the master and the worker pool as the fleet grows and shrinks. Anything else pins it and the autoscaler stops moving it — useful for something that must stay put, and a good way to strand yourself if you pin to workers and the pool empties.</p>
+</div>
+            
+              
+              
+<div class="field">
+  <label for="f-placement_extra">Extra constraints</label>
+
+  
+    <input id="f-placement_extra" name="placement_extra"
+           type="text"
+           
+           
+           
+           
+           placeholder="node.labels.disk == ssd"
+           value="">
+  
+
+  <p class="hint">Comma separated, added to whatever the mode above implies. Swarm syntax, e.g. node.labels.zone == eu.</p>
+</div>
+            
+              
+              
+<div class="field">
   <label for="f-stop_grace">Shutdown grace</label>
 
   
@@ -1852,22 +2378,36 @@ ul.tight li { margin-bottom: 2px; }
   <p class="hint">Seconds to finish in-flight requests on SIGTERM. Pair it with a shutdown hook in your app; the Docker default of 10 cuts them.</p>
 </div>
             
-              
-              
-<div class="field">
-  <label for="f-autoscale">Autoscale</label>
+          </div>
+        </div>
+        <div class="panel-note">
+          Saving redeploys this component. The live image, replica count, placement
+          and resource sizing are read back first and preserved, so changing a
+          setting here will not roll back your last deploy or undo the autoscaler.
+        </div>
+      </section>
 
-  
-    <label class="check">
-      <input type="checkbox" id="f-autoscale" name="autoscale" value="true"
-             checked>
-      <span>Let the autoscaler own the replica count, using the policy below.</span>
-    </label>
-
-  
-
-  
-</div>
+      
+      
+      
+      <section class="panel" data-toggle-section>
+        <div class="panel-head">
+          <h2>Autoscale</h2>
+          
+          
+          <label class="switch" title="Let the autoscaler own the replica count">
+            <input type="hidden" name="__bool__" value="autoscale">
+            <input type="checkbox" name="autoscale" value="true"
+                   data-toggle-master
+                   checked>
+            <span class="switch-track" aria-hidden="true"></span>
+            <span class="switch-label">on</span>
+          </label>
+          
+          <span class="spacer"></span>
+        </div>
+        <div class="panel-body" data-toggle-body>
+          <div class="grid-2">
             
               
               
@@ -2100,11 +2640,12 @@ ul.tight li { margin-bottom: 2px; }
           </div>
         </div>
         <div class="panel-note">
-          Saving redeploys this component. The live image, replica count, placement
-          and resource sizing are read back first and preserved, so changing a
-          setting here will not roll back your last deploy or undo the autoscaler.
+          With this off the replica count is yours and nothing below applies. The
+          autoscaler still measures this component and still right-sizes its
+          reservations — it just stops changing how many of it there are.
         </div>
       </section>
+      
 
       
       <section class="panel">
@@ -2112,14 +2653,6 @@ ul.tight li { margin-bottom: 2px; }
         <div class="panel-body">
           <div class="rows">
             
-            <div class="deploy-row mute">
-              <span class="stripe"></span>
-              <span class="src">ci</span>
-              <span>
-                <span class="row-title">Image</span>
-                <span class="row-sub mono">ghcr.io/acme/aichat-api:sha-9f3ac21</span>
-              </span>
-            </div>
             
             <div class="deploy-row mute">
               <span class="stripe"></span>
@@ -2261,6 +2794,15 @@ ul.tight li { margin-bottom: 2px; }
     <div class="eyebrow"><a href="#view-components">Components</a></div>
     <h1>api-staging</h1>
     <p class="hint">A container image of yours, behind the tunnel.</p>
+    
+    
+    <p class="head-image">
+      <span class="muted">running</span>
+      <code class="mono" title="ghcr.io/acme/aichat-api:sha-c40e8b7">aichat-api:sha-c40e8b7</code>
+      <button class="btn btn-ghost btn-xs" type="button"
+              data-copy="ghcr.io/acme/aichat-api:sha-c40e8b7" title="Copy the full reference">copy</button>
+    </p>
+    
   </div>
   <div class="head-side">
     <span class="pill ok">healthy</span>
@@ -2312,7 +2854,11 @@ ul.tight li { margin-bottom: 2px; }
       </div>
       <div class="tile">
         <div class="eyebrow">Created</div>
-        <div class="v small mono">2026-08-22T02:24:11Z</div>
+        <div class="v small mono">
+          
+          <time datetime="2026-08-22T03:30:35Z" data-localtime>2026-08-22T03:30:35Z</time>
+          
+        </div>
       </div>
       <div class="tile">
         <div class="eyebrow">Updated</div>
@@ -2362,12 +2908,51 @@ ul.tight li { margin-bottom: 2px; }
           
             <div class="mono">node.role == worker</div>
           
+
+          
+          
+          
+          <form method="post" action="#" class="inline-form"
+                data-preview>
+            <input type="hidden" name="csrf" value="preview">
+            <label class="sr-only" for="pm-api-staging">Placement mode</label>
+            <select id="pm-api-staging" name="placement_mode">
+              
+              <option value="auto"
+                      selected>
+                auto
+              </option>
+              
+              <option value="master"
+                      >
+                master
+              </option>
+              
+              <option value="workers"
+                      >
+                workers
+              </option>
+              
+              <option value="any"
+                      >
+                any
+              </option>
+              
+            </select>
+            <input type="text" name="placement_extra" class="mono"
+                   value=""
+                   placeholder="extra constraints, comma separated">
+            <button class="btn btn-sm" type="submit">Apply</button>
+          </form>
+          
           
           <p class="hint">
-            The autoscaler owns this. It adds <code>node.role == worker</code> once
-            workers exist and removes it when the pool empties, so the master serves
-            at the free floor and never during a scale-out. Deploys re-state whatever
-            is live rather than applying a stored copy.
+            On <code>auto</code> the autoscaler owns this: it adds
+            <code>node.role == worker</code> once workers exist and removes it when the
+            pool empties, so the master serves at the free floor and never during a
+            scale-out, and deploys re-state whatever is live rather than applying a
+            stored copy. Choose anything else and it stops moving this component at
+            all — including away from a worker that is about to be deleted.
           </p>
           
         </div>
@@ -2493,6 +3078,33 @@ ul.tight li { margin-bottom: 2px; }
   
   <div data-panel="deployments" hidden>
     
+
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Current rollout</h2>
+    <span class="spacer"></span>
+    <span class="pill ok">
+      converged
+      
+    </span>
+  </div>
+  <div class="rows">
+    <div class="deploy-row ok">
+      <span class="stripe"></span>
+      <span class="src">swarm</span>
+      <span>
+        <span class="row-title mono">completed</span>
+        <span class="row-sub">
+          6m ago · update completed
+          
+        </span>
+      </span>
+    </div>
+  </div>
+</section>
+
+
 <section class="panel">
   <div class="panel-head">
     <h2>CI webhook</h2>
@@ -2612,34 +3224,6 @@ ul.tight li { margin-bottom: 2px; }
   </form>
 </section>
 
-
-
-
-<section class="panel">
-  <div class="panel-head">
-    <h2>Current rollout</h2>
-    <span class="spacer"></span>
-    <span class="pill ok">
-      converged
-      
-    </span>
-  </div>
-  <div class="rows">
-    <div class="deploy-row ok">
-      <span class="stripe"></span>
-      <span class="src">swarm</span>
-      <span>
-        <span class="row-title mono">completed</span>
-        <span class="row-sub">
-          6m ago · update completed
-          
-        </span>
-      </span>
-    </div>
-  </div>
-</section>
-
-
 <section class="panel">
   <div class="panel-head">
     <h2>History</h2>
@@ -2655,7 +3239,7 @@ ul.tight li { margin-bottom: 2px; }
       <span>
         <span class="row-title mono">ghcr.io/acme/aichat-api:sha-c40e8b7</span>
         <span class="row-sub">
-          2026-08-10 11:02 UTC · github-actions
+          <time datetime="2026-08-10T11:02:11+00:00" data-localtime>2026-08-10 11:02 UTC</time> · github-actions
            · api-staging_app: image updated
         </span>
       </span>
@@ -2718,6 +3302,48 @@ ul.tight li { margin-bottom: 2px; }
               
               
 <div class="field">
+  <label for="f-placement_mode">Placement</label>
+
+  
+    <select id="f-placement_mode" name="placement_mode">
+      
+      <option value="auto" selected>auto</option>
+      
+      <option value="master" >master</option>
+      
+      <option value="workers" >workers</option>
+      
+      <option value="any" >any</option>
+      
+    </select>
+
+  
+
+  <p class="hint">auto lets the autoscaler move this between the master and the worker pool as the fleet grows and shrinks. Anything else pins it and the autoscaler stops moving it — useful for something that must stay put, and a good way to strand yourself if you pin to workers and the pool empties.</p>
+</div>
+            
+              
+              
+<div class="field">
+  <label for="f-placement_extra">Extra constraints</label>
+
+  
+    <input id="f-placement_extra" name="placement_extra"
+           type="text"
+           
+           
+           
+           
+           placeholder="node.labels.disk == ssd"
+           value="">
+  
+
+  <p class="hint">Comma separated, added to whatever the mode above implies. Swarm syntax, e.g. node.labels.zone == eu.</p>
+</div>
+            
+              
+              
+<div class="field">
   <label for="f-stop_grace">Shutdown grace</label>
 
   
@@ -2734,22 +3360,36 @@ ul.tight li { margin-bottom: 2px; }
   <p class="hint">Seconds to finish in-flight requests on SIGTERM. Pair it with a shutdown hook in your app; the Docker default of 10 cuts them.</p>
 </div>
             
-              
-              
-<div class="field">
-  <label for="f-autoscale">Autoscale</label>
+          </div>
+        </div>
+        <div class="panel-note">
+          Saving redeploys this component. The live image, replica count, placement
+          and resource sizing are read back first and preserved, so changing a
+          setting here will not roll back your last deploy or undo the autoscaler.
+        </div>
+      </section>
 
-  
-    <label class="check">
-      <input type="checkbox" id="f-autoscale" name="autoscale" value="true"
-             >
-      <span>Let the autoscaler own the replica count, using the policy below.</span>
-    </label>
-
-  
-
-  
-</div>
+      
+      
+      
+      <section class="panel" data-toggle-section>
+        <div class="panel-head">
+          <h2>Autoscale</h2>
+          
+          
+          <label class="switch" title="Let the autoscaler own the replica count">
+            <input type="hidden" name="__bool__" value="autoscale">
+            <input type="checkbox" name="autoscale" value="true"
+                   data-toggle-master
+                   >
+            <span class="switch-track" aria-hidden="true"></span>
+            <span class="switch-label">on</span>
+          </label>
+          
+          <span class="spacer"></span>
+        </div>
+        <div class="panel-body" data-toggle-body>
+          <div class="grid-2">
             
               
               
@@ -2982,11 +3622,12 @@ ul.tight li { margin-bottom: 2px; }
           </div>
         </div>
         <div class="panel-note">
-          Saving redeploys this component. The live image, replica count, placement
-          and resource sizing are read back first and preserved, so changing a
-          setting here will not roll back your last deploy or undo the autoscaler.
+          With this off the replica count is yours and nothing below applies. The
+          autoscaler still measures this component and still right-sizes its
+          reservations — it just stops changing how many of it there are.
         </div>
       </section>
+      
 
       
       <section class="panel">
@@ -2994,14 +3635,6 @@ ul.tight li { margin-bottom: 2px; }
         <div class="panel-body">
           <div class="rows">
             
-            <div class="deploy-row mute">
-              <span class="stripe"></span>
-              <span class="src">ci</span>
-              <span>
-                <span class="row-title">Image</span>
-                <span class="row-sub mono">ghcr.io/acme/aichat-api:sha-c40e8b7</span>
-              </span>
-            </div>
             
             <div class="deploy-row mute">
               <span class="stripe"></span>
@@ -3143,6 +3776,15 @@ ul.tight li { margin-bottom: 2px; }
     <div class="eyebrow"><a href="#view-components">Components</a></div>
     <h1>cache</h1>
     <p class="hint">A password-protected Redis, with its own volume.</p>
+    
+    
+    <p class="head-image">
+      <span class="muted">running</span>
+      <code class="mono" title="redis:7.4-alpine">redis:7.4-alpine</code>
+      <button class="btn btn-ghost btn-xs" type="button"
+              data-copy="redis:7.4-alpine" title="Copy the full reference">copy</button>
+    </p>
+    
   </div>
   <div class="head-side">
     <span class="pill ok">healthy</span>
@@ -3189,7 +3831,11 @@ ul.tight li { margin-bottom: 2px; }
       </div>
       <div class="tile">
         <div class="eyebrow">Created</div>
-        <div class="v small mono">2026-08-22T02:24:11Z</div>
+        <div class="v small mono">
+          
+          <time datetime="2026-08-22T03:30:35Z" data-localtime>2026-08-22T03:30:35Z</time>
+          
+        </div>
       </div>
       <div class="tile">
         <div class="eyebrow">Updated</div>
@@ -3245,6 +3891,33 @@ ul.tight li { margin-bottom: 2px; }
         <div class="panel-body stack">
           
             <div class="mono">node.role == manager</div>
+          
+
+          
+          
+          
+          <form method="post" action="#" class="inline-form"
+                data-preview>
+            <input type="hidden" name="csrf" value="preview">
+            <label class="sr-only" for="pm-cache">Placement mode</label>
+            <select id="pm-cache" name="placement_mode">
+              
+              <option value="master"
+                      selected>
+                master
+              </option>
+              
+              <option value="any"
+                      >
+                any
+              </option>
+              
+            </select>
+            <input type="text" name="placement_extra" class="mono"
+                   value=""
+                   placeholder="extra constraints, comma separated">
+            <button class="btn btn-sm" type="submit">Apply</button>
+          </form>
           
           
           <p class="hint">
@@ -3321,9 +3994,9 @@ ul.tight li { margin-bottom: 2px; }
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis://default:1d15309596d18b88f9531e71a4bf449d1d608db0a7d4372d@cache_redis:6379</code>
+              <code>redis://default:b74dae7958fe237c62f6b76f1583b3b1c7aeaff767225df5@cache_redis:6379</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis://default:1d15309596d18b88f9531e71a4bf449d1d608db0a7d4372d@cache_redis:6379">Copy</button>
+                      data-copy-text="redis://default:b74dae7958fe237c62f6b76f1583b3b1c7aeaff767225df5@cache_redis:6379">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -3334,7 +4007,7 @@ ul.tight li { margin-bottom: 2px; }
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="1d15309596d18b88f9531e71a4bf449d1d608db0a7d4372d">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="b74dae7958fe237c62f6b76f1583b3b1c7aeaff767225df5">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -3360,9 +4033,9 @@ ul.tight li { margin-bottom: 2px; }
         <div class="panel-body stack">
           
           <div class="conn">
-            <code>redis://default:1d15309596d18b88f9531e71a4bf449d1d608db0a7d4372d@10.0.0.2:46379</code>
+            <code>redis://default:b74dae7958fe237c62f6b76f1583b3b1c7aeaff767225df5@10.0.0.2:46379</code>
             <button class="btn btn-sm" type="button" data-copy
-                    data-copy-text="redis://default:1d15309596d18b88f9531e71a4bf449d1d608db0a7d4372d@10.0.0.2:46379">Copy</button>
+                    data-copy-text="redis://default:b74dae7958fe237c62f6b76f1583b3b1c7aeaff767225df5@10.0.0.2:46379">Copy</button>
           </div>
           <div class="table-wrap">
             <table>
@@ -3449,6 +4122,33 @@ ul.tight li { margin-bottom: 2px; }
   
   <div data-panel="deployments" hidden>
     
+
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Current rollout</h2>
+    <span class="spacer"></span>
+    <span class="pill ok">
+      converged
+      
+    </span>
+  </div>
+  <div class="rows">
+    <div class="deploy-row ok">
+      <span class="stripe"></span>
+      <span class="src">swarm</span>
+      <span>
+        <span class="row-title mono">completed</span>
+        <span class="row-sub">
+          6m ago · update completed
+          
+        </span>
+      </span>
+    </div>
+  </div>
+</section>
+
+
 <section class="panel">
   <div class="panel-head">
     <h2>CI webhook</h2>
@@ -3568,34 +4268,6 @@ ul.tight li { margin-bottom: 2px; }
   </form>
 </section>
 
-
-
-
-<section class="panel">
-  <div class="panel-head">
-    <h2>Current rollout</h2>
-    <span class="spacer"></span>
-    <span class="pill ok">
-      converged
-      
-    </span>
-  </div>
-  <div class="rows">
-    <div class="deploy-row ok">
-      <span class="stripe"></span>
-      <span class="src">swarm</span>
-      <span>
-        <span class="row-title mono">completed</span>
-        <span class="row-sub">
-          6m ago · update completed
-          
-        </span>
-      </span>
-    </div>
-  </div>
-</section>
-
-
 <section class="panel">
   <div class="panel-head">
     <h2>History</h2>
@@ -3620,6 +4292,44 @@ ul.tight li { margin-bottom: 2px; }
         <div class="panel-head"><h2>Configuration</h2></div>
         <div class="panel-body">
           <div class="grid-2">
+            
+              
+              
+<div class="field">
+  <label for="f-placement_mode">Placement</label>
+
+  
+    <select id="f-placement_mode" name="placement_mode">
+      
+      <option value="master" selected>master</option>
+      
+      <option value="any" >any</option>
+      
+    </select>
+
+  
+
+  <p class="hint">This has a VOLUME, and a volume lives on one machine. `master` keeps it on the node that will not be deleted. `any` lets Swarm place it anywhere — including a worker the autoscaler deletes later, taking the data with it. Only useful if you have moved the data yourself.</p>
+</div>
+            
+              
+              
+<div class="field">
+  <label for="f-placement_extra">Extra constraints</label>
+
+  
+    <input id="f-placement_extra" name="placement_extra"
+           type="text"
+           
+           
+           
+           
+           placeholder="node.labels.disk == ssd"
+           value="">
+  
+
+  <p class="hint">Comma separated, added to whatever the mode implies.</p>
+</div>
             
               
               
@@ -3692,6 +4402,8 @@ ul.tight li { margin-bottom: 2px; }
   <label for="f-appendonly">Persist to disk (AOF)</label>
 
   
+    
+    <input type="hidden" name="__bool__" value="appendonly">
     <label class="check">
       <input type="checkbox" id="f-appendonly" name="appendonly" value="true"
              checked>
@@ -3728,6 +4440,8 @@ ul.tight li { margin-bottom: 2px; }
   <label for="f-exporter">Metrics exporter</label>
 
   
+    
+    <input type="hidden" name="__bool__" value="exporter">
     <label class="check">
       <input type="checkbox" id="f-exporter" name="exporter" value="true"
              checked>
@@ -3787,10 +4501,14 @@ ul.tight li { margin-bottom: 2px; }
       </section>
 
       
+      
+
+      
       <section class="panel">
         <div class="panel-head"><h2>Managed for you</h2></div>
         <div class="panel-body">
           <div class="rows">
+            
             
           </div>
         </div>
@@ -3872,6 +4590,15 @@ ul.tight li { margin-bottom: 2px; }
     <div class="eyebrow"><a href="#view-components">Components</a></div>
     <h1>sessions</h1>
     <p class="hint">A password-protected Redis, with its own volume.</p>
+    
+    
+    <p class="head-image">
+      <span class="muted">running</span>
+      <code class="mono" title="redis:7.2-alpine">redis:7.2-alpine</code>
+      <button class="btn btn-ghost btn-xs" type="button"
+              data-copy="redis:7.2-alpine" title="Copy the full reference">copy</button>
+    </p>
+    
   </div>
   <div class="head-side">
     <span class="pill ok">healthy</span>
@@ -3918,7 +4645,11 @@ ul.tight li { margin-bottom: 2px; }
       </div>
       <div class="tile">
         <div class="eyebrow">Created</div>
-        <div class="v small mono">2026-08-22T02:24:11Z</div>
+        <div class="v small mono">
+          
+          <time datetime="2026-08-22T03:30:35Z" data-localtime>2026-08-22T03:30:35Z</time>
+          
+        </div>
       </div>
       <div class="tile">
         <div class="eyebrow">Updated</div>
@@ -3967,6 +4698,33 @@ ul.tight li { margin-bottom: 2px; }
         <div class="panel-body stack">
           
             <div class="mono">node.role == manager</div>
+          
+
+          
+          
+          
+          <form method="post" action="#" class="inline-form"
+                data-preview>
+            <input type="hidden" name="csrf" value="preview">
+            <label class="sr-only" for="pm-sessions">Placement mode</label>
+            <select id="pm-sessions" name="placement_mode">
+              
+              <option value="master"
+                      selected>
+                master
+              </option>
+              
+              <option value="any"
+                      >
+                any
+              </option>
+              
+            </select>
+            <input type="text" name="placement_extra" class="mono"
+                   value=""
+                   placeholder="extra constraints, comma separated">
+            <button class="btn btn-sm" type="submit">Apply</button>
+          </form>
           
           
           <p class="hint">
@@ -4043,9 +4801,9 @@ ul.tight li { margin-bottom: 2px; }
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis://default:f8d4db38e7c6e8c6de7a1bcd8bd49a862730a0d3ea96e359@sessions_redis:6379</code>
+              <code>redis://default:c245893bc02850296ced8ed018cf9d04997ac862b36c835e@sessions_redis:6379</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis://default:f8d4db38e7c6e8c6de7a1bcd8bd49a862730a0d3ea96e359@sessions_redis:6379">Copy</button>
+                      data-copy-text="redis://default:c245893bc02850296ced8ed018cf9d04997ac862b36c835e@sessions_redis:6379">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -4056,7 +4814,7 @@ ul.tight li { margin-bottom: 2px; }
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="f8d4db38e7c6e8c6de7a1bcd8bd49a862730a0d3ea96e359">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="c245893bc02850296ced8ed018cf9d04997ac862b36c835e">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -4142,6 +4900,33 @@ ul.tight li { margin-bottom: 2px; }
   
   <div data-panel="deployments" hidden>
     
+
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Current rollout</h2>
+    <span class="spacer"></span>
+    <span class="pill ok">
+      converged
+      
+    </span>
+  </div>
+  <div class="rows">
+    <div class="deploy-row ok">
+      <span class="stripe"></span>
+      <span class="src">swarm</span>
+      <span>
+        <span class="row-title mono">completed</span>
+        <span class="row-sub">
+          6m ago · update completed
+          
+        </span>
+      </span>
+    </div>
+  </div>
+</section>
+
+
 <section class="panel">
   <div class="panel-head">
     <h2>CI webhook</h2>
@@ -4261,34 +5046,6 @@ ul.tight li { margin-bottom: 2px; }
   </form>
 </section>
 
-
-
-
-<section class="panel">
-  <div class="panel-head">
-    <h2>Current rollout</h2>
-    <span class="spacer"></span>
-    <span class="pill ok">
-      converged
-      
-    </span>
-  </div>
-  <div class="rows">
-    <div class="deploy-row ok">
-      <span class="stripe"></span>
-      <span class="src">swarm</span>
-      <span>
-        <span class="row-title mono">completed</span>
-        <span class="row-sub">
-          6m ago · update completed
-          
-        </span>
-      </span>
-    </div>
-  </div>
-</section>
-
-
 <section class="panel">
   <div class="panel-head">
     <h2>History</h2>
@@ -4313,6 +5070,44 @@ ul.tight li { margin-bottom: 2px; }
         <div class="panel-head"><h2>Configuration</h2></div>
         <div class="panel-body">
           <div class="grid-2">
+            
+              
+              
+<div class="field">
+  <label for="f-placement_mode">Placement</label>
+
+  
+    <select id="f-placement_mode" name="placement_mode">
+      
+      <option value="master" selected>master</option>
+      
+      <option value="any" >any</option>
+      
+    </select>
+
+  
+
+  <p class="hint">This has a VOLUME, and a volume lives on one machine. `master` keeps it on the node that will not be deleted. `any` lets Swarm place it anywhere — including a worker the autoscaler deletes later, taking the data with it. Only useful if you have moved the data yourself.</p>
+</div>
+            
+              
+              
+<div class="field">
+  <label for="f-placement_extra">Extra constraints</label>
+
+  
+    <input id="f-placement_extra" name="placement_extra"
+           type="text"
+           
+           
+           
+           
+           placeholder="node.labels.disk == ssd"
+           value="">
+  
+
+  <p class="hint">Comma separated, added to whatever the mode implies.</p>
+</div>
             
               
               
@@ -4385,6 +5180,8 @@ ul.tight li { margin-bottom: 2px; }
   <label for="f-appendonly">Persist to disk (AOF)</label>
 
   
+    
+    <input type="hidden" name="__bool__" value="appendonly">
     <label class="check">
       <input type="checkbox" id="f-appendonly" name="appendonly" value="true"
              checked>
@@ -4421,6 +5218,8 @@ ul.tight li { margin-bottom: 2px; }
   <label for="f-exporter">Metrics exporter</label>
 
   
+    
+    <input type="hidden" name="__bool__" value="exporter">
     <label class="check">
       <input type="checkbox" id="f-exporter" name="exporter" value="true"
              >
@@ -4480,10 +5279,14 @@ ul.tight li { margin-bottom: 2px; }
       </section>
 
       
+      
+
+      
       <section class="panel">
         <div class="panel-head"><h2>Managed for you</h2></div>
         <div class="panel-body">
           <div class="rows">
+            
             
           </div>
         </div>
@@ -4794,6 +5597,48 @@ ul.tight li { margin-bottom: 2px; }
           
           
 <div class="field">
+  <label for="f-placement_mode">Placement</label>
+
+  
+    <select id="f-placement_mode" name="placement_mode">
+      
+      <option value="auto" selected>auto</option>
+      
+      <option value="master" >master</option>
+      
+      <option value="workers" >workers</option>
+      
+      <option value="any" >any</option>
+      
+    </select>
+
+  
+
+  <p class="hint">auto lets the autoscaler move this between the master and the worker pool as the fleet grows and shrinks. Anything else pins it and the autoscaler stops moving it — useful for something that must stay put, and a good way to strand yourself if you pin to workers and the pool empties.</p>
+</div>
+        
+          
+          
+<div class="field">
+  <label for="f-placement_extra">Extra constraints</label>
+
+  
+    <input id="f-placement_extra" name="placement_extra"
+           type="text"
+           
+           
+           
+           
+           placeholder="node.labels.disk == ssd"
+           value="">
+  
+
+  <p class="hint">Comma separated, added to whatever the mode above implies. Swarm syntax, e.g. node.labels.zone == eu.</p>
+</div>
+        
+          
+          
+<div class="field">
   <label for="f-stop_grace">Shutdown grace</label>
 
   
@@ -4816,6 +5661,8 @@ ul.tight li { margin-bottom: 2px; }
   <label for="f-autoscale">Autoscale</label>
 
   
+    
+    <input type="hidden" name="__bool__" value="autoscale">
     <label class="check">
       <input type="checkbox" id="f-autoscale" name="autoscale" value="true"
              >
@@ -5125,6 +5972,44 @@ ul.tight li { margin-bottom: 2px; }
           
           
 <div class="field">
+  <label for="f-placement_mode">Placement</label>
+
+  
+    <select id="f-placement_mode" name="placement_mode">
+      
+      <option value="master" selected>master</option>
+      
+      <option value="any" >any</option>
+      
+    </select>
+
+  
+
+  <p class="hint">This has a VOLUME, and a volume lives on one machine. `master` keeps it on the node that will not be deleted. `any` lets Swarm place it anywhere — including a worker the autoscaler deletes later, taking the data with it. Only useful if you have moved the data yourself.</p>
+</div>
+        
+          
+          
+<div class="field">
+  <label for="f-placement_extra">Extra constraints</label>
+
+  
+    <input id="f-placement_extra" name="placement_extra"
+           type="text"
+           
+           
+           
+           
+           placeholder="node.labels.disk == ssd"
+           value="">
+  
+
+  <p class="hint">Comma separated, added to whatever the mode implies.</p>
+</div>
+        
+          
+          
+<div class="field">
   <label for="f-version">Version</label>
 
   
@@ -5193,6 +6078,8 @@ ul.tight li { margin-bottom: 2px; }
   <label for="f-appendonly">Persist to disk (AOF)</label>
 
   
+    
+    <input type="hidden" name="__bool__" value="appendonly">
     <label class="check">
       <input type="checkbox" id="f-appendonly" name="appendonly" value="true"
              checked>
@@ -5229,6 +6116,8 @@ ul.tight li { margin-bottom: 2px; }
   <label for="f-exporter">Metrics exporter</label>
 
   
+    
+    <input type="hidden" name="__bool__" value="exporter">
     <label class="check">
       <input type="checkbox" id="f-exporter" name="exporter" value="true"
              checked>
@@ -5350,309 +6239,135 @@ ul.tight li { margin-bottom: 2px; }
 </div>
 
 <section class="panel">
-  <div class="panel-head"><h2>Nodes</h2></div>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Hostname</th><th>Role</th><th>State</th><th>Availability</th>
-          <th>Address</th><th class="num">vCPU</th><th class="num">Memory</th><th>Engine</th>
-        </tr>
-      </thead>
-      <tbody>
-        
-        <tr>
-          <td><strong>aichat-master</strong><div class="row-sub">k39dl2mzq018</div></td>
-          <td><span class="pill ok plain">manager</span></td>
-          <td><span class="pill ok">ready</span></td>
-          <td class="mono muted">active</td>
-          <td class="mono">10.0.0.2</td>
-          <td class="num">4</td>
-          <td class="num">7.6 GB</td>
-          <td class="mono muted">27.3.1</td>
-        </tr>
-        
-        <tr>
-          <td><strong>aichat-worker-1754812203</strong><div class="row-sub">w1af02c9be47</div></td>
-          <td><span class="pill mute plain">worker</span></td>
-          <td><span class="pill ok">ready</span></td>
-          <td class="mono muted">active</td>
-          <td class="mono">10.0.0.5</td>
-          <td class="num">3</td>
-          <td class="num">3.8 GB</td>
-          <td class="mono muted">27.3.1</td>
-        </tr>
-        
-        <tr>
-          <td><strong>aichat-worker-1754819114</strong><div class="row-sub">w2bc71d0aa93</div></td>
-          <td><span class="pill mute plain">worker</span></td>
-          <td><span class="pill ok">ready</span></td>
-          <td class="mono muted">active</td>
-          <td class="mono">10.0.0.6</td>
-          <td class="num">3</td>
-          <td class="num">3.8 GB</td>
-          <td class="mono muted">27.3.1</td>
-        </tr>
-        
-        <tr>
-          <td><strong>aichat-worker-1754823887</strong><div class="row-sub">w3de92f1cc05</div></td>
-          <td><span class="pill mute plain">worker</span></td>
-          <td><span class="pill warn">ready</span></td>
-          <td class="mono ">drain</td>
-          <td class="mono">10.0.0.7</td>
-          <td class="num">3</td>
-          <td class="num">3.8 GB</td>
-          <td class="mono muted">27.3.1</td>
-        </tr>
-        
-      </tbody>
-    </table>
+  <div class="panel-head">
+    <h2>Nodes</h2>
+    <span class="spacer"></span>
+    <span class="legend-item"><i class="gauge-key gauge-key-cpu"></i>CPU reserved</span>
+    <span class="legend-item"><i class="gauge-key gauge-key-mem"></i>memory reserved</span>
   </div>
+
+  <p class="panel-intro">
+    The two rings on each node are <strong>reserved</strong> capacity, not usage. A full ring
+    means every core or byte on that machine is already promised to something, and no further
+    replica can be placed there however idle it looks — a node routinely reads 4% busy while
+    being 100% reserved. This is the pair the autoscaler buys and deletes servers on.
+  </p>
+
+  <div class="tree-scroll">
+    <div class="tree">
+      <div class="tree-top">
+        <div class="tnode tnode-root">
+          <span class="tnode-title">aichat</span>
+          <span class="tnode-sub">
+            <b>4</b> nodes
+            · <b>13</b> vCPU
+            · <b>19.0</b> GB
+          </span>
+        </div>
+      </div>
+
+      <div class="tree-kids">
+        
+        <div class="tree-branch">
+          <div class="tnode tnode-host has-gauges is-manager">
+            <span class="tnode-head">
+              <span class="pill accent">manager</span>
+              <span class="pill ok">ready</span>
+              
+            </span>
+            <span class="tnode-title" title="aichat-master">aichat-master</span>
+            <span class="tnode-sub mono">10.0.0.2 · 4 vCPU · 7.6 GB</span>
+            <span class="tnode-sub muted">14 tasks · engine 27.3.1</span>
+            <span class="tnode-meters">
+              <span title="node CPU utilisation">used cpu <b>78%</b></span>
+              <span title="node memory utilisation">used mem <b>61%</b></span>
+            </span>
+
+            
+            <span class="gauge gauge-cpu" style="--v:62.0"
+                  title="CPU reserved: 62.0% — 1.2 of 4 vCPU promised to tasks on this node"></span>
+            <span class="gauge gauge-mem" style="--v:48.0"
+                  title="Memory reserved: 48.0% — 1400 MB of 7.6 GB promised to tasks on this node"></span>
+          </div>
+        </div>
+        
+        <div class="tree-branch">
+          <div class="tnode tnode-host has-gauges ">
+            <span class="tnode-head">
+              <span class="pill ok">worker</span>
+              <span class="pill ok">ready</span>
+              
+            </span>
+            <span class="tnode-title" title="aichat-worker-1754812203">aichat-worker-1754812203</span>
+            <span class="tnode-sub mono">10.0.0.5 · 3 vCPU · 3.8 GB</span>
+            <span class="tnode-sub muted">6 tasks · engine 27.3.1</span>
+            <span class="tnode-meters">
+              <span title="node CPU utilisation">used cpu <b>64%</b></span>
+              <span title="node memory utilisation">used mem <b>47%</b></span>
+            </span>
+
+            
+            <span class="gauge gauge-cpu" style="--v:62.0"
+                  title="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks on this node"></span>
+            <span class="gauge gauge-mem" style="--v:48.0"
+                  title="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks on this node"></span>
+          </div>
+        </div>
+        
+        <div class="tree-branch">
+          <div class="tnode tnode-host has-gauges ">
+            <span class="tnode-head">
+              <span class="pill ok">worker</span>
+              <span class="pill ok">ready</span>
+              
+            </span>
+            <span class="tnode-title" title="aichat-worker-1754819114">aichat-worker-1754819114</span>
+            <span class="tnode-sub mono">10.0.0.6 · 3 vCPU · 3.8 GB</span>
+            <span class="tnode-sub muted">6 tasks · engine 27.3.1</span>
+            <span class="tnode-meters">
+              <span title="node CPU utilisation">used cpu <b>71%</b></span>
+              <span title="node memory utilisation">used mem <b>52%</b></span>
+            </span>
+
+            
+            <span class="gauge gauge-cpu" style="--v:62.0"
+                  title="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks on this node"></span>
+            <span class="gauge gauge-mem" style="--v:48.0"
+                  title="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks on this node"></span>
+          </div>
+        </div>
+        
+        <div class="tree-branch">
+          <div class="tnode tnode-host has-gauges ">
+            <span class="tnode-head">
+              <span class="pill warn">worker</span>
+              <span class="pill warn">ready</span>
+              <span class="pill warn">drain</span>
+            </span>
+            <span class="tnode-title" title="aichat-worker-1754823887">aichat-worker-1754823887</span>
+            <span class="tnode-sub mono">10.0.0.7 · 3 vCPU · 3.8 GB</span>
+            <span class="tnode-sub muted">3 tasks · engine 27.3.1</span>
+            <span class="tnode-meters">
+              <span title="node CPU utilisation">used cpu <b>12%</b></span>
+              <span title="node memory utilisation">used mem <b>19%</b></span>
+            </span>
+
+            
+            <span class="gauge gauge-cpu" style="--v:62.0"
+                  title="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks on this node"></span>
+            <span class="gauge gauge-mem" style="--v:48.0"
+                  title="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks on this node"></span>
+          </div>
+        </div>
+        
+      </div>
+    </div>
+  </div>
+
   <div class="panel-note">
     A worker in <code>drain</code> is being removed: its tasks have been rescheduled and the
     server is deleted once they have all left, plus a grace period for the tunnel connector
     to release its edge connections.
-  </div>
-</section>
-
-<div class="page-head section-gap">
-  <div>
-    <h1 class="sub">Infrastructure</h1>
-    <p>The three stacks that come up before anything else exists. They are shown read-only:
-       they have no spec file and no delete button, because they are the thing that runs
-       your components. Redeploying one re-applies its file and nothing else.</p>
-  </div>
-</div>
-
-
-<section class="panel">
-  <div class="panel-head">
-    <h2>Ingress</h2>
-    <span class="spacer"></span>
-    <span class="muted">1</span>
-  </div>
-  <div class="rows">
-    
-    
-    <div class="row ok">
-      <span class="stripe"></span>
-      <span>
-        <span class="row-title">Cloudflare Tunnel</span>
-        <span class="row-sub">One connector per node, master included. All inbound traffic arrives here. Routes are configured in the Cloudflare dashboard, not here.</span>
-      </span>
-      <span class="row-metric hide-sm">
-        <span class="k">Tasks</span>
-        <span class="v num">4/4</span>
-      </span>
-      
-      <span class="pill ok">healthy</span>
-    </div>
-    
-  </div>
-</section>
-
-<section class="panel">
-  <div class="panel-head">
-    <h2>Observability</h2>
-    <span class="spacer"></span>
-    <span class="muted">6</span>
-  </div>
-  <div class="rows">
-    
-    
-    <div class="row ok">
-      <span class="stripe"></span>
-      <span>
-        <span class="row-title">Grafana</span>
-        <span class="row-sub">Dashboards over VictoriaMetrics and Loki.</span>
-      </span>
-      <span class="row-metric hide-sm">
-        <span class="k">Tasks</span>
-        <span class="v num">1/1</span>
-      </span>
-      
-      <a class="btn btn-sm" href="https://grafana-aichat.acme.dev" target="_blank" rel="noopener">Open</a>
-      
-      <span class="pill ok">healthy</span>
-    </div>
-    
-    
-    <div class="row ok">
-      <span class="stripe"></span>
-      <span>
-        <span class="row-title">VictoriaMetrics</span>
-        <span class="row-sub">Metric storage. Every scaling decision is read from here.</span>
-      </span>
-      <span class="row-metric hide-sm">
-        <span class="k">Tasks</span>
-        <span class="v num">1/1</span>
-      </span>
-      
-      <span class="pill mute plain mono" title="Overlay network only — this address resolves inside the cluster, not from your machine. Reach it with an SSH tunnel to the master.">http://victoriametrics:8428</span>
-      
-      <span class="pill ok">healthy</span>
-    </div>
-    
-    
-    <div class="row ok">
-      <span class="stripe"></span>
-      <span>
-        <span class="row-title">vmagent</span>
-        <span class="row-sub">Scrapes anything carrying the prometheus.* deploy labels. Components get them automatically.</span>
-      </span>
-      <span class="row-metric hide-sm">
-        <span class="k">Tasks</span>
-        <span class="v num">1/1</span>
-      </span>
-      
-      <span class="pill mute plain mono" title="Overlay network only — this address resolves inside the cluster, not from your machine. Reach it with an SSH tunnel to the master.">http://vmagent:8429</span>
-      
-      <span class="pill ok">healthy</span>
-    </div>
-    
-    
-    <div class="row ok">
-      <span class="stripe"></span>
-      <span>
-        <span class="row-title">vmalert</span>
-        <span class="row-sub">Evaluates config/alerts.yml against VictoriaMetrics.</span>
-      </span>
-      <span class="row-metric hide-sm">
-        <span class="k">Tasks</span>
-        <span class="v num">1/1</span>
-      </span>
-      
-      <span class="pill mute plain mono" title="Overlay network only — this address resolves inside the cluster, not from your machine. Reach it with an SSH tunnel to the master.">http://vmalert:8880</span>
-      
-      <span class="pill ok">healthy</span>
-    </div>
-    
-    
-    <div class="row ok">
-      <span class="stripe"></span>
-      <span>
-        <span class="row-title">Alertmanager</span>
-        <span class="row-sub">Groups and dispatches alerts to your webhook.</span>
-      </span>
-      <span class="row-metric hide-sm">
-        <span class="k">Tasks</span>
-        <span class="v num">1/1</span>
-      </span>
-      
-      <span class="pill mute plain mono" title="Overlay network only — this address resolves inside the cluster, not from your machine. Reach it with an SSH tunnel to the master.">http://alertmanager:9093</span>
-      
-      <span class="pill ok">healthy</span>
-    </div>
-    
-    
-    <div class="row ok">
-      <span class="stripe"></span>
-      <span>
-        <span class="row-title">Loki</span>
-        <span class="row-sub">Log storage. Every container ships to it directly through the log driver.</span>
-      </span>
-      <span class="row-metric hide-sm">
-        <span class="k">Tasks</span>
-        <span class="v num">1/1</span>
-      </span>
-      
-      <span class="pill ok">healthy</span>
-    </div>
-    
-  </div>
-</section>
-
-<section class="panel">
-  <div class="panel-head">
-    <h2>Platform</h2>
-    <span class="spacer"></span>
-    <span class="muted">3</span>
-  </div>
-  <div class="rows">
-    
-    
-    <div class="row ok">
-      <span class="stripe"></span>
-      <span>
-        <span class="row-title">Autoscaler</span>
-        <span class="row-sub">Discovers components by label, scales their replicas, and buys and sells Hetzner workers to fit them.</span>
-      </span>
-      <span class="row-metric hide-sm">
-        <span class="k">Tasks</span>
-        <span class="v num">1/1</span>
-      </span>
-      
-      <span class="pill ok">healthy</span>
-    </div>
-    
-    
-    <div class="row ok">
-      <span class="stripe"></span>
-      <span>
-        <span class="row-title">Node exporters</span>
-        <span class="row-sub">node-exporter and cadvisor, one of each per node.</span>
-      </span>
-      <span class="row-metric hide-sm">
-        <span class="k">Tasks</span>
-        <span class="v num">1/1</span>
-      </span>
-      
-      <span class="pill ok">healthy</span>
-    </div>
-    
-    
-    <div class="row ok">
-      <span class="stripe"></span>
-      <span>
-        <span class="row-title">Admin panel</span>
-        <span class="row-sub">This console. It holds the docker socket, so its password is the cluster.</span>
-      </span>
-      <span class="row-metric hide-sm">
-        <span class="k">Tasks</span>
-        <span class="v num">1/1</span>
-      </span>
-      
-      <a class="btn btn-sm" href="https://admin-aichat.acme.dev" target="_blank" rel="noopener">Open</a>
-      
-      <span class="pill ok">healthy</span>
-    </div>
-    
-  </div>
-</section>
-
-
-<section class="panel">
-  <div class="panel-head"><h2>Redeploy a stack</h2></div>
-  <div class="panel-body">
-    <div class="btn-row">
-      
-      <form method="post" action="#" data-preview
-            data-confirm="Re-apply the monitoring stack file?">
-        <input type="hidden" name="csrf" value="preview">
-        <input type="hidden" name="stack" value="monitoring">
-        <button class="btn" type="submit">monitoring</button>
-      </form>
-      
-      <form method="post" action="#" data-preview
-            data-confirm="Re-apply the ingress stack file?">
-        <input type="hidden" name="csrf" value="preview">
-        <input type="hidden" name="stack" value="ingress">
-        <button class="btn" type="submit">ingress</button>
-      </form>
-      
-      <form method="post" action="#" data-preview
-            data-confirm="Re-apply the admin stack file?">
-        <input type="hidden" name="csrf" value="preview">
-        <input type="hidden" name="stack" value="admin">
-        <button class="btn" type="submit">admin</button>
-      </form>
-      
-    </div>
-    <p class="hint">
-      Safe to run at any time: these stacks hold no state anything else owns. Your components
-      are not stacks in this sense and are not touched — each one deploys itself, reading its
-      live image and replica count back first.
-    </p>
   </div>
 </section></section>
       <section data-view="autoscaler" hidden><div class="page-head">
@@ -6811,6 +7526,12 @@ ul.tight li { margin-bottom: 2px; }
       return;
     }
 
+    if ((el = ev.target.closest("[data-toggle-master]"))) {
+      var section = el.closest("[data-toggle-section]");
+      if (section) { syncToggleSection(section); }
+      return;
+    }
+
     if ((el = ev.target.closest("[data-tab]"))) {
       // Some tabs are rendered empty until the server is asked for them, so
       // switching to one in the browser would show a blank panel and then
@@ -6909,6 +7630,37 @@ ul.tight li { margin-bottom: 2px; }
     }
   } catch (e) { /* private mode */ }
 
+  // Sections rendered server-side already carry their checkbox state; this
+  // brings the disabled state of their controls into line with it on load.
+  initToggleSections(document);
+
+  // --- timestamps in the reader's own timezone ------------------------------
+  // The server renders UTC, because the server does not know where you are and
+  // a wrong local time is worse than an explicit UTC one. Once here, we do
+  // know: every <time data-localtime> is rewritten to the browser's zone, and
+  // the full ISO value stays in the title for when the exact instant matters.
+  function localiseTimes(root) {
+    var nodes = (root || document).querySelectorAll("time[data-localtime]");
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      var raw = el.getAttribute("datetime");
+      if (!raw) { continue; }
+      // Bare ISO strings with no zone are UTC here; say so or the browser reads
+      // them as local and the correction is applied twice.
+      var iso = /(?:Z|[+-]\d{2}:?\d{2})$/.test(raw) ? raw : raw + "Z";
+      var when = new Date(iso);
+      if (isNaN(when.getTime())) { continue; }
+      try {
+        el.textContent = when.toLocaleString(undefined, {
+          year: "numeric", month: "short", day: "2-digit",
+          hour: "2-digit", minute: "2-digit"
+        });
+        el.title = when.toString();
+      } catch (e) { /* leave the server's UTC text alone */ }
+    }
+  }
+  localiseTimes(document);
+
   // --- cluster map: keep it current -----------------------------------------
   // Rendered server-side first, so the section is complete and correct with JS
   // off; this only refreshes it in place.
@@ -6924,9 +7676,39 @@ ul.tight li { margin-bottom: 2px; }
   // Signature of a node's task list. Cheap way to know whether the blocks need
   // rebuilding at all — on a quiet cluster they never do, so a tick touches
   // nothing and there is no flicker.
+  // State and reservations are part of the signature, not just the task list:
+  // a chip whose task went from running to failed, or whose reservation was
+  // re-sized, looks identical by name and would never be repainted otherwise.
+  // A section whose title carries its own on/off switch. With it off the
+  // controls inside are disabled — they are not merely irrelevant, they are
+  // describing a policy nothing will read, and a form that accepts input it
+  // will ignore is how you end up tuning thresholds that never applied.
+  //
+  // Disabled inputs submit nothing, which is exactly right here: the spec is
+  // merged, so an untouched policy keeps whatever it already said.
+  function syncToggleSection(section) {
+    var master = section.querySelector("[data-toggle-master]");
+    var body = section.querySelector("[data-toggle-body]");
+    if (!master || !body) { return; }
+    var on = master.checked;
+    section.classList.toggle("is-off", !on);
+    var controls = body.querySelectorAll("input, select, textarea, button");
+    for (var i = 0; i < controls.length; i++) { controls[i].disabled = !on; }
+    var label = section.querySelector(".switch-label");
+    if (label) { label.textContent = on ? "on" : "off"; }
+  }
+
+  function initToggleSections(root) {
+    var sections = (root || document).querySelectorAll("[data-toggle-section]");
+    for (var i = 0; i < sections.length; i++) { syncToggleSection(sections[i]); }
+  }
+
   function sig(tasks) {
     var s = "";
-    for (var i = 0; i < tasks.length; i++) { s += tasks[i].name + "|" + tasks[i].key + ";"; }
+    for (var i = 0; i < tasks.length; i++) {
+      var t = tasks[i];
+      s += t.name + "|" + t.key + "|" + t.tone + "|" + t.cpu_share + "|" + t.mem_share + ";";
+    }
     return s;
   }
 
@@ -6934,10 +7716,17 @@ ul.tight li { margin-bottom: 2px; }
     var el = document.createElement("span");
     el.className = "slot slot-" + t.key;
     el.tabIndex = 0;
-    el.title = t.service + " — task " + t.id;
+    // The ring is CPU reserved as a share of this node; the fill behind the
+    // label is memory. Both are set as custom properties so the drawing stays
+    // entirely in the stylesheet.
+    el.style.setProperty("--cpu", t.cpu_share);
+    el.style.setProperty("--mem", t.mem_share);
+    el.title = t.service + " — task " + t.id + "\nstate: " + t.state +
+               "\nreserves " + t.cpu_share + "% of this node's CPU, " +
+               t.mem_share + "% of its memory";
     var dot = document.createElement("i");
-    dot.className = "sw sw-" + t.key;
-    el.appendChild(dot);
+    dot.className = "dot dot-" + t.tone;      // what it is DOING; the chip tint
+    el.appendChild(dot);                      // already says what it IS
     // textContent, never innerHTML: service names come from the daemon and are
     // not this file's to trust with markup.
     el.appendChild(document.createTextNode(t.name));
@@ -6973,6 +7762,21 @@ ul.tight li { margin-bottom: 2px; }
       set('[data-f="tasks"]', String(n.tasks_total));
       set('[data-f="cpu"]', pct(n.cpu_pct));
       set('[data-f="mem"]', pct(n.mem_pct));
+
+      // The reserved rings. Utilisation moves constantly and reservation
+      // barely ever, but when it does it is the number that decides whether a
+      // server gets bought, so it has to be live too.
+      var gauge = function (sel, value, label, absolute) {
+        var el = row.querySelector(sel);
+        if (!el) { return; }
+        el.style.setProperty("--v", value == null ? 0 : value);
+        el.title = label + " reserved: " + (value == null ? "—" : value + "%") +
+                   (absolute ? " — " + absolute : "");
+      };
+      gauge('[data-f="cpures"]', n.cpu_reserved_pct, "CPU",
+            n.cpu_reserved + " of " + n.cpus + " vCPU promised to tasks here");
+      gauge('[data-f="memres"]', n.mem_reserved_pct, "Memory",
+            n.mem_reserved_mb + " MB of " + n.memory_gb + " GB promised to tasks here");
 
       var slots = row.querySelector("[data-slots]");
       if (!slots) { continue; }

@@ -56,39 +56,50 @@ class AppComponent(Component):
             Field("memory_limit_mb", "Memory limit (MB)", "memory", 768,
                   minimum=16, maximum=131072, managed="autoscaler",
                   help="Exceed it and the container is OOM-killed, so leave headroom."),
+            Field("placement_mode", "Placement", "choice", "auto",
+                  choices=("auto", "master", "workers", "any"),
+                  help="auto lets the autoscaler move this between the master and "
+                       "the worker pool as the fleet grows and shrinks. Anything "
+                       "else pins it and the autoscaler stops moving it — useful "
+                       "for something that must stay put, and a good way to strand "
+                       "yourself if you pin to workers and the pool empties."),
+            Field("placement_extra", "Extra constraints", "text", "",
+                  placeholder="node.labels.disk == ssd",
+                  help="Comma separated, added to whatever the mode above implies. "
+                       "Swarm syntax, e.g. node.labels.zone == eu."),
             Field("stop_grace", "Shutdown grace", "number", 30, minimum=1, maximum=600,
                   help="Seconds to finish in-flight requests on SIGTERM. Pair it with a "
                        "shutdown hook in your app; the Docker default of 10 cuts them."),
 
             Field("autoscale", "Autoscale", "bool", False,
-                  help="Let the autoscaler own the replica count, using the policy below."),
+                  help="Let the autoscaler own the replica count, using the policy below.", group="autoscale"),
             Field("min_replicas", "Minimum replicas", "number", 2, minimum=0, maximum=100,
                   help="Two is the usual floor: with one, a crash is an outage and a "
-                       "rolling update has nowhere to shift traffic."),
+                       "rolling update has nowhere to shift traffic.", group="autoscale"),
             Field("max_replicas", "Maximum replicas", "number", 8, minimum=1, maximum=100,
-                  help="A budget cap. The ReplicaCeiling alert compares against it."),
+                  help="A budget cap. The ReplicaCeiling alert compares against it.", group="autoscale"),
             Field("slo_p95_ms", "p95 SLO (ms)", "number", 500, minimum=1, maximum=600000,
-                  help="THE number. Scale-up and scale-down thresholds are fractions of it."),
+                  help="THE number. Scale-up and scale-down thresholds are fractions of it.", group="autoscale"),
             Field("up_p95_ratio", "Scale up at", "cpu", 0.8, minimum=0.05, maximum=2.0,
-                  help="Fraction of the SLO that triggers growth — act before users feel it."),
-            Field("down_p95_ratio", "Scale down below", "cpu", 0.4, minimum=0.01, maximum=2.0),
+                  help="Fraction of the SLO that triggers growth — act before users feel it.", group="autoscale"),
+            Field("down_p95_ratio", "Scale down below", "cpu", 0.4, minimum=0.01, maximum=2.0, group="autoscale"),
             Field("up_cpu_pct", "Scale up above CPU %", "number", 70, minimum=1, maximum=200,
                   help="CPU of ONE replica against its own limit. This is the secondary "
                        "signal, and at low traffic it is the only one: p95 over an empty "
-                       "histogram returns nothing at all."),
-            Field("down_cpu_pct", "Scale down below CPU %", "number", 30, minimum=1, maximum=200),
+                       "histogram returns nothing at all.", group="autoscale"),
+            Field("down_cpu_pct", "Scale down below CPU %", "number", 30, minimum=1, maximum=200, group="autoscale"),
             Field("sustain_up_seconds", "Sustain up (s)", "number", 90, minimum=30, maximum=3600,
                   help="How long a signal must stay high. Up fast, down slow — never "
-                       "make these two symmetric."),
+                       "make these two symmetric.", group="autoscale"),
             Field("sustain_down_seconds", "Sustain down (s)", "number", 900,
-                  minimum=60, maximum=86400),
+                  minimum=60, maximum=86400, group="autoscale"),
             Field("up_factor", "Growth step", "cpu", 0.5, minimum=0.05, maximum=4.0,
-                  help="+50% of current, minimum +1. One at a time cannot track a spike."),
+                  help="+50% of current, minimum +1. One at a time cannot track a spike.", group="autoscale"),
             Field("cooldown_seconds", "Replica cooldown (s)", "number", 60,
-                  minimum=0, maximum=3600),
+                  minimum=0, maximum=3600, group="autoscale"),
             Field("priority", "Priority", "number", 100, minimum=0, maximum=1000,
                   help="Lower wins when several components compete for the same node "
-                       "capacity. Leave it alone unless one app genuinely matters more."),
+                       "capacity. Leave it alone unless one app genuinely matters more.", group="autoscale"),
         ]
 
     # --- validation ---------------------------------------------------------
@@ -134,6 +145,11 @@ class AppComponent(Component):
         """
         s = self.spec
         labels = {"infra.workload": "app"}
+        # Placement override, read by the autoscaler off the live service. It
+        # discovers components through the Docker API and never sees this file,
+        # so an override has to travel as a label or it does not exist.
+        if not self.autoscaler_owns_placement():
+            labels["infra.placement.pinned"] = "true"
         if not s.get("autoscale"):
             # Still discovered, still pinned with the others, never scaled: a
             # fixed-size app has to move to the workers too.
@@ -236,9 +252,37 @@ class AppComponent(Component):
         is read back and re-stated, and never invented.
         """
         placement = {"preferences": [{"spread": "node.id"}]}
-        if self.live_worker_pinned():
-            placement["constraints"] = ["node.role == worker"]
+        constraints = []
+
+        mode = (self.spec.get("placement_mode") or "auto").strip()
+        if mode == "auto":
+            # Read back, never invented — see the docstring above.
+            if self.live_worker_pinned():
+                constraints.append("node.role == worker")
+        elif mode == "master":
+            constraints.append("node.role == manager")
+        elif mode == "workers":
+            constraints.append("node.role == worker")
+        # "any" deliberately adds nothing.
+
+        for extra in (self.spec.get("placement_extra") or "").split(","):
+            extra = extra.strip()
+            if extra:
+                constraints.append(extra)
+
+        if constraints:
+            placement["constraints"] = constraints
         return placement
+
+    def autoscaler_owns_placement(self):
+        """
+        True while the autoscaler is allowed to move this component.
+
+        A mode other than `auto` is a deliberate override, and the autoscaler is
+        told to stand off via a deploy label rather than by reading this file —
+        it discovers services through the Docker API and never sees a spec.
+        """
+        return (self.spec.get("placement_mode") or "auto") == "auto"
 
     # --- panel surface ------------------------------------------------------
 

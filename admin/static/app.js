@@ -188,6 +188,12 @@
       return;
     }
 
+    if ((el = ev.target.closest("[data-toggle-master]"))) {
+      var section = el.closest("[data-toggle-section]");
+      if (section) { syncToggleSection(section); }
+      return;
+    }
+
     if ((el = ev.target.closest("[data-tab]"))) {
       // Some tabs are rendered empty until the server is asked for them, so
       // switching to one in the browser would show a blank panel and then
@@ -286,6 +292,37 @@
     }
   } catch (e) { /* private mode */ }
 
+  // Sections rendered server-side already carry their checkbox state; this
+  // brings the disabled state of their controls into line with it on load.
+  initToggleSections(document);
+
+  // --- timestamps in the reader's own timezone ------------------------------
+  // The server renders UTC, because the server does not know where you are and
+  // a wrong local time is worse than an explicit UTC one. Once here, we do
+  // know: every <time data-localtime> is rewritten to the browser's zone, and
+  // the full ISO value stays in the title for when the exact instant matters.
+  function localiseTimes(root) {
+    var nodes = (root || document).querySelectorAll("time[data-localtime]");
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      var raw = el.getAttribute("datetime");
+      if (!raw) { continue; }
+      // Bare ISO strings with no zone are UTC here; say so or the browser reads
+      // them as local and the correction is applied twice.
+      var iso = /(?:Z|[+-]\d{2}:?\d{2})$/.test(raw) ? raw : raw + "Z";
+      var when = new Date(iso);
+      if (isNaN(when.getTime())) { continue; }
+      try {
+        el.textContent = when.toLocaleString(undefined, {
+          year: "numeric", month: "short", day: "2-digit",
+          hour: "2-digit", minute: "2-digit"
+        });
+        el.title = when.toString();
+      } catch (e) { /* leave the server's UTC text alone */ }
+    }
+  }
+  localiseTimes(document);
+
   // --- cluster map: keep it current -----------------------------------------
   // Rendered server-side first, so the section is complete and correct with JS
   // off; this only refreshes it in place.
@@ -301,9 +338,39 @@
   // Signature of a node's task list. Cheap way to know whether the blocks need
   // rebuilding at all — on a quiet cluster they never do, so a tick touches
   // nothing and there is no flicker.
+  // State and reservations are part of the signature, not just the task list:
+  // a chip whose task went from running to failed, or whose reservation was
+  // re-sized, looks identical by name and would never be repainted otherwise.
+  // A section whose title carries its own on/off switch. With it off the
+  // controls inside are disabled — they are not merely irrelevant, they are
+  // describing a policy nothing will read, and a form that accepts input it
+  // will ignore is how you end up tuning thresholds that never applied.
+  //
+  // Disabled inputs submit nothing, which is exactly right here: the spec is
+  // merged, so an untouched policy keeps whatever it already said.
+  function syncToggleSection(section) {
+    var master = section.querySelector("[data-toggle-master]");
+    var body = section.querySelector("[data-toggle-body]");
+    if (!master || !body) { return; }
+    var on = master.checked;
+    section.classList.toggle("is-off", !on);
+    var controls = body.querySelectorAll("input, select, textarea, button");
+    for (var i = 0; i < controls.length; i++) { controls[i].disabled = !on; }
+    var label = section.querySelector(".switch-label");
+    if (label) { label.textContent = on ? "on" : "off"; }
+  }
+
+  function initToggleSections(root) {
+    var sections = (root || document).querySelectorAll("[data-toggle-section]");
+    for (var i = 0; i < sections.length; i++) { syncToggleSection(sections[i]); }
+  }
+
   function sig(tasks) {
     var s = "";
-    for (var i = 0; i < tasks.length; i++) { s += tasks[i].name + "|" + tasks[i].key + ";"; }
+    for (var i = 0; i < tasks.length; i++) {
+      var t = tasks[i];
+      s += t.name + "|" + t.key + "|" + t.tone + "|" + t.cpu_share + "|" + t.mem_share + ";";
+    }
     return s;
   }
 
@@ -311,10 +378,17 @@
     var el = document.createElement("span");
     el.className = "slot slot-" + t.key;
     el.tabIndex = 0;
-    el.title = t.service + " — task " + t.id;
+    // The ring is CPU reserved as a share of this node; the fill behind the
+    // label is memory. Both are set as custom properties so the drawing stays
+    // entirely in the stylesheet.
+    el.style.setProperty("--cpu", t.cpu_share);
+    el.style.setProperty("--mem", t.mem_share);
+    el.title = t.service + " — task " + t.id + "\nstate: " + t.state +
+               "\nreserves " + t.cpu_share + "% of this node's CPU, " +
+               t.mem_share + "% of its memory";
     var dot = document.createElement("i");
-    dot.className = "sw sw-" + t.key;
-    el.appendChild(dot);
+    dot.className = "dot dot-" + t.tone;      // what it is DOING; the chip tint
+    el.appendChild(dot);                      // already says what it IS
     // textContent, never innerHTML: service names come from the daemon and are
     // not this file's to trust with markup.
     el.appendChild(document.createTextNode(t.name));
@@ -350,6 +424,21 @@
       set('[data-f="tasks"]', String(n.tasks_total));
       set('[data-f="cpu"]', pct(n.cpu_pct));
       set('[data-f="mem"]', pct(n.mem_pct));
+
+      // The reserved rings. Utilisation moves constantly and reservation
+      // barely ever, but when it does it is the number that decides whether a
+      // server gets bought, so it has to be live too.
+      var gauge = function (sel, value, label, absolute) {
+        var el = row.querySelector(sel);
+        if (!el) { return; }
+        el.style.setProperty("--v", value == null ? 0 : value);
+        el.title = label + " reserved: " + (value == null ? "—" : value + "%") +
+                   (absolute ? " — " + absolute : "");
+      };
+      gauge('[data-f="cpures"]', n.cpu_reserved_pct, "CPU",
+            n.cpu_reserved + " of " + n.cpus + " vCPU promised to tasks here");
+      gauge('[data-f="memres"]', n.mem_reserved_pct, "Memory",
+            n.mem_reserved_mb + " MB of " + n.memory_gb + " GB promised to tasks here");
 
       var slots = row.querySelector("[data-slots]");
       if (!slots) { continue; }

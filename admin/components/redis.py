@@ -32,6 +32,16 @@ class RedisComponent(Component):
     @classmethod
     def fields(cls):
         return [
+            Field("placement_mode", "Placement", "choice", "master",
+                  choices=("master", "any"),
+                  help="This has a VOLUME, and a volume lives on one machine. "
+                       "`master` keeps it on the node that will not be deleted. "
+                       "`any` lets Swarm place it anywhere — including a worker "
+                       "the autoscaler deletes later, taking the data with it. "
+                       "Only useful if you have moved the data yourself."),
+            Field("placement_extra", "Extra constraints", "text", "",
+                  placeholder="node.labels.disk == ssd",
+                  help="Comma separated, added to whatever the mode implies."),
             Field("version", "Version", "choice", "7.4-alpine",
                   choices=("7.4-alpine", "7.2-alpine", "6.2-alpine"),
                   help="Changing this restarts the server. The volume survives."),
@@ -147,6 +157,20 @@ class RedisComponent(Component):
             args += ["--appendonly", "no"]
         return base.shell_command(args)
 
+    def _placement(self):
+        """
+        Where this may run. `master` unless someone has deliberately said
+        otherwise, because the volume does not move with the task.
+        """
+        constraints = []
+        if (self.spec.get("placement_mode") or "master") == "master":
+            constraints.append("node.role == manager")
+        for extra in (self.spec.get("placement_extra") or "").split(","):
+            extra = extra.strip()
+            if extra:
+                constraints.append(extra)
+        return {"constraints": constraints} if constraints else {}
+
     def render(self):
         s = self.spec
         self.ensure_password()
@@ -165,11 +189,11 @@ class RedisComponent(Component):
             "deploy": {
                 "replicas": 1,
                 "labels": dict(self.base_labels()),
-                # Stateful: it has a volume, so it stays on the master. It
-                # carries no infra.workload label, which is exactly what keeps
-                # the autoscaler from ever moving it onto a worker that is
-                # later deleted.
-                "placement": {"constraints": ["node.role == manager"]},
+                # Stateful: it has a volume, so by default it stays on the
+                # master. It carries no infra.workload label, which is exactly
+                # what keeps the autoscaler from ever moving it onto a worker
+                # that is later deleted.
+                "placement": self._placement(),
                 "restart_policy": {"condition": "any", "delay": "5s"},
                 "resources": self.resources(),
             },
@@ -198,7 +222,10 @@ class RedisComponent(Component):
                 "logging": self.loki_logging(),
                 "deploy": {
                     "replicas": 1,
-                    "placement": {"constraints": ["node.role == manager"]},
+                    # The exporter follows the server it scrapes; a stateless
+                    # sidecar on a different node would just be scraping over
+                    # the network for no reason.
+                    "placement": self._placement(),
                     "labels": dict(self.base_labels(), **{
                         "prometheus.scrape": "true",
                         "prometheus.port": "9121",
