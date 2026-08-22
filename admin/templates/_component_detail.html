@@ -20,13 +20,15 @@
     {% endif %}
   </div>
   <div class="head-side">
-    <span class="pill {{ view.tone }}">{{ view.state }}</span>
-    <span class="pill mute plain">{{ component.LABEL }}</span>
+    <div class="head-pills">
+      <span class="pill {{ view.tone }}">{{ view.state }}</span>
+      <span class="pill mute plain">{{ component.LABEL }}</span>
+    </div>
     {% if view.reserved and (view.reserved.cpu or view.reserved.mem_mb) %}
-    {# Replicas x reservation across every service this component owns. The
-       blocks on the cluster map are per TASK, which answers a different
-       question — this is what the component costs the cluster in capacity it
-       can no longer give to anything else. #}
+    {# Under the state and the type, not beside them: it is a fact ABOUT this
+       component rather than another badge on it. Replicas x reservation across
+       every service it owns — the blocks on the cluster map are per TASK, which
+       answers a different question. #}
     <span class="head-reserved mono"
           data-tip="Reserved by every replica of every service in {{ component.name }}, across the cluster">
       {{ view.reserved.cpu }} vCPU · {{ view.reserved.mem_mb }} MB
