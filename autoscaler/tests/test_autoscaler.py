@@ -104,9 +104,57 @@ class PolicyTest(unittest.TestCase):
         self.assertEqual((p.up_ratio, p.down_ratio), (0.8, 0.4))
 
     def test_metric_name_is_validated(self):
+        """A label that is not a metric name must never reach a query."""
         p = A.policy_from_labels("x", {"autoscale.enabled": "true",
                                        "autoscale.p95_histogram": "sum(evil{a=1})"}, 1)
-        self.assertEqual(p.histogram, "http_server_requests_seconds_bucket")
+        self.assertEqual(p.histogram, "")
+        # And it must not be treated as an explicit choice either, or the
+        # rejected string would still be the one selected over discovery.
+        self.assertFalse(p.histogram_explicit)
+
+    def test_a_valid_metric_name_is_kept_and_marked_explicit(self):
+        p = A.policy_from_labels("x", {"autoscale.enabled": "true",
+                                       "autoscale.p95_histogram": "ktor_x_seconds_bucket"}, 1)
+        self.assertEqual(p.histogram, "ktor_x_seconds_bucket")
+        self.assertTrue(p.histogram_explicit)
+
+    def test_no_label_means_discovery(self):
+        """
+        The old default was a Spring metric name. It matched nothing for every
+        other framework, and an empty histogram_quantile looks exactly like an
+        idle service — so p95 read n/a forever and nobody could tell why.
+        """
+        p = A.policy_from_labels("x", {"autoscale.enabled": "true"}, 1)
+        self.assertEqual(p.histogram, "")
+        self.assertFalse(p.histogram_explicit)
+
+
+class LatencyDiscoveryTest(unittest.TestCase):
+    """Picking a latency metric out of whatever an app happens to publish."""
+
+    def test_prefers_a_real_histogram_over_a_timer(self):
+        self.assertLess(A._rank_latency("http_server_requests_seconds"),
+                        A._rank_latency("request_duration"))
+
+    def test_ignores_metrics_that_are_not_request_latency(self):
+        self.assertIsNone(A._rank_latency("jvm_gc_pause_seconds"))
+        self.assertIsNone(A._rank_latency("go_gc_duration_seconds"))
+
+    def test_recognises_the_ktor_name_that_started_this(self):
+        self.assertIsNotNone(A._rank_latency("ktor_http_server_requests_seconds"))
+
+    def test_unit_is_read_from_the_metric_name(self):
+        self.assertEqual(A._unit_of("http_server_requests_seconds"), "seconds")
+        self.assertEqual(A._unit_of("http_server_requests_millis"), "milliseconds")
+
+    def test_mean_expr_divides_sum_by_count_and_scales_to_ms(self):
+        expr = A.mean_expr("ktor_http_server_requests_seconds", "seconds")
+        self.assertIn("_sum", expr)
+        self.assertIn("_count", expr)
+        self.assertIn("* 1000", expr)
+        # Grouped by service, like every other per-component signal, or the
+        # result cannot be joined back to the component it describes.
+        self.assertIn("by (service)", expr)
 
     def test_p95_expression_scales_units(self):
         self.assertIn("* 1000", A.p95_expr("m", "seconds"))
@@ -344,3 +392,100 @@ class MetricLifecycleTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RightSizingTest(unittest.TestCase):
+    """
+    Reservations measured instead of typed.
+
+    The case that produced this: a component shipped with the form's default of
+    0.5 CPU / 384MB, then ran at 0.008 cores and 151MB. The master had 0.19 CPU
+    free, the reservation claimed 0.36, and so a worker was billed around the
+    clock to hold one idle replica of an app using a fortieth of a core.
+    """
+
+    GB = 1024 ** 3
+
+    def size(self, cpu_q, mem_mb, node_cpu=2, node_mem_gb=4):
+        return A.right_size(cpu_q, mem_mb * 1024 * 1024,
+                            int(node_cpu * 1e9), int(node_mem_gb * self.GB))
+
+    def test_the_real_measurement_fits_on_the_master(self):
+        cpu_res, mem_res, _, _ = self.size(0.0658, 151)
+        self.assertLess(cpu_res, 0.19)      # what the master actually had free
+        self.assertLess(mem_res, 870)
+
+    def test_memory_is_sized_from_the_peak_not_a_quantile(self):
+        """Memory is incompressible: under-reserving it is an OOM kill."""
+        _, mem_res, _, _ = self.size(0.01, 200)
+        self.assertGreaterEqual(mem_res, 200)
+
+    def test_cpu_limit_leaves_room_for_a_startup_burst(self):
+        """
+        A JVM peaks far above its steady state while it compiles. That belongs
+        in the limit; paying for it in the reservation forever is the bug.
+        """
+        cpu_res, _, cpu_lim, _ = self.size(0.0658, 151)
+        self.assertGreater(cpu_lim, 0.376)   # the measured JVM startup peak
+        self.assertGreater(cpu_lim, cpu_res)
+
+    def test_floors_apply_to_an_idle_component(self):
+        cpu_res, mem_res, _, _ = self.size(0.0, 1)
+        self.assertGreaterEqual(cpu_res, A.CPU_RESERVE_FLOOR)
+        self.assertGreaterEqual(mem_res, A.MEM_RESERVE_FLOOR_MB)
+
+    def test_never_reserves_more_than_a_node_can_give(self):
+        """
+        A reservation no node can satisfy is not a size, it is a task that sits
+        Pending forever while the panel reports the component down for no
+        visible reason.
+        """
+        cpu_res, mem_res, _, _ = self.size(100, 999999, node_cpu=2, node_mem_gb=4)
+        self.assertLessEqual(cpu_res, 1.0)          # half of a 2-core node
+        self.assertLessEqual(mem_res, 2048)         # half of a 4GB node
+
+    def test_small_drift_does_not_trigger_a_restart(self):
+        """Every resize restarts every replica, so it must not chase noise."""
+        self.assertFalse(A._changed_enough(0.10, 0.11))
+        self.assertTrue(A._changed_enough(0.10, 0.50))
+
+    def test_growth_from_nothing_always_counts_as_a_change(self):
+        self.assertTrue(A._changed_enough(0, 0.05))
+        self.assertTrue(A._changed_enough(None, 0.05))
+
+
+class WorkerPinSpellingTest(unittest.TestCase):
+    """
+    The pin must be recognisable in every spelling Swarm or the renderer uses.
+
+    `--constraint-rm` matches the stored string exactly. The renderer writes
+    `node.role == worker`; the autoscaler's own constant has no spaces. Removing
+    the first by the name of the second silently removed nothing, so the pin
+    could never be released and the fleet could never reach zero — while the
+    loop logged a placement change every minute and bumped the service version
+    thousands of times.
+    """
+
+    SPELLINGS = [
+        "node.role == worker",
+        "node.role==worker",
+        "node.role  ==  worker",
+        " node.role == worker ",
+    ]
+
+    def test_every_spelling_is_recognised_as_the_pin(self):
+        for text in self.SPELLINGS:
+            self.assertTrue(A._WORKER_PIN.match(text), text)
+
+    def test_our_own_constant_is_recognised(self):
+        self.assertTrue(A._WORKER_PIN.match(A.WORKER_CONSTRAINT))
+
+    def test_the_renderer_spelling_is_recognised(self):
+        """The exact string admin/components/app.py writes."""
+        self.assertTrue(A._WORKER_PIN.match("node.role == worker"))
+
+    def test_a_different_constraint_is_not_the_pin(self):
+        for text in ("node.role == manager", "node.labels.role == worker",
+                     "node.role != worker"):
+            self.assertIsNone(A._WORKER_PIN.match(text), text)
+

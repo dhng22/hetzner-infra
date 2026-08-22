@@ -75,6 +75,36 @@ tests:
         alertname: DeployRolledBack
         exp_alerts: []
 
+  # --- SIGNAL: the autoscaler is running but cannot see CPU ------------------
+  # The failure this pins is not "scaling made a bad call", it is "scaling
+  # silently stopped happening". A dead cadvisor holds every replica count where
+  # it is, which looks exactly like a cluster that is correctly sized.
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_service_cpu_signal_present{service="api_app"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: AutoscalerSignalMissing
+        exp_alerts:
+          - exp_labels: { severity: warning, service: api_app }
+            exp_annotations:
+              summary: "api_app: no CPU signal — the autoscaler cannot scale it down"
+
+  # A signal that comes back must clear the alert, and a short gap — cadvisor
+  # restarting on a monitoring redeploy — must never raise it at all.
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_service_cpu_signal_present{service="api_app"}'
+        values: '1x5 0x8 1x20'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: AutoscalerSignalMissing
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: AutoscalerSignalMissing
+        exp_alerts: []
+
   # --- OUTAGE: a component wants replicas and has none ----------------------
   # The anchor is autoscaler_service_running_replicas, which the autoscaler
   # reads from the Docker API. It exists for as long as the component does, so

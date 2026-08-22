@@ -201,6 +201,16 @@ COOLDOWN_DOWN = _env("COOLDOWN_DOWN_SECONDS", "900", int)
 SCHEDULE_FLOOR = _env("SCHEDULE_FLOOR", "")
 LOOP_SECONDS = _env("LOOP_SECONDS", "60", int)
 DRY_RUN = _env("DRY_RUN", "false", bool)  # a real safety switch, not a rehearsal
+
+# Right-sizing: reservations measured from real usage rather than typed. On by
+# default, because the typed number is a guess made before the component had
+# ever run and is wrong by an order of magnitude in the direction that costs
+# money. Turn it off and the spec's values are used unchanged.
+RIGHT_SIZE = _env("RIGHT_SIZE", "true", bool)
+# Long, because every resize restarts every replica of the service. Sizing is
+# not a control loop chasing load — the replica count does that — it is a slow
+# correction of a number that only changes when the application changes.
+RESIZE_COOLDOWN_SECONDS = _env("RESIZE_COOLDOWN_SECONDS", "3600", int)
 ROTATE_TOKEN = _env("ROTATE_TOKEN_ON_SCALE_DOWN", "false", bool)
 
 HCLOUD_TOKEN = _secret("HCLOUD_TOKEN")
@@ -287,7 +297,7 @@ def _label_bool(labels, key, default=False):
 Policy = namedtuple("Policy", [
     "autoscale", "min_replicas", "max_replicas", "slo_ms", "up_ratio", "down_ratio",
     "up_cpu", "down_cpu", "sustain_up", "sustain_down", "up_factor", "cooldown",
-    "priority", "histogram", "unit",
+    "priority", "histogram", "unit", "histogram_explicit",
 ])
 
 
@@ -309,8 +319,7 @@ def policy_from_labels(service_name, labels, spec_replicas):
         if not enabled:
             fixed = max(0, int(spec_replicas or 0))
             return Policy(False, fixed, fixed, 500.0, 0.8, 0.4, 70.0, 30.0,
-                          90, 900, 0.5, 60, 100,
-                          "http_server_requests_seconds_bucket", "seconds")
+                          90, 900, 0.5, 60, 100, "", "seconds", False)
 
         lo = _label_num(labels, "autoscale.min_replicas", 1, int, 0, 100, service_name)
         hi = _label_num(labels, "autoscale.max_replicas", lo, int, 0, 100, service_name)
@@ -349,12 +358,19 @@ def policy_from_labels(service_name, labels, spec_replicas):
                       "inverts the up-fast/down-slow asymmetry this loop relies on",
                       service_name, sustain_down, sustain_up)
 
-        histogram = labels.get("autoscale.p95_histogram") or "http_server_requests_seconds_bucket"
-        if not re.match(r"^[a-zA-Z_:][a-zA-Z0-9_:]*$", histogram):
+        # No default metric name any more. The old one was
+        # `http_server_requests_seconds_bucket`, a Spring convention that
+        # silently matched nothing for every other framework — and an empty
+        # histogram_quantile is indistinguishable from an idle service, so it
+        # never looked wrong. Absent this label the metric is DISCOVERED from
+        # what the service actually publishes; see discover_latency().
+        histogram = labels.get("autoscale.p95_histogram") or ""
+        histogram_explicit = bool(histogram)
+        if histogram and not re.match(r"^[a-zA-Z_:][a-zA-Z0-9_:]*$", histogram):
             warn_once((service_name, "metric", histogram),
-                      "%s: %r is not a metric name; using the default",
+                      "%s: %r is not a metric name; discovering one instead",
                       service_name, histogram)
-            histogram = "http_server_requests_seconds_bucket"
+            histogram, histogram_explicit = "", False
         unit = labels.get("autoscale.p95_unit", "seconds")
         if unit not in ("seconds", "milliseconds"):
             unit = "seconds"
@@ -366,7 +382,7 @@ def policy_from_labels(service_name, labels, spec_replicas):
             _label_num(labels, "autoscale.up_factor", 0.5, float, 0.01, 4.0, service_name),
             _label_num(labels, "autoscale.cooldown_seconds", 60, int, 0, 3600, service_name),
             _label_num(labels, "autoscale.priority", 100, int, 0, 1000, service_name),
-            histogram, unit,
+            histogram, unit, histogram_explicit,
         )
     except Exception as exc:  # noqa: BLE001
         M_ERRORS.labels(stage="policy").inc()
@@ -374,7 +390,7 @@ def policy_from_labels(service_name, labels, spec_replicas):
                     service_name, exc)
         fixed = max(0, int(spec_replicas or 0))
         return Policy(False, fixed, fixed, 500.0, 0.8, 0.4, 70.0, 30.0, 90, 900,
-                      0.5, 60, 100, "http_server_requests_seconds_bucket", "seconds")
+                      0.5, 60, 100, "", "seconds", False)
 
 
 # ---------------------------------------------------------------------------
@@ -476,6 +492,17 @@ S_ADMITTED = Gauge("autoscaler_service_admitted_replicas", "Replicas that fit an
 S_RUNNING = Gauge("autoscaler_service_running_replicas", "Tasks actually running", _SVC)
 S_ROLLBACK = Gauge("autoscaler_service_deploy_rolled_back",
                    "1 when Swarm reverted this service's last update", _SVC)
+#: 1 when this service has a usable CPU-per-replica reading this loop.
+#:
+#: Scaling DOWN requires it — a missing series holds the replica count rather
+#: than shrinking it, which is the safe choice but a silent one. cadvisor
+#: stopped reporting per-container metrics entirely after a Docker upgrade and
+#: nothing said so: the autoscaler logged "cpu/replica n/a" once a minute into a
+#: log nobody reads, held every service at its current size, and kept a worker
+#: alive against zero traffic for as long as it ran. The gauge makes that state
+#: alertable instead of merely true.
+S_CPU_SIGNAL = Gauge("autoscaler_service_cpu_signal_present",
+                     "1 when CPU-per-replica is readable for this service", _SVC)
 S_PENDING = Gauge("autoscaler_service_pending_replicas", "Tasks wanted but not placed", _SVC)
 S_MIN = Gauge("autoscaler_service_min_replicas", "Configured replica floor", _SVC)
 S_MAX = Gauge("autoscaler_service_max_replicas", "Configured replica ceiling", _SVC)
@@ -601,6 +628,128 @@ def p95_expr(histogram, unit):
     scale = 1000 if unit == "seconds" else 1
     return (f"histogram_quantile(0.95, sum by (service, le) "
             f"(rate({histogram}[2m]))) * {scale}")
+
+
+def mean_expr(base, unit):
+    """
+    Mean request latency by service, in milliseconds.
+
+    Used when a service publishes a timer but no buckets. It is NOT a p95 and
+    is not pretended to be one: the mean sits below the tail, so a service
+    compared against a p95 SLO through this will scale up later than one with a
+    real histogram. That is still enormously better than the alternative, which
+    is no latency signal at all — and it is the common case, because a
+    Micrometer/Prometheus timer publishes _sum and _count by default and
+    publishes buckets only when someone explicitly enables them.
+    """
+    scale = 1000 if unit == "seconds" else 1
+    return (f"(sum by (service) (rate({base}_sum[2m])) "
+            f"/ sum by (service) (rate({base}_count[2m]))) * {scale}")
+
+
+#: Name fragments that make a metric family look like HTTP server latency,
+#: best first. Discovery ranks candidates by the first fragment they contain, so
+#: an app publishing both client and server timers picks the server one.
+_LATENCY_HINTS = ("http_server_requests", "http_server_request",
+                  "http_server_duration", "http_request_duration",
+                  "http_requests_duration", "request_duration",
+                  "requests_seconds", "request_seconds")
+
+#: Discovery is a metadata query, not a signal — the answer changes only when
+#: someone ships a new framework, so it is cached and refreshed rarely.
+_LATENCY_TTL_SECONDS = 900
+_latency_cache = {}          # service -> (expr, unit, kind) or None
+_latency_checked_at = 0.0
+
+
+def _rank_latency(name):
+    """Lower is better. None means it does not look like request latency."""
+    lowered = name.lower()
+    for i, hint in enumerate(_LATENCY_HINTS):
+        if hint in lowered:
+            return i
+    return None
+
+
+def _unit_of(name):
+    return "milliseconds" if ("millis" in name or name.endswith("_ms")) else "seconds"
+
+
+def discover_latency(service_names):
+    """
+    {service: (expr, kind)} for services whose latency metric we can find.
+
+    Two metadata queries for the whole cluster, cached. This exists so a
+    component does not have to be told the name of its own latency metric: the
+    default was `http_server_requests_seconds_bucket`, a Spring convention, and
+    a Ktor app publishing `ktor_http_server_requests_seconds` matched nothing —
+    so p95 read n/a forever and only CPU could ever move the replica count.
+    Nothing warned, because an empty histogram_quantile is also what an idle
+    service looks like.
+    """
+    global _latency_checked_at
+    now = time.time()
+    if _latency_cache and now - _latency_checked_at < _LATENCY_TTL_SECONDS:
+        return {k: v for k, v in _latency_cache.items() if v}
+
+    wanted = set(service_names)
+    found = {}
+
+    # Real histograms first — a true p95 always beats a mean.
+    for suffix, kind in (("_bucket", "p95"), ("_count", "mean")):
+        rows = vm_series_names(f'{{__name__=~".+{suffix}", service!=""}}')
+        for metric, svc in rows:
+            if svc not in wanted or svc in found:
+                continue
+            base = metric[: -len(suffix)]
+            rank = _rank_latency(base)
+            if rank is None:
+                continue
+            best = found.get(svc)
+            if best and best[0] <= rank:
+                continue
+            unit = _unit_of(base)
+            expr = (p95_expr(f"{base}_bucket", unit) if kind == "p95"
+                    else mean_expr(base, unit))
+            found[svc] = (rank, expr, kind, base)
+
+    _latency_cache.clear()
+    for svc in wanted:
+        hit = found.get(svc)
+        _latency_cache[svc] = (hit[1], hit[2], hit[3]) if hit else None
+        if hit:
+            log.info("%s: latency signal is %s from %s", svc, hit[2], hit[3])
+        else:
+            warn_once((svc, "nolatency"),
+                      "%s publishes no recognisable request-latency metric; "
+                      "scaling it on CPU alone", svc)
+    _latency_checked_at = now
+    return {k: v for k, v in _latency_cache.items() if v}
+
+
+def vm_series_names(selector):
+    """
+    [(metric name, service)] for a selector, via the /series metadata endpoint.
+
+    /series rather than an instant query: it returns label sets without values,
+    so asking "which metrics does this cluster publish" does not also drag every
+    sample back through the loop.
+    """
+    out = []
+    try:
+        resp = requests.get(f"{VM_URL}/api/v1/series",
+                            params={"match[]": selector,
+                                    "start": int(time.time()) - 3600},
+                            timeout=15)
+        resp.raise_for_status()
+        for row in resp.json().get("data", []):
+            name, svc = row.get("__name__"), row.get("service")
+            if name and svc:
+                out.append((name, svc))
+    except Exception as exc:  # noqa: BLE001
+        M_ERRORS.labels(stage="query").inc()
+        log.warning("series lookup failed (%s): %s", selector[:60], exc)
+    return out
 
 
 def sustained(expr, window, aggregate):
@@ -1097,12 +1246,33 @@ def _service_update_constraint(name, add):
     x replicas — long enough for AutoscalerStalled to fire — and there is
     nothing to wait for: the next loop reads live state and carries on.
     """
-    flag = "--constraint-add" if add else "--constraint-rm"
-    cmd = ["docker", "service", "update", "--detach=true", flag, WORKER_CONSTRAINT, name]
+    cmd = ["docker", "service", "update", "--detach=true"]
+    if add:
+        cmd += ["--constraint-add", WORKER_CONSTRAINT]
+    else:
+        # --constraint-rm matches the stored string EXACTLY, and the stored
+        # string is not ours. The renderer writes `node.role == worker` with
+        # spaces; WORKER_CONSTRAINT is written without them. Removing the
+        # spaced constraint by its unspaced name silently removed nothing, so
+        # the pin could never be released: every loop issued an update that
+        # changed the service version and nothing else, the applications stayed
+        # bound to workers forever, and the fleet could never scale to zero no
+        # matter how idle the cluster was. _WORKER_PIN already tolerates every
+        # spelling when READING; this is the same tolerance when writing.
+        live = [c for c in _constraints(dkr.services.get(name))
+                if _WORKER_PIN.match(c)]
+        if not live:
+            return False          # already unpinned; issuing a no-op update is
+                                  # what produced version 13629 on a service
+                                  # nobody had deployed in an hour
+        for constraint in live:
+            cmd += ["--constraint-rm", constraint]
+    cmd.append(name)
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     if proc.returncode != 0:
         raise RuntimeError(f"{' '.join(cmd)} failed ({proc.returncode}): "
                            f"{(proc.stderr or proc.stdout).strip()[:400]}")
+    return True
 
 
 def set_service_placement(name, pinned, reason):
@@ -1110,10 +1280,15 @@ def set_service_placement(name, pinned, reason):
         log.info("[dry-run] would move %s to %s mode (%s)", name,
                  MODE_WORKER if pinned else MODE_MANAGER, reason)
         return
-    _service_update_constraint(name, add=pinned)
+    if not _service_update_constraint(name, add=pinned):
+        # Nothing to remove. Saying "moving to manager mode" once a minute for
+        # a service that has been in manager mode all along is how a loop that
+        # was achieving nothing still looked busy.
+        return False
     M_EVENTS.labels(direction=f"placement-{MODE_WORKER if pinned else MODE_MANAGER}").inc()
     log.info("moving %s to %s mode: %s", name,
              MODE_WORKER if pinned else MODE_MANAGER, reason)
+    return True
 
 
 def reconcile_placement(workloads, want_pinned, reason, skip_rolling=True):
@@ -1135,8 +1310,8 @@ def reconcile_placement(workloads, want_pinned, reason, skip_rolling=True):
             log.info("deferring the placement change on %s: a rollout is in flight", w.name)
             continue
         try:
-            set_service_placement(w.name, want_pinned, reason)
-            changed.append(w.name)
+            if set_service_placement(w.name, want_pinned, reason):
+                changed.append(w.name)
         except Exception as exc:  # noqa: BLE001
             M_ERRORS.labels(stage="placement").inc()
             log.error("could not change placement on %s: %s", w.name, exc)
@@ -1191,13 +1366,25 @@ def read_signals_batch(workloads, worker_count):
 
     cpu_raw = vm_query_map(CPU_BY_SERVICE, label=_CPU_LABEL) if scalers else {}
 
+    # A latency metric named explicitly on the service wins; anything else is
+    # discovered. Discovery is what makes a component work without being told
+    # its own framework's metric name, and the explicit label is the escape
+    # hatch for an app that publishes several and wants a specific one.
+    discovered = discover_latency([w.name for w in scalers]) if scalers else {}
+
     groups = {}
     for w in scalers:
-        groups.setdefault((w.policy.histogram, w.policy.unit), []).append(w)
+        explicit = w.policy.histogram_explicit
+        if explicit:
+            expr = p95_expr(w.policy.histogram, w.policy.unit)
+        elif w.name in discovered:
+            expr = discovered[w.name][0]
+        else:
+            continue          # no latency signal for this one; CPU still applies
+        groups.setdefault(expr, []).append(w)
 
     p95_now, p95_held, p95_peak = {}, {}, {}
-    for (histogram, unit), members in groups.items():
-        expr = p95_expr(histogram, unit)
+    for expr, members in groups.items():
         p95_now.update(vm_query_map(expr))
         for window in {w.policy.sustain_up for w in members}:
             p95_held.update({k: v for k, v in
@@ -1287,6 +1474,156 @@ def desired_replicas(workload, signals, current):
         return current - 1
 
     return current
+
+
+# ---------------------------------------------------------------------------
+# right-sizing — reservations measured, not typed
+# ---------------------------------------------------------------------------
+#
+# A reservation is a promise about what one replica needs, and nobody can make
+# that promise accurately by typing it into a form on day one. The default here
+# was 0.5 CPU / 384MB; the first real app to run on it used 0.008 cores at rest
+# and peaked at 151MB. Reserving 0.36 of a core for a fortieth of one is not a
+# rounding error — it is the difference between the master carrying the whole
+# cluster and a worker being billed around the clock to hold one idle replica.
+#
+# So the numbers are measured. CPU and memory are sized differently on purpose:
+#
+#   CPU is compressible. A replica that wants more than its reservation is
+#   throttled, not killed, so the reservation is sized from a high quantile and
+#   the LIMIT absorbs bursts. A JVM's startup spike belongs in the limit; paying
+#   for it in the reservation forever is how you end up here.
+#
+#   Memory is not. Exceeding a limit is an OOM kill, so memory is sized from the
+#   true maximum with real headroom, never from a quantile.
+
+#: Multipliers applied to measured usage. Generous rather than tight: the cost
+#: of over-reserving is money, and the cost of under-reserving memory is a dead
+#: container.
+CPU_RESERVE_HEADROOM = 2.0
+MEM_RESERVE_HEADROOM = 1.5
+CPU_LIMIT_MULTIPLE = 4.0
+MEM_LIMIT_MULTIPLE = 2.0
+
+#: Floors. Below these the numbers stop meaning anything and Swarm's scheduler
+#: starts treating the service as free.
+CPU_RESERVE_FLOOR = 0.02
+MEM_RESERVE_FLOOR_MB = 32
+
+#: Don't touch a service for a change smaller than this. Every resize is a
+#: rolling restart of every replica, so chasing a 5% drift would restart the
+#: cluster all day and never converge.
+RESIZE_MIN_CHANGE = 0.25
+
+#: How much history a resize needs. Shorter than this and the first sample after
+#: a deploy — a cold JVM compiling everything it owns — becomes the reservation.
+RESIZE_MIN_HISTORY = "2h"
+
+USAGE_CPU_Q = 0.90
+_last_resize = {}
+
+
+def measure_usage(service_names):
+    """
+    {service: (cpu_cores_q90, memory_bytes_max)} over RESIZE_MIN_HISTORY.
+
+    Both are per replica: cadvisor reports per container and these aggregate
+    with max/quantile across the replicas of a service, so the answer is "what
+    does ONE of these need", which is the unit a reservation is in.
+    """
+    cpu = vm_query_map(
+        f'quantile_over_time({USAGE_CPU_Q}, '
+        f'max by ({_CPU_LABEL}) (rate(container_cpu_usage_seconds_total'
+        f'{{{_CPU_LABEL}!=""}}[5m]))[{RESIZE_MIN_HISTORY}:1m])',
+        label=_CPU_LABEL)
+    mem = vm_query_map(
+        f'max_over_time('
+        f'max by ({_CPU_LABEL}) (container_memory_working_set_bytes'
+        f'{{{_CPU_LABEL}!=""}})[{RESIZE_MIN_HISTORY}:1m])',
+        label=_CPU_LABEL)
+    return {name: (cpu.get(name), mem.get(name))
+            for name in service_names
+            if cpu.get(name) is not None and mem.get(name) is not None}
+
+
+def right_size(cpu_q, mem_max_bytes, node_cpu, node_mem):
+    """
+    (cpu_reservation, memory_reservation_mb, cpu_limit, memory_limit_mb).
+
+    Clamped to a fraction of the SMALLEST node, because a reservation larger
+    than any node can satisfy is not a sizing decision, it is an unschedulable
+    task — the failure mode is a replica that sits Pending forever while the
+    panel reports the component as down for no visible reason.
+    """
+    cpu_res = max(CPU_RESERVE_FLOOR, cpu_q * CPU_RESERVE_HEADROOM)
+    mem_res_mb = max(MEM_RESERVE_FLOOR_MB,
+                     mem_max_bytes * MEM_RESERVE_HEADROOM / (1024 * 1024))
+
+    cpu_cap = max(CPU_RESERVE_FLOOR, node_cpu / 1e9 * 0.5) if node_cpu else cpu_res
+    mem_cap = (max(MEM_RESERVE_FLOOR_MB, node_mem / (1024 * 1024) * 0.5)
+               if node_mem else mem_res_mb)
+    cpu_res = min(cpu_res, cpu_cap)
+    mem_res_mb = min(mem_res_mb, mem_cap)
+
+    return (round(cpu_res, 3), int(mem_res_mb),
+            round(min(cpu_res * CPU_LIMIT_MULTIPLE, cpu_cap * 2), 3),
+            int(min(mem_res_mb * MEM_LIMIT_MULTIPLE, mem_cap * 2)))
+
+
+def _changed_enough(old, new):
+    if not old:
+        return True
+    return abs(new - old) / old >= RESIZE_MIN_CHANGE
+
+
+def apply_right_sizing(workloads, usage, node_cpu, node_mem):
+    """
+    Resize reservations to match measured usage. Returns the number applied.
+
+    Deliberately does NOT touch a service whose rollout is in flight: a resize
+    is itself an update, and stacking one on an in-progress rollout restarts it
+    from the beginning.
+    """
+    applied = 0
+    for w in workloads:
+        if w.rolling or w.name not in usage:
+            continue
+        cpu_q, mem_max = usage[w.name]
+        cpu_res, mem_res, cpu_lim, mem_lim = right_size(
+            cpu_q, mem_max, node_cpu, node_mem)
+
+        now = time.time()
+        if now - _last_resize.get(w.name, 0) < RESIZE_COOLDOWN_SECONDS:
+            continue
+        if not (_changed_enough(w.cost.cores, cpu_res)
+                or _changed_enough(w.cost.mb, mem_res)):
+            continue
+
+        if DRY_RUN:
+            log.info("[dry-run] would resize %s to %.3f CPU / %dMB reserved "
+                     "(measured %.3f CPU / %dMB)", w.name, cpu_res, mem_res,
+                     cpu_q, int(mem_max / (1024 * 1024)))
+            _last_resize[w.name] = now
+            continue
+
+        cmd = ["docker", "service", "update", "--detach=true",
+               "--reserve-cpu", str(cpu_res), "--reserve-memory", f"{mem_res}M",
+               "--limit-cpu", str(cpu_lim), "--limit-memory", f"{mem_lim}M",
+               w.name]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if proc.returncode != 0:
+            M_ERRORS.labels(stage="resize").inc()
+            log.warning("could not resize %s: %s", w.name,
+                        (proc.stderr or proc.stdout).strip()[:200])
+            continue
+        _last_resize[w.name] = now
+        applied += 1
+        M_EVENTS.labels(direction="resize").inc()
+        log.info("resized %s: %.2f -> %.3f CPU, %d -> %dMB reserved "
+                 "(measured q%d %.3f CPU, peak %dMB)",
+                 w.name, w.cost.cores, cpu_res, int(w.cost.mb), mem_res,
+                 int(USAGE_CPU_Q * 100), cpu_q, int(mem_max / (1024 * 1024)))
+    return applied
 
 
 def set_replicas(name, count):
@@ -1535,6 +1872,10 @@ def export_service_metrics(workloads, wants, admitted, signals, running, pending
             S_P95.labels(w.name).set(s.p95)
         if s.cpu is not None:
             S_CPU.labels(w.name).set(s.cpu)
+        # Reported for every scaler, every loop, present or not — an absent
+        # series cannot alert, which is the whole point.
+        S_CPU_SIGNAL.labels(w.name).set(
+            1 if (w.policy.autoscale and s.cpu_peak is not None) else 0)
         S_SLO.labels(w.name).set(w.policy.slo_ms)
         S_CURRENT.labels(w.name).set(w.spec_replicas)
         S_DESIRED.labels(w.name).set(wants.get(w.name, w.spec_replicas))
@@ -1838,6 +2179,25 @@ def loop():
             except Exception as exc:  # noqa: BLE001
                 M_ERRORS.labels(stage="remove").inc()
                 log.error("could not remove a worker: %s", exc)
+
+    # 15. RIGHT-SIZE, last. A resize is itself a rolling update of every replica,
+    #     so it runs after the replica count and the placement have settled —
+    #     stacking it on either restarts that rollout from the beginning. The
+    #     numbers it writes are picked up by the NEXT loop's discovery, which is
+    #     what makes the correction visible in demand and fleet sizing.
+    if RIGHT_SIZE and workloads:
+        try:
+            smallest_cpu = min((node_resources(n).cpu
+                                for n in ([manager_node] if manager_node else []) + ready),
+                               default=0)
+            smallest_mem = min((node_resources(n).mem
+                                for n in ([manager_node] if manager_node else []) + ready),
+                               default=0)
+            apply_right_sizing(workloads, measure_usage([w.name for w in workloads]),
+                               smallest_cpu, smallest_mem)
+        except Exception as exc:  # noqa: BLE001
+            M_ERRORS.labels(stage="resize").inc()
+            log.warning("right-sizing skipped this loop: %s", exc)
 
     export_service_metrics(workloads, wants, admitted, signals, running, pending)
 

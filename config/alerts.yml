@@ -158,6 +158,24 @@ groups:
         annotations:
           summary: "{{ $labels.service }} wants replicas but none are running"
 
+      # The autoscaler is running but blind, so nothing will ever shrink.
+      #
+      # Scaling down requires a CPU-per-replica reading: a missing series holds
+      # the replica count rather than shrinking it, which is the right choice
+      # and an invisible one. cadvisor stopped exporting per-container metrics
+      # after a Docker upgrade renamed its storage driver, and the only symptom
+      # was "cpu/replica n/a" in a log — every service frozen at its current
+      # size and a worker billed around the clock against no traffic.
+      #
+      # 20m because the signal legitimately gaps: cadvisor restarts on every
+      # monitoring redeploy, and the rate() window needs to refill afterwards.
+      - alert: AutoscalerSignalMissing
+        expr: autoscaler_service_cpu_signal_present == 0
+        for: 20m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.service }}: no CPU signal — the autoscaler cannot scale it down"
+
       # A deploy that silently un-happened.
       #
       # `docker stack deploy` is detached by default: it exits 0 as soon as
