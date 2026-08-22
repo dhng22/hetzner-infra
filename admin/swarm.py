@@ -374,6 +374,37 @@ def update_status(service_name):
 
     status = svc.attrs.get("UpdateStatus") or {}
     state = status.get("State") or ""
+
+    if not state:
+        # Swarm writes UpdateStatus only when it UPDATES a service. A service
+        # that has just been CREATED has no such key at all — so relying on it
+        # alone left every first deploy of every component sitting on
+        # "deploying" forever, which is what this whole path was added to stop.
+        #
+        # Convergence is the honest substitute: the deploy did what it was asked
+        # to when every slot Swarm was asked for is running and none is being
+        # replaced. It stays unresolved rather than claiming success early.
+        counts = _task_counts().get(svc.id) or {}
+        mode = svc.attrs.get("Spec", {}).get("Mode", {})
+        if "Replicated" in mode:
+            want = mode["Replicated"].get("Replicas", 0)
+        else:
+            want = (counts.get("running", 0) + counts.get("starting", 0)
+                    + counts.get("blocked", 0))
+        converged = (want > 0
+                     and counts.get("running", 0) >= want
+                     and not counts.get("starting", 0)
+                     and not counts.get("in_flight", 0))
+        return {
+            "state": "converged" if converged else "converging",
+            "verdict": "done" if converged else None,
+            "started_epoch": None,
+            "message": "" if converged else
+                       (f"{counts.get('running', 0)}/{want} running"
+                        + (", unschedulable" if counts.get("blocked") else "")),
+            "at": _age(svc.attrs.get("UpdatedAt", "")),
+        }
+
     started = status.get("StartedAt") or ""
     epoch = None
     if started:
@@ -403,6 +434,11 @@ def deployments(name, service_name, limit=25):
     live = update_status(service_name)
     if live["verdict"]:
         state.reconcile(name, live["verdict"], live["started_epoch"])
+    else:
+        # Still converging. A deploy that never converges is a failure too, and
+        # without this it would read "deploying" for the rest of the cluster's
+        # life — a component that cannot be placed at all is the common case.
+        state.expire_pending(name)
     return state.history(name, limit=limit), live
 
 

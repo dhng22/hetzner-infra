@@ -23,36 +23,38 @@ class AppComponent(Component):
     @classmethod
     def fields(cls):
         return [
-            Field("image", "Image", "text", required=True,
+            Field("image", "Image", "text", required=True, managed="ci",
                   placeholder="ghcr.io/you/app:sha-abc1234",
                   help="Pin a tag or digest. `latest` is refused: the next deploy "
                        "would be a different build wearing the same name."),
             Field("port", "Port", "port", 8080, required=True, minimum=1, maximum=65535,
                   help="The port your app listens on inside the container."),
-            Field("health_path", "Health path", "text", "/health",
+            Field("health_path", "Health path", "text", "/health", managed="convention",
                   help="Checked with wget every 10s. Blank disables the healthcheck — "
                        "then a broken deploy rolls forward instead of rolling back."),
-            Field("metrics_path", "Metrics path", "text", "/metrics",
+            Field("metrics_path", "Metrics path", "text", "/metrics", managed="convention",
                   help="Prometheus endpoint. Blank stops it being scraped, which also "
                        "removes the latency signal the autoscaler prefers."),
             Field("start_period", "Startup grace", "number", 60, minimum=0, maximum=900,
                   help="Seconds before a failing healthcheck counts. A JVM needs 60."),
 
             Field("replicas", "Replicas", "number", 2, required=True, minimum=0, maximum=100,
+                  managed="autoscaler",
                   help="The count deployed now. Once autoscaling is on, the autoscaler "
                        "owns this number and a deploy preserves whatever is live."),
             Field("cpu_reservation", "CPU reserved", "cpu", 0.5, required=True,
-                  minimum=0.01, maximum=32,
+                  minimum=0.01, maximum=32, managed="autoscaler",
                   help="What Swarm subtracts when placing a task, and the unit the "
                        "autoscaler sizes nodes in. Not a limit — set it to what one "
                        "replica actually needs at rest."),
             Field("memory_reservation_mb", "Memory reserved (MB)", "memory", 384,
-                  required=True, minimum=16, maximum=131072),
+                  required=True, minimum=16, maximum=131072, managed="autoscaler"),
             Field("cpu_limit", "CPU limit", "cpu", 1.0, minimum=0.01, maximum=32,
+                  managed="autoscaler",
                   help="The ceiling one replica may use. Also the denominator of the "
                        "CPU-per-replica scaling signal, read live from this service."),
             Field("memory_limit_mb", "Memory limit (MB)", "memory", 768,
-                  minimum=16, maximum=131072,
+                  minimum=16, maximum=131072, managed="autoscaler",
                   help="Exceed it and the container is OOM-killed, so leave headroom."),
             Field("stop_grace", "Shutdown grace", "number", 30, minimum=1, maximum=600,
                   help="Seconds to finish in-flight requests on SIGTERM. Pair it with a "

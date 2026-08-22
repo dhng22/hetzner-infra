@@ -177,6 +177,40 @@ def reconcile(name, verdict, started_epoch=None):
         _write(HISTORY, entries)
 
 
+#: How long a deploy may sit unconverged before it is called a failure. Longer
+#: than any healthy rollout here: parallelism 1 over `monitor` 60s plus an image
+#: pull, on the slowest component, with room to spare.
+PENDING_GRACE_SECONDS = 15 * 60
+
+
+def expire_pending(name, now=None):
+    """
+    Fail this component's pending deploys once they are too old to still be
+    happening.
+
+    Reconciliation can only settle a deploy that Swarm has an answer for. A
+    deploy whose tasks never converge — no node can place them, the image never
+    pulls — produces no answer at all, so without this it would read "deploying"
+    forever, which is indistinguishable from a rollout that started ten seconds
+    ago and is the reason "pending" was useless as a status.
+    """
+    now = now if now is not None else time.time()
+    entries = _read(HISTORY, [])
+    changed = False
+    for entry in entries:
+        if entry.get("component") != name or status_of(entry) != PENDING:
+            continue
+        if now - entry.get("epoch", now) > PENDING_GRACE_SECONDS:
+            entry["status"] = FAILED
+            entry["ok"] = False
+            entry["detail"] = ((entry.get("detail") or "") +
+                               "\n\nNever converged. Swarm accepted the spec but the "
+                               "tasks did not reach running.")[-2000:]
+            changed = True
+    if changed:
+        _write(HISTORY, entries)
+
+
 def history(name=None, limit=25):
     """
     Deployments, newest first. History is deliberately NOT dropped when a

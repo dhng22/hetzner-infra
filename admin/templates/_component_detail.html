@@ -364,16 +364,46 @@
         <div class="panel-head"><h2>Configuration</h2></div>
         <div class="panel-body">
           <div class="grid-2">
-            {% for f in fields %}
+            {% for f in fields if not f.managed %}
               {% set value = component.spec.get(f.name) %}
               {% include "_field.html" %}
             {% endfor %}
           </div>
         </div>
         <div class="panel-note">
-          Saving redeploys this component. The live image and replica count are read
-          back first and preserved, so changing a memory limit will not roll back your
-          last deploy or undo the autoscaler.
+          Saving redeploys this component. The live image, replica count, placement
+          and resource sizing are read back first and preserved, so changing a
+          setting here will not roll back your last deploy or undo the autoscaler.
+        </div>
+      </section>
+
+      {# Values this component HAS but nobody types. They are still in the spec —
+         the renderer needs a reservation before anything has been measured — but
+         offering a form field for a number the autoscaler overwrites every few
+         minutes would just lose your input silently. Shown, not editable. #}
+      <section class="panel">
+        <div class="panel-head"><h2>Managed for you</h2></div>
+        <div class="panel-body">
+          <div class="rows">
+            {% for f in fields if f.managed %}
+            <div class="deploy-row mute">
+              <span class="stripe"></span>
+              <span class="src">{{ f.managed }}</span>
+              <span>
+                <span class="row-title">{{ f.label }}</span>
+                <span class="row-sub mono">{{ component.spec.get(f.name) if component.spec.get(f.name) not in (None, '') else '—' }}</span>
+              </span>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="panel-note">
+          <b>ci</b> — set by whatever last deployed you.
+          <b>autoscaler</b> — measured from what this component actually uses and
+          re-sized as that changes; a reservation set from real usage is what lets
+          the master carry the load on its own and the worker fleet drop to zero.
+          <b>convention</b> — a fixed default; override it with a deploy label if
+          your app really differs.
         </div>
       </section>
 

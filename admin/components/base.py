@@ -46,7 +46,7 @@ class Field:
 
     def __init__(self, name, label, kind="text", default=None, help="",
                  required=False, choices=(), minimum=None, maximum=None,
-                 placeholder="", secret=False, immutable=False):
+                 placeholder="", secret=False, immutable=False, managed=None):
         self.name = name
         self.label = label
         self.kind = kind          # text | number | bool | choice | port | cpu | memory
@@ -59,6 +59,14 @@ class Field:
         self.placeholder = placeholder
         self.secret = secret
         self.immutable = immutable    # settable at create, read-only afterwards
+        # Who owns this value once the component exists: "ci", "autoscaler", or
+        # "convention". A managed field keeps its place in the spec — the
+        # renderer still needs a number before anything has been measured, and a
+        # reservation is mandatory — but it is not offered for editing, because
+        # something else overwrites it and a form that silently loses your input
+        # is worse than no form. Still shown at CREATE, where the value is the
+        # only one anybody has.
+        self.managed = managed
 
     def coerce(self, raw):
         """Text (from a form or argv) to the stored type. Raises ValueError."""
@@ -341,8 +349,11 @@ class Component:
         A service with none makes the master look idle, so replicas get packed
         on top of VictoriaMetrics until something is OOM-killed.
         """
-        cpu_r = self.spec.get("cpu_reservation")
-        mem_r = self.spec.get("memory_reservation_mb")
+        # The live sizing wins where it exists; the spec is the seed used before
+        # anything has been measured, and the fallback when the service is gone.
+        live = self.live_resources()
+        cpu_r = live.get("cpu_reservation") or self.spec.get("cpu_reservation")
+        mem_r = live.get("memory_reservation_mb") or self.spec.get("memory_reservation_mb")
         if not cpu_r or not mem_r:
             raise store.ComponentError(
                 f"{self.name} has no CPU or memory reservation. Every component "
@@ -350,8 +361,8 @@ class Component:
                 "autoscaler measures capacity with."
             )
         out = {"reservations": {"cpus": str(cpu_r), "memory": f"{mem_r}M"}}
-        cpu_l = self.spec.get("cpu_limit")
-        mem_l = self.spec.get("memory_limit_mb")
+        cpu_l = live.get("cpu_limit") or self.spec.get("cpu_limit")
+        mem_l = live.get("memory_limit_mb") or self.spec.get("memory_limit_mb")
         if cpu_l or mem_l:
             limits = {}
             if cpu_l:
@@ -391,6 +402,43 @@ class Component:
         # is what is actually running, and re-deploying the digest is a no-op
         # rather than a silent re-pull of a moved tag.
         return out or None
+
+    def live_resources(self, service=None):
+        """
+        {cpu_reservation, memory_reservation_mb, cpu_limit, memory_limit_mb} as
+        the RUNNING service has them, or {} if it is not deployed yet.
+
+        Read back for the same reason as the image, the replica count and the
+        worker pin: something other than this file owns the value at runtime.
+        The autoscaler re-sizes reservations from what a component actually
+        uses, so emitting the spec's copy would undo that on the next unrelated
+        save — and undoing it means re-reserving a third of a core for something
+        that needs a fortieth, which is what kept a worker alive against no
+        traffic (docker/cli#2235 is the same trap, one field over).
+        """
+        out = docker_out([
+            "service", "inspect", service or self.service, "--format",
+            "{{with .Spec.TaskTemplate.Resources}}"
+            "{{with .Reservations}}{{.NanoCPUs}} {{.MemoryBytes}}{{else}}0 0{{end}} "
+            "{{with .Limits}}{{.NanoCPUs}} {{.MemoryBytes}}{{else}}0 0{{end}}"
+            "{{end}}"])
+        parts = out.split()
+        if len(parts) != 4:
+            return {}
+        try:
+            cpu_r, mem_r, cpu_l, mem_l = (int(p or 0) for p in parts)
+        except ValueError:
+            return {}
+        live = {}
+        if cpu_r:
+            live["cpu_reservation"] = round(cpu_r / 1e9, 3)
+        if mem_r:
+            live["memory_reservation_mb"] = mem_r // (1024 * 1024)
+        if cpu_l:
+            live["cpu_limit"] = round(cpu_l / 1e9, 3)
+        if mem_l:
+            live["memory_limit_mb"] = mem_l // (1024 * 1024)
+        return live
 
     def live_worker_pinned(self, service=None):
         out = docker_out(["service", "inspect", service or self.service,

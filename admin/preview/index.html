@@ -1373,7 +1373,7 @@ ul.tight li { margin-bottom: 2px; }
       </div>
       <div class="tile">
         <div class="eyebrow">Created</div>
-        <div class="v small mono">2026-08-21T18:14:54Z</div>
+        <div class="v small mono">2026-08-22T02:24:11Z</div>
       </div>
       <div class="tile">
         <div class="eyebrow">Updated</div>
@@ -1798,25 +1798,6 @@ ul.tight li { margin-bottom: 2px; }
               
               
 <div class="field">
-  <label for="f-image">Image</label>
-
-  
-    <input id="f-image" name="image"
-           type="text"
-           
-           
-           
-           required
-           placeholder="ghcr.io/you/app:sha-abc1234"
-           value="ghcr.io/acme/aichat-api:sha-9f3ac21">
-  
-
-  <p class="hint">Pin a tag or digest. `latest` is refused: the next deploy would be a different build wearing the same name.</p>
-</div>
-            
-              
-              
-<div class="field">
   <label for="f-port">Port</label>
 
   
@@ -1836,44 +1817,6 @@ ul.tight li { margin-bottom: 2px; }
               
               
 <div class="field">
-  <label for="f-health_path">Health path</label>
-
-  
-    <input id="f-health_path" name="health_path"
-           type="text"
-           
-           
-           
-           
-           
-           value="/health">
-  
-
-  <p class="hint">Checked with wget every 10s. Blank disables the healthcheck — then a broken deploy rolls forward instead of rolling back.</p>
-</div>
-            
-              
-              
-<div class="field">
-  <label for="f-metrics_path">Metrics path</label>
-
-  
-    <input id="f-metrics_path" name="metrics_path"
-           type="text"
-           
-           
-           
-           
-           
-           value="/metrics">
-  
-
-  <p class="hint">Prometheus endpoint. Blank stops it being scraped, which also removes the latency signal the autoscaler prefers.</p>
-</div>
-            
-              
-              
-<div class="field">
   <label for="f-start_period">Startup grace</label>
 
   
@@ -1888,101 +1831,6 @@ ul.tight li { margin-bottom: 2px; }
   
 
   <p class="hint">Seconds before a failing healthcheck counts. A JVM needs 60.</p>
-</div>
-            
-              
-              
-<div class="field">
-  <label for="f-replicas">Replicas</label>
-
-  
-    <input id="f-replicas" name="replicas"
-           type="number"
-           
-           min="0"
-           max="100"
-           required
-           
-           value="6">
-  
-
-  <p class="hint">The count deployed now. Once autoscaling is on, the autoscaler owns this number and a deploy preserves whatever is live.</p>
-</div>
-            
-              
-              
-<div class="field">
-  <label for="f-cpu_reservation">CPU reserved</label>
-
-  
-    <input id="f-cpu_reservation" name="cpu_reservation"
-           type="number"
-           step="0.05"
-           min="0.01"
-           max="32"
-           required
-           
-           value="0.5">
-  
-
-  <p class="hint">What Swarm subtracts when placing a task, and the unit the autoscaler sizes nodes in. Not a limit — set it to what one replica actually needs at rest.</p>
-</div>
-            
-              
-              
-<div class="field">
-  <label for="f-memory_reservation_mb">Memory reserved (MB)</label>
-
-  
-    <input id="f-memory_reservation_mb" name="memory_reservation_mb"
-           type="number"
-           
-           min="16"
-           max="131072"
-           required
-           
-           value="384">
-  
-
-  
-</div>
-            
-              
-              
-<div class="field">
-  <label for="f-cpu_limit">CPU limit</label>
-
-  
-    <input id="f-cpu_limit" name="cpu_limit"
-           type="number"
-           step="0.05"
-           min="0.01"
-           max="32"
-           
-           
-           value="1.0">
-  
-
-  <p class="hint">The ceiling one replica may use. Also the denominator of the CPU-per-replica scaling signal, read live from this service.</p>
-</div>
-            
-              
-              
-<div class="field">
-  <label for="f-memory_limit_mb">Memory limit (MB)</label>
-
-  
-    <input id="f-memory_limit_mb" name="memory_limit_mb"
-           type="number"
-           
-           min="16"
-           max="131072"
-           
-           
-           value="768">
-  
-
-  <p class="hint">Exceed it and the container is OOM-killed, so leave headroom.</p>
 </div>
             
               
@@ -2252,9 +2100,99 @@ ul.tight li { margin-bottom: 2px; }
           </div>
         </div>
         <div class="panel-note">
-          Saving redeploys this component. The live image and replica count are read
-          back first and preserved, so changing a memory limit will not roll back your
-          last deploy or undo the autoscaler.
+          Saving redeploys this component. The live image, replica count, placement
+          and resource sizing are read back first and preserved, so changing a
+          setting here will not roll back your last deploy or undo the autoscaler.
+        </div>
+      </section>
+
+      
+      <section class="panel">
+        <div class="panel-head"><h2>Managed for you</h2></div>
+        <div class="panel-body">
+          <div class="rows">
+            
+            <div class="deploy-row mute">
+              <span class="stripe"></span>
+              <span class="src">ci</span>
+              <span>
+                <span class="row-title">Image</span>
+                <span class="row-sub mono">ghcr.io/acme/aichat-api:sha-9f3ac21</span>
+              </span>
+            </div>
+            
+            <div class="deploy-row mute">
+              <span class="stripe"></span>
+              <span class="src">convention</span>
+              <span>
+                <span class="row-title">Health path</span>
+                <span class="row-sub mono">/health</span>
+              </span>
+            </div>
+            
+            <div class="deploy-row mute">
+              <span class="stripe"></span>
+              <span class="src">convention</span>
+              <span>
+                <span class="row-title">Metrics path</span>
+                <span class="row-sub mono">/metrics</span>
+              </span>
+            </div>
+            
+            <div class="deploy-row mute">
+              <span class="stripe"></span>
+              <span class="src">autoscaler</span>
+              <span>
+                <span class="row-title">Replicas</span>
+                <span class="row-sub mono">6</span>
+              </span>
+            </div>
+            
+            <div class="deploy-row mute">
+              <span class="stripe"></span>
+              <span class="src">autoscaler</span>
+              <span>
+                <span class="row-title">CPU reserved</span>
+                <span class="row-sub mono">0.5</span>
+              </span>
+            </div>
+            
+            <div class="deploy-row mute">
+              <span class="stripe"></span>
+              <span class="src">autoscaler</span>
+              <span>
+                <span class="row-title">Memory reserved (MB)</span>
+                <span class="row-sub mono">384</span>
+              </span>
+            </div>
+            
+            <div class="deploy-row mute">
+              <span class="stripe"></span>
+              <span class="src">autoscaler</span>
+              <span>
+                <span class="row-title">CPU limit</span>
+                <span class="row-sub mono">1.0</span>
+              </span>
+            </div>
+            
+            <div class="deploy-row mute">
+              <span class="stripe"></span>
+              <span class="src">autoscaler</span>
+              <span>
+                <span class="row-title">Memory limit (MB)</span>
+                <span class="row-sub mono">768</span>
+              </span>
+            </div>
+            
+          </div>
+        </div>
+        <div class="panel-note">
+          <b>ci</b> — set by whatever last deployed you.
+          <b>autoscaler</b> — measured from what this component actually uses and
+          re-sized as that changes; a reservation set from real usage is what lets
+          the master carry the load on its own and the worker fleet drop to zero.
+          <b>convention</b> — a fixed default; override it with a deploy label if
+          your app really differs.
         </div>
       </section>
 
@@ -2374,7 +2312,7 @@ ul.tight li { margin-bottom: 2px; }
       </div>
       <div class="tile">
         <div class="eyebrow">Created</div>
-        <div class="v small mono">2026-08-21T18:14:54Z</div>
+        <div class="v small mono">2026-08-22T02:24:11Z</div>
       </div>
       <div class="tile">
         <div class="eyebrow">Updated</div>
@@ -2742,25 +2680,6 @@ ul.tight li { margin-bottom: 2px; }
               
               
 <div class="field">
-  <label for="f-image">Image</label>
-
-  
-    <input id="f-image" name="image"
-           type="text"
-           
-           
-           
-           required
-           placeholder="ghcr.io/you/app:sha-abc1234"
-           value="ghcr.io/acme/aichat-api:sha-c40e8b7">
-  
-
-  <p class="hint">Pin a tag or digest. `latest` is refused: the next deploy would be a different build wearing the same name.</p>
-</div>
-            
-              
-              
-<div class="field">
   <label for="f-port">Port</label>
 
   
@@ -2780,44 +2699,6 @@ ul.tight li { margin-bottom: 2px; }
               
               
 <div class="field">
-  <label for="f-health_path">Health path</label>
-
-  
-    <input id="f-health_path" name="health_path"
-           type="text"
-           
-           
-           
-           
-           
-           value="/health">
-  
-
-  <p class="hint">Checked with wget every 10s. Blank disables the healthcheck — then a broken deploy rolls forward instead of rolling back.</p>
-</div>
-            
-              
-              
-<div class="field">
-  <label for="f-metrics_path">Metrics path</label>
-
-  
-    <input id="f-metrics_path" name="metrics_path"
-           type="text"
-           
-           
-           
-           
-           
-           value="/metrics">
-  
-
-  <p class="hint">Prometheus endpoint. Blank stops it being scraped, which also removes the latency signal the autoscaler prefers.</p>
-</div>
-            
-              
-              
-<div class="field">
   <label for="f-start_period">Startup grace</label>
 
   
@@ -2832,101 +2713,6 @@ ul.tight li { margin-bottom: 2px; }
   
 
   <p class="hint">Seconds before a failing healthcheck counts. A JVM needs 60.</p>
-</div>
-            
-              
-              
-<div class="field">
-  <label for="f-replicas">Replicas</label>
-
-  
-    <input id="f-replicas" name="replicas"
-           type="number"
-           
-           min="0"
-           max="100"
-           required
-           
-           value="1">
-  
-
-  <p class="hint">The count deployed now. Once autoscaling is on, the autoscaler owns this number and a deploy preserves whatever is live.</p>
-</div>
-            
-              
-              
-<div class="field">
-  <label for="f-cpu_reservation">CPU reserved</label>
-
-  
-    <input id="f-cpu_reservation" name="cpu_reservation"
-           type="number"
-           step="0.05"
-           min="0.01"
-           max="32"
-           required
-           
-           value="0.1">
-  
-
-  <p class="hint">What Swarm subtracts when placing a task, and the unit the autoscaler sizes nodes in. Not a limit — set it to what one replica actually needs at rest.</p>
-</div>
-            
-              
-              
-<div class="field">
-  <label for="f-memory_reservation_mb">Memory reserved (MB)</label>
-
-  
-    <input id="f-memory_reservation_mb" name="memory_reservation_mb"
-           type="number"
-           
-           min="16"
-           max="131072"
-           required
-           
-           value="128">
-  
-
-  
-</div>
-            
-              
-              
-<div class="field">
-  <label for="f-cpu_limit">CPU limit</label>
-
-  
-    <input id="f-cpu_limit" name="cpu_limit"
-           type="number"
-           step="0.05"
-           min="0.01"
-           max="32"
-           
-           
-           value="0.5">
-  
-
-  <p class="hint">The ceiling one replica may use. Also the denominator of the CPU-per-replica scaling signal, read live from this service.</p>
-</div>
-            
-              
-              
-<div class="field">
-  <label for="f-memory_limit_mb">Memory limit (MB)</label>
-
-  
-    <input id="f-memory_limit_mb" name="memory_limit_mb"
-           type="number"
-           
-           min="16"
-           max="131072"
-           
-           
-           value="512">
-  
-
-  <p class="hint">Exceed it and the container is OOM-killed, so leave headroom.</p>
 </div>
             
               
@@ -3196,9 +2982,99 @@ ul.tight li { margin-bottom: 2px; }
           </div>
         </div>
         <div class="panel-note">
-          Saving redeploys this component. The live image and replica count are read
-          back first and preserved, so changing a memory limit will not roll back your
-          last deploy or undo the autoscaler.
+          Saving redeploys this component. The live image, replica count, placement
+          and resource sizing are read back first and preserved, so changing a
+          setting here will not roll back your last deploy or undo the autoscaler.
+        </div>
+      </section>
+
+      
+      <section class="panel">
+        <div class="panel-head"><h2>Managed for you</h2></div>
+        <div class="panel-body">
+          <div class="rows">
+            
+            <div class="deploy-row mute">
+              <span class="stripe"></span>
+              <span class="src">ci</span>
+              <span>
+                <span class="row-title">Image</span>
+                <span class="row-sub mono">ghcr.io/acme/aichat-api:sha-c40e8b7</span>
+              </span>
+            </div>
+            
+            <div class="deploy-row mute">
+              <span class="stripe"></span>
+              <span class="src">convention</span>
+              <span>
+                <span class="row-title">Health path</span>
+                <span class="row-sub mono">/health</span>
+              </span>
+            </div>
+            
+            <div class="deploy-row mute">
+              <span class="stripe"></span>
+              <span class="src">convention</span>
+              <span>
+                <span class="row-title">Metrics path</span>
+                <span class="row-sub mono">/metrics</span>
+              </span>
+            </div>
+            
+            <div class="deploy-row mute">
+              <span class="stripe"></span>
+              <span class="src">autoscaler</span>
+              <span>
+                <span class="row-title">Replicas</span>
+                <span class="row-sub mono">1</span>
+              </span>
+            </div>
+            
+            <div class="deploy-row mute">
+              <span class="stripe"></span>
+              <span class="src">autoscaler</span>
+              <span>
+                <span class="row-title">CPU reserved</span>
+                <span class="row-sub mono">0.1</span>
+              </span>
+            </div>
+            
+            <div class="deploy-row mute">
+              <span class="stripe"></span>
+              <span class="src">autoscaler</span>
+              <span>
+                <span class="row-title">Memory reserved (MB)</span>
+                <span class="row-sub mono">128</span>
+              </span>
+            </div>
+            
+            <div class="deploy-row mute">
+              <span class="stripe"></span>
+              <span class="src">autoscaler</span>
+              <span>
+                <span class="row-title">CPU limit</span>
+                <span class="row-sub mono">0.5</span>
+              </span>
+            </div>
+            
+            <div class="deploy-row mute">
+              <span class="stripe"></span>
+              <span class="src">autoscaler</span>
+              <span>
+                <span class="row-title">Memory limit (MB)</span>
+                <span class="row-sub mono">512</span>
+              </span>
+            </div>
+            
+          </div>
+        </div>
+        <div class="panel-note">
+          <b>ci</b> — set by whatever last deployed you.
+          <b>autoscaler</b> — measured from what this component actually uses and
+          re-sized as that changes; a reservation set from real usage is what lets
+          the master carry the load on its own and the worker fleet drop to zero.
+          <b>convention</b> — a fixed default; override it with a deploy label if
+          your app really differs.
         </div>
       </section>
 
@@ -3313,7 +3189,7 @@ ul.tight li { margin-bottom: 2px; }
       </div>
       <div class="tile">
         <div class="eyebrow">Created</div>
-        <div class="v small mono">2026-08-21T18:14:54Z</div>
+        <div class="v small mono">2026-08-22T02:24:11Z</div>
       </div>
       <div class="tile">
         <div class="eyebrow">Updated</div>
@@ -3445,9 +3321,9 @@ ul.tight li { margin-bottom: 2px; }
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis://default:1ee649c49e263f58c70d553f0b65b0f3cd1cfd4ab82d0db6@cache_redis:6379</code>
+              <code>redis://default:1d15309596d18b88f9531e71a4bf449d1d608db0a7d4372d@cache_redis:6379</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis://default:1ee649c49e263f58c70d553f0b65b0f3cd1cfd4ab82d0db6@cache_redis:6379">Copy</button>
+                      data-copy-text="redis://default:1d15309596d18b88f9531e71a4bf449d1d608db0a7d4372d@cache_redis:6379">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -3458,7 +3334,7 @@ ul.tight li { margin-bottom: 2px; }
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="1ee649c49e263f58c70d553f0b65b0f3cd1cfd4ab82d0db6">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="1d15309596d18b88f9531e71a4bf449d1d608db0a7d4372d">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -3484,9 +3360,9 @@ ul.tight li { margin-bottom: 2px; }
         <div class="panel-body stack">
           
           <div class="conn">
-            <code>redis://default:1ee649c49e263f58c70d553f0b65b0f3cd1cfd4ab82d0db6@10.0.0.2:46379</code>
+            <code>redis://default:1d15309596d18b88f9531e71a4bf449d1d608db0a7d4372d@10.0.0.2:46379</code>
             <button class="btn btn-sm" type="button" data-copy
-                    data-copy-text="redis://default:1ee649c49e263f58c70d553f0b65b0f3cd1cfd4ab82d0db6@10.0.0.2:46379">Copy</button>
+                    data-copy-text="redis://default:1d15309596d18b88f9531e71a4bf449d1d608db0a7d4372d@10.0.0.2:46379">Copy</button>
           </div>
           <div class="table-wrap">
             <table>
@@ -3904,9 +3780,27 @@ ul.tight li { margin-bottom: 2px; }
           </div>
         </div>
         <div class="panel-note">
-          Saving redeploys this component. The live image and replica count are read
-          back first and preserved, so changing a memory limit will not roll back your
-          last deploy or undo the autoscaler.
+          Saving redeploys this component. The live image, replica count, placement
+          and resource sizing are read back first and preserved, so changing a
+          setting here will not roll back your last deploy or undo the autoscaler.
+        </div>
+      </section>
+
+      
+      <section class="panel">
+        <div class="panel-head"><h2>Managed for you</h2></div>
+        <div class="panel-body">
+          <div class="rows">
+            
+          </div>
+        </div>
+        <div class="panel-note">
+          <b>ci</b> — set by whatever last deployed you.
+          <b>autoscaler</b> — measured from what this component actually uses and
+          re-sized as that changes; a reservation set from real usage is what lets
+          the master carry the load on its own and the worker fleet drop to zero.
+          <b>convention</b> — a fixed default; override it with a deploy label if
+          your app really differs.
         </div>
       </section>
 
@@ -4024,7 +3918,7 @@ ul.tight li { margin-bottom: 2px; }
       </div>
       <div class="tile">
         <div class="eyebrow">Created</div>
-        <div class="v small mono">2026-08-21T18:14:54Z</div>
+        <div class="v small mono">2026-08-22T02:24:11Z</div>
       </div>
       <div class="tile">
         <div class="eyebrow">Updated</div>
@@ -4149,9 +4043,9 @@ ul.tight li { margin-bottom: 2px; }
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis://default:f43c1b9035807412cede9367ceca7bc3b8486b0f27105e72@sessions_redis:6379</code>
+              <code>redis://default:f8d4db38e7c6e8c6de7a1bcd8bd49a862730a0d3ea96e359@sessions_redis:6379</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis://default:f43c1b9035807412cede9367ceca7bc3b8486b0f27105e72@sessions_redis:6379">Copy</button>
+                      data-copy-text="redis://default:f8d4db38e7c6e8c6de7a1bcd8bd49a862730a0d3ea96e359@sessions_redis:6379">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -4162,7 +4056,7 @@ ul.tight li { margin-bottom: 2px; }
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="f43c1b9035807412cede9367ceca7bc3b8486b0f27105e72">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="f8d4db38e7c6e8c6de7a1bcd8bd49a862730a0d3ea96e359">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -4579,9 +4473,27 @@ ul.tight li { margin-bottom: 2px; }
           </div>
         </div>
         <div class="panel-note">
-          Saving redeploys this component. The live image and replica count are read
-          back first and preserved, so changing a memory limit will not roll back your
-          last deploy or undo the autoscaler.
+          Saving redeploys this component. The live image, replica count, placement
+          and resource sizing are read back first and preserved, so changing a
+          setting here will not roll back your last deploy or undo the autoscaler.
+        </div>
+      </section>
+
+      
+      <section class="panel">
+        <div class="panel-head"><h2>Managed for you</h2></div>
+        <div class="panel-body">
+          <div class="rows">
+            
+          </div>
+        </div>
+        <div class="panel-note">
+          <b>ci</b> — set by whatever last deployed you.
+          <b>autoscaler</b> — measured from what this component actually uses and
+          re-sized as that changes; a reservation set from real usage is what lets
+          the master carry the load on its own and the worker fleet drop to zero.
+          <b>convention</b> — a fixed default; override it with a deploy label if
+          your app really differs.
         </div>
       </section>
 

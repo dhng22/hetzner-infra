@@ -341,6 +341,10 @@ def update_status(service_name):
             "message": "update completed", "at": "6m ago"}
 
 
+def expire_pending(name, now=None):
+    """No-op: fixtures have no clock and nothing to expire."""
+
+
 def deployments(name, service_name, limit=25):
     """Mirrors swarm.deployments(). Nothing to reconcile against fixtures."""
     return history(name, limit=limit), update_status(service_name)
