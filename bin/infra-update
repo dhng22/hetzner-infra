@@ -175,11 +175,29 @@ changed() {
       "$INFRA_DIR/$area" "$work/repo/$area" >/dev/null 2>&1
 }
 
+# An image is stale if it was not built from the commit we are applying, which
+# is a stronger question than "did the files change". Comparing files alone
+# assumes the running image was built from the files on disk — and the moment
+# anybody copies something onto the box by hand, or a build fails halfway
+# through an earlier run, that stops being true and the cluster keeps serving an
+# image no commit corresponds to, with the updater reporting everything current.
+image_is_stale() {
+  local image="$1"
+  local built
+  built="$(docker image inspect "$image" \
+             -f '{{index .Config.Labels "infra.commit"}}' 2>/dev/null || echo "")"
+  [ "$built" != "$got" ]
+}
+
 rebuild_autoscaler=false; rebuild_admin=false
 deploy_monitoring=false; deploy_ingress=false; deploy_admin=false
 
-changed autoscaler && { rebuild_autoscaler=true; deploy_monitoring=true; }
-changed admin      && { rebuild_admin=true;      deploy_admin=true; }
+if changed autoscaler || image_is_stale "${APP_NAME}/autoscaler:latest"; then
+  rebuild_autoscaler=true; deploy_monitoring=true
+fi
+if changed admin || image_is_stale "${APP_NAME}/admin:latest"; then
+  rebuild_admin=true; deploy_admin=true
+fi
 changed config     && deploy_monitoring=true
 [ -e "$INFRA_DIR/stacks/monitoring.yml" ] && \
   ! diff -q "$INFRA_DIR/stacks/monitoring.yml" "$work/repo/stacks/monitoring.yml" >/dev/null 2>&1 && deploy_monitoring=true
@@ -212,12 +230,14 @@ log "files updated to ${got:0:12}"
 # --- rebuild and redeploy only what moved ------------------------------------
 if [ "$rebuild_autoscaler" = true ]; then
   log "building autoscaler image"
-  docker build -q -t "${APP_NAME}/autoscaler:latest" "$INFRA_DIR/autoscaler" >/dev/null \
+  docker build -q --label "infra.commit=$got" \
+    -t "${APP_NAME}/autoscaler:latest" "$INFRA_DIR/autoscaler" >/dev/null \
     || die "autoscaler image build failed — the files are updated but the old image is still running"
 fi
 if [ "$rebuild_admin" = true ]; then
   log "building admin image"
-  docker build -q -t "${APP_NAME}/admin:latest" "$INFRA_DIR/admin" >/dev/null \
+  docker build -q --label "infra.commit=$got" \
+    -t "${APP_NAME}/admin:latest" "$INFRA_DIR/admin" >/dev/null \
     || die "admin image build failed — the files are updated but the old image is still running"
 fi
 
