@@ -22,6 +22,20 @@ version: "3.8"
 # actually use. The global services below are reserved for the same reason: they
 # land on EVERY node, so their cost has to come off a new worker's advertised
 # size before the rest is treated as app capacity.
+#
+# THE NUMBERS ARE MEASURED. They used to be guesses sized for the 4 vCPU master
+# the README specifies, and on a 2 vCPU one they reserved 1.75 of 2.00 cores and
+# 2.3 of 3.7 GB between them — to run services whose combined q90 usage was 0.04
+# cores and whose combined peak was 491 MB. The consequence was not slowness: it
+# was that no application could fit on the master at all, so the cluster kept a
+# worker billed around the clock to hold one idle replica and could never reach
+# the free single-host state this whole design exists to reach.
+#
+# Re-measure before changing them:
+#   quantile_over_time(0.90, max by (container_label_com_docker_swarm_service_name)
+#     (rate(container_cpu_usage_seconds_total{...}[5m]))[3h:1m])
+# VictoriaMetrics and Loki keep several times their observed peak, because they
+# are the two that grow with how much you store.
 # =============================================================================
 
 x-manager-only: &manager-only
@@ -62,7 +76,7 @@ x-autoscaler-base: &autoscaler-base
       prometheus.port: "9200"
       prometheus.path: "/metrics"
     resources:
-      reservations: { cpus: "0.1", memory: 96M }
+      reservations: { cpus: "0.05", memory: 96M }
     restart_policy:
       condition: any
       delay: 30s
@@ -85,7 +99,7 @@ services:
       <<: *manager-only
       resources:
         limits:       { memory: 1500M }
-        reservations: { cpus: "0.5", memory: 768M }
+        reservations: { cpus: "0.15", memory: 384M }
 
   # --- scraper with Swarm service discovery ---------------------------------
   # Discovers new nodes and app tasks automatically. This is why adding a
@@ -104,7 +118,7 @@ services:
       replicas: 1
       <<: *manager-only   # dockerswarm_sd requires a manager socket
       resources:
-        reservations: { cpus: "0.15", memory: 128M }
+        reservations: { cpus: "0.05", memory: 96M }
 
   # --- alerting -------------------------------------------------------------
   vmalert:
@@ -121,7 +135,7 @@ services:
       replicas: 1
       <<: *manager-only
       resources:
-        reservations: { cpus: "0.1", memory: 96M }
+        reservations: { cpus: "0.03", memory: 64M }
 
   alertmanager:
     image: prom/alertmanager:v0.27.0
@@ -138,7 +152,7 @@ services:
       replicas: 1
       <<: *manager-only
       resources:
-        reservations: { cpus: "0.1", memory: 96M }
+        reservations: { cpus: "0.03", memory: 64M }
 
   # --- logs -----------------------------------------------------------------
   loki:
@@ -158,7 +172,7 @@ services:
       replicas: 1
       <<: *manager-only
       resources:
-        reservations: { cpus: "0.3", memory: 512M }
+        reservations: { cpus: "0.10", memory: 320M }
 
   # --- dashboards -----------------------------------------------------------
   grafana:
@@ -177,7 +191,7 @@ services:
       replicas: 1
       <<: *manager-only
       resources:
-        reservations: { cpus: "0.2", memory: 256M }
+        reservations: { cpus: "0.05", memory: 128M }
 
   # --- per-node exporters (global = every current AND future node) ----------
   node-exporter:
@@ -196,10 +210,23 @@ services:
     deploy:
       mode: global
       resources:
-        reservations: { cpus: "0.05", memory: 64M }
+        reservations: { cpus: "0.03", memory: 48M }
 
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    # >= v0.55 is load-bearing, and the failure it fixes is silent.
+    #
+    # Docker 29 renamed its storage driver from `overlay2` to `overlayfs`.
+    # cadvisor v0.49 does not know that name, so it cannot resolve any
+    # container's read-write layer, drops EVERY container, and exports only the
+    # root cgroup — one series, with no `container_label_*` labels on it at all.
+    #
+    # Nothing looks broken: the service is 1/1, the scrape succeeds, and the
+    # metric names all exist. But the autoscaler's CPU-per-replica query filters
+    # on container_label_com_docker_swarm_service_name != "", which matches
+    # nothing, so cpu/replica reads n/a forever. That is the signal that exists
+    # to authorise scaling DOWN when the latency histogram is empty at low
+    # traffic — so losing it silently means the fleet never shrinks.
+    image: gcr.io/cadvisor/cadvisor:v0.55.1
     command: ["--docker_only=true", "--housekeeping_interval=15s"]
     volumes:
       - /:/rootfs:ro
@@ -215,7 +242,7 @@ services:
     deploy:
       mode: global
       resources:
-        reservations: { cpus: "0.10", memory: 128M }
+        reservations: { cpus: "0.05", memory: 96M }
 
   # --- the autoscaler -------------------------------------------------------
   # Manages the single shared worker pool. Staging rides along on it as one
