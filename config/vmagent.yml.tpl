@@ -70,6 +70,23 @@ scrape_configs:
       - source_labels: [__meta_dockerswarm_task_desired_state]
         regex: running
         action: keep
+
+      # ONE target per task, not one per network it is attached to.
+      #
+      # dockerswarm_sd emits a target for every (task, network) pair. A
+      # component sits on `edge` AND `monitoring`, so each of its tasks produced
+      # two targets — and vmagent is only attached to `monitoring`, so the
+      # `edge` one (172.20.1.x) is unreachable by construction. Half of every
+      # component's targets were permanently down, which is exactly what
+      # ReplicasNotScraped is designed to catch, so it fired on healthy
+      # components and could not be trusted.
+      #
+      # Keeping the monitoring address is the correct half: it is the network
+      # vmagent shares with everything it scrapes, and the one that exists
+      # whether or not a component is exposed to the tunnel.
+      - source_labels: [__meta_dockerswarm_network_name]
+        regex: monitoring
+        action: keep
       - source_labels: [__address__, __meta_dockerswarm_service_label_prometheus_port]
         regex: "([^:]+)(?::\\d+)?;(\\d+)"
         target_label: __address__

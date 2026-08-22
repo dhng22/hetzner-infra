@@ -489,3 +489,63 @@ class WorkerPinSpellingTest(unittest.TestCase):
                      "node.role != worker"):
             self.assertIsNone(A._WORKER_PIN.match(text), text)
 
+
+class HandoverNudgeTest(unittest.TestCase):
+    """
+    A stalled handover has to act, not just complain.
+
+    Releasing the worker pin does not move a running task — Swarm places a task
+    when it is created and never rebalances one. So "wait for a replica on the
+    master" was waiting for something that could not happen: 37 minutes of an
+    error every loop, resolved only when an unrelated resize recreated the tasks
+    and they landed there by accident.
+    """
+
+    def setUp(self):
+        A._last_handover_nudge.clear()
+        self.calls = []
+        self._run = A.subprocess.run
+        A.subprocess.run = self._fake
+
+    def tearDown(self):
+        A.subprocess.run = self._run
+        A._last_handover_nudge.clear()
+
+    def _fake(self, cmd, **kw):
+        self.calls.append(cmd)
+        class R:
+            returncode = 0
+            stdout = stderr = ""
+        return R()
+
+    def test_forces_a_replacement(self):
+        w = workload("api_app")
+        self.assertEqual(A.handover_nudge(["api_app"], [w]), ["api_app"])
+        self.assertEqual(len(self.calls), 1)
+        # --force is the whole point: it recreates tasks so placement is
+        # reconsidered. Detached so the loop is not held for a rollout.
+        self.assertIn("--force", self.calls[0])
+        self.assertIn("--detach=true", self.calls[0])
+        self.assertIn("api_app", self.calls[0])
+
+    def test_does_not_nudge_twice_inside_the_cooldown(self):
+        w = workload("api_app")
+        A.handover_nudge(["api_app"], [w])
+        self.assertEqual(A.handover_nudge(["api_app"], [w]), [])
+        self.assertEqual(len(self.calls), 1)
+
+    def test_never_nudges_a_service_that_is_already_rolling(self):
+        """Forcing an update mid-rollout restarts it from the beginning."""
+        w = workload("api_app")._replace(rolling=True)
+        self.assertEqual(A.handover_nudge(["api_app"], [w]), [])
+        self.assertEqual(self.calls, [])
+
+    def test_dry_run_touches_nothing(self):
+        A.DRY_RUN = True
+        try:
+            self.assertEqual(A.handover_nudge(["api_app"], [workload("api_app")]),
+                             ["api_app"])
+            self.assertEqual(self.calls, [])
+        finally:
+            A.DRY_RUN = False
+

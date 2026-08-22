@@ -1637,6 +1637,53 @@ def apply_right_sizing(workloads, usage, node_cpu, node_mem):
     return applied
 
 
+#: How long to leave a forced re-placement alone before trying another. Long
+#: enough that a rollout which is simply slow is never nudged twice.
+HANDOVER_NUDGE_COOLDOWN = 600
+_last_handover_nudge = {}
+
+
+def handover_nudge(names, workloads):
+    """
+    Force a rolling re-placement of services that should have moved but did not.
+
+    Returns the names actually nudged.
+
+    `docker service update --force` recreates every task with an unchanged
+    spec, which is the only way to make Swarm reconsider placement — there is no
+    "rebalance" verb, and a constraint that has already been removed will not
+    move a task that is already running. Detached, because the rollout takes
+    longer than a loop and the next loop reads live state anyway; the scale-down
+    step refuses to drain a node while a rollout is in flight, so the two cannot
+    collide.
+    """
+    if DRY_RUN:
+        log.info("[dry-run] would force a re-placement of %s", ", ".join(names))
+        return list(names)
+
+    now = time.time()
+    by_name = {w.name: w for w in workloads}
+    nudged = []
+    for name in names:
+        if now - _last_handover_nudge.get(name, 0) < HANDOVER_NUDGE_COOLDOWN:
+            continue
+        workload = by_name.get(name)
+        if workload is not None and workload.rolling:
+            continue          # already moving; nudging again restarts it
+        proc = subprocess.run(
+            ["docker", "service", "update", "--detach=true", "--force", name],
+            capture_output=True, text=True, timeout=120)
+        if proc.returncode != 0:
+            M_ERRORS.labels(stage="handover").inc()
+            log.warning("could not force a re-placement of %s: %s", name,
+                        (proc.stderr or proc.stdout).strip()[:200])
+            continue
+        _last_handover_nudge[name] = now
+        nudged.append(name)
+        M_EVENTS.labels(direction="handover-nudge").inc()
+    return nudged
+
+
 def set_replicas(name, count):
     if DRY_RUN:
         log.info("[dry-run] would set %s to %d replicas", name, count)
@@ -2140,8 +2187,20 @@ def loop():
         missing = [w.name for w in workloads
                    if admitted.get(w.name, w.spec_replicas) >= 1
                    and on_manager.get(w.id, 0) < 1]
+        rolling = [w.name for w in workloads if w.rolling]
 
-        if since < COOLDOWN_DOWN:
+        if rolling:
+            # Draining a node kills the tasks a rollout is in the middle of
+            # creating, and `max_failure_ratio: 0` reads those deaths as the
+            # update failing — so Swarm rolls the whole thing back. That is not
+            # hypothetical: a right-sizing update went out detached, the next
+            # loop drained the last worker, and the resize was reverted 90
+            # seconds later. The rollback alert fired for a deploy nobody made.
+            #
+            # Removal is never urgent. Waiting a loop for the rollout to settle
+            # costs one minute of one server.
+            log.info("worker scale-down deferred: %s still rolling", ", ".join(rolling))
+        elif since < COOLDOWN_DOWN:
             log.info("worker scale-down suppressed: %.0fs since last", since)
         elif current_workers <= floor:
             pass
@@ -2162,6 +2221,19 @@ def loop():
                 _manager_wait_since = time.time()
             waited = time.time() - _manager_wait_since
             if waited > HANDOVER_STALL_SECONDS:
+                # Nudge, then report. Releasing the pin does NOT move anything:
+                # Swarm places a task when it is created and never rebalances a
+                # running one, so a replica whose constraint was lifted stays
+                # exactly where it is. The wait above was therefore waiting for
+                # an event that could not happen on its own — 37 minutes of it,
+                # until an unrelated resize recreated the tasks and they landed
+                # on the master by accident.
+                #
+                # A forced rolling update is the one thing that redeploys tasks
+                # onto the now-eligible master, and it is graceful: start-first,
+                # health-gated, one replica at a time, exactly like a deploy.
+                nudged = handover_nudge(missing, workloads)
+
                 M_ERRORS.labels(stage="handover").inc()
                 detail = ""
                 for w in workloads:
@@ -2172,8 +2244,9 @@ def loop():
                             detail = (task.get("Status", {}) or {}).get("Err", "")
                             break
                 log.error("handover stalled: %.0fs with every pin released and still no "
-                          "replica on the master for %s. The last worker stays until "
-                          "there is one.%s", waited, ", ".join(missing),
+                          "replica on the master for %s. %s%s", waited, ", ".join(missing),
+                          "Forcing a rolling re-placement onto the master."
+                          if nudged else "The last worker stays until there is one.",
                           f" Swarm says: {detail}" if detail else
                           " Check `docker service ps` for a reservation that no longer fits.")
             else:
