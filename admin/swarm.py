@@ -356,6 +356,22 @@ _UPDATE_VERDICT = {
 }
 
 
+def _rollout_image(svc):
+    """
+    The image the last rollout left running.
+
+    UpdateStatus describes the last update to the SERVICE, whatever caused it —
+    a replica change or a re-sized reservation reads exactly like a deploy, and
+    "update completed" on its own has been mistaken for "my new image is live"
+    when the rollout in question was the autoscaler moving replicas onto a
+    worker. Naming the image the rollout actually settled on removes the
+    ambiguity: if it is not the one you pushed, it was not your deploy.
+    """
+    image = ((svc.attrs.get("Spec", {}) or {}).get("TaskTemplate", {}) or {}) \
+        .get("ContainerSpec", {}).get("Image", "") or ""
+    return {"image": image, "image_short": _short_image(image)}
+
+
 def update_status(service_name):
     """
     Swarm's own account of the service's last rollout.
@@ -366,7 +382,7 @@ def update_status(service_name):
     or not it survived. UpdateStatus is what Swarm actually did.
     """
     blank = {"state": "", "verdict": None, "started_epoch": None,
-             "message": "", "at": "—"}
+             "message": "", "at": "—", "image": "", "image_short": ""}
     try:
         svc = client().services.get(service_name)
     except Exception:  # noqa: BLE001
@@ -403,6 +419,7 @@ def update_status(service_name):
                        (f"{counts.get('running', 0)}/{want} running"
                         + (", unschedulable" if counts.get("blocked") else "")),
             "at": _age(svc.attrs.get("UpdatedAt", "")),
+            **_rollout_image(svc),
         }
 
     started = status.get("StartedAt") or ""
@@ -419,6 +436,7 @@ def update_status(service_name):
         "started_epoch": epoch,
         "message": status.get("Message") or "",
         "at": _age(status.get("CompletedAt") or started),
+        **_rollout_image(svc),
     }
 
 

@@ -5,7 +5,7 @@
 {% if rollout and rollout.state %}
 <section class="panel">
   <div class="panel-head">
-    <h2>Current rollout</h2>
+    <h2>Currently running</h2>
     <span class="spacer"></span>
     <span class="pill {{ tone }}">
       {% if rollout.verdict == 'done' %}converged
@@ -18,9 +18,15 @@
       <span class="stripe"></span>
       <span class="src">swarm</span>
       <span>
-        <span class="row-title mono">{{ rollout.state }}</span>
+        {# The IMAGE first, not the state. "update completed" describes the last
+           update to the service whatever caused it — a replica change or a
+           re-sized reservation reads identically to a deploy — so the thing you
+           need to see is which build it settled on. #}
+        <span class="row-title mono" title="{{ rollout.image }}">
+          {{ rollout.image_short or rollout.state }}
+        </span>
         <span class="row-sub">
-          {{ rollout.at }}{% if rollout.message %} · {{ rollout.message }}{% endif %}
+          {{ rollout.state }} · {{ rollout.at }}{% if rollout.message %} · {{ rollout.message }}{% endif %}
           {% if rollout.verdict == 'failed' %}
           · the previous version is still serving; check the Logs tab for why the new one exited
           {% endif %}

@@ -361,7 +361,9 @@ def history(name=None, limit=25):
 def update_status(service_name):
     """Swarm's verdict on the last rollout. Mirrors swarm.update_status()."""
     return {"state": "completed", "verdict": "done", "started_epoch": None,
-            "message": "update completed", "at": "6m ago"}
+            "message": "update completed", "at": "6m ago",
+            "image": "ghcr.io/acme/aichat-api:sha-4c9920a",
+            "image_short": "aichat-api:sha-4c9920a"}
 
 
 def expire_pending(name, now=None):
