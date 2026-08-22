@@ -767,7 +767,15 @@ def summary():
 
 
 def component_views():
-    return shape.component_views(_service_fn_with_counts())
+    """
+    Every component, with what it reserves expressed as a share of the cluster.
+
+    A share, not an absolute, because the list is where you compare components
+    against each other and against the room left — "0.04 vCPU" means nothing
+    without knowing there are two cores.
+    """
+    views = shape.component_views(_service_fn_with_counts())
+    return shape.with_cluster_share(views, nodes())
 
 
 def autoscaler_state():

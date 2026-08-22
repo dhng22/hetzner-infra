@@ -22,6 +22,16 @@
   <div class="head-side">
     <span class="pill {{ view.tone }}">{{ view.state }}</span>
     <span class="pill mute plain">{{ component.LABEL }}</span>
+    {% if view.reserved and (view.reserved.cpu or view.reserved.mem_mb) %}
+    {# Replicas x reservation across every service this component owns. The
+       blocks on the cluster map are per TASK, which answers a different
+       question — this is what the component costs the cluster in capacity it
+       can no longer give to anything else. #}
+    <span class="head-reserved mono"
+          data-tip="Reserved by every replica of every service in {{ component.name }}, across the cluster">
+      {{ view.reserved.cpu }} vCPU · {{ view.reserved.mem_mb }} MB
+    </span>
+    {% endif %}
   </div>
 </div>
 
@@ -96,26 +106,6 @@
               </tbody>
             </table>
           </div>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h2>Reserved</h2>
-          <span class="spacer"></span>
-          <span class="eyebrow">whole component</span>
-        </div>
-        <div class="panel-body stack">
-          <div class="conn">
-            <code class="mono">{{ view.reserved.cpu }} vCPU · {{ view.reserved.mem_mb }} MB</code>
-          </div>
-          <p class="hint">
-            Replicas &times; what one replica reserves, across every service this
-            component owns. The blocks on the cluster map are per <em>task</em>,
-            which is a different question — that one is "how much of this node is
-            this one replica holding", this one is what the component costs the
-            cluster in capacity it can no longer give to anything else.
-          </p>
         </div>
       </section>
 

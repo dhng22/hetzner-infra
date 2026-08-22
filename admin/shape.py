@@ -148,6 +148,26 @@ def broken_view(name, problem):
     }
 
 
+def with_cluster_share(views, nodes):
+    """
+    Add each component's reservation as a percentage of total cluster capacity.
+
+    Of the WHOLE cluster, not of one node: a component's replicas are spread
+    across machines, so "12% of the cluster" is the honest answer and "12% of a
+    node" would be true of no node in particular.
+    """
+    total_cpu = sum((n.get("cpus") or 0) for n in nodes)
+    total_mem = sum((n.get("memory_gb") or 0) for n in nodes) * 1024
+    for view in views:
+        reserved = view.get("reserved") or {}
+        view["reserved"] = {
+            **reserved,
+            "cpu_pct": round((reserved.get("cpu") or 0) / total_cpu * 100, 1) if total_cpu else 0,
+            "mem_pct": round((reserved.get("mem_mb") or 0) / total_mem * 100, 1) if total_mem else 0,
+        }
+    return views
+
+
 def component_views(service_fn):
     """Every component on disk. One broken spec does not hide the others."""
     try:

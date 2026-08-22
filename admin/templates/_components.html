@@ -69,12 +69,19 @@
           {% endif %}
         </div>
         {% if v.reserved and (v.reserved.cpu or v.reserved.mem_mb) %}
-        {# What the whole component holds — replicas x reservation across every
-           service it owns. The cluster map counts per task; this is the bill. #}
-        <div class="card-foot subtle"
-             data-tip="Reserved by every replica of every service in {{ v.name }}: {{ v.reserved.cpu }} vCPU and {{ v.reserved.mem_mb }} MB of cluster capacity">
-          <span class="muted">reserved</span>
-          <span class="mono">{{ v.reserved.cpu }} vCPU · {{ v.reserved.mem_mb }} MB</span>
+        {# Share of the whole cluster, drawn the same way node capacity is drawn
+           everywhere else: red CPU, blue memory, a full ring meaning this one
+           component has claimed the lot. A percentage rather than an absolute
+           because this is the view where components are compared with each
+           other, and "0.04 vCPU" says nothing without knowing the fleet size. #}
+        <div class="card-foot subtle">
+          <span class="muted">reserved of cluster</span>
+          <span class="gauge-pair">
+            <span class="gauge gauge-inline gauge-cpu" style="--v:{{ v.reserved.cpu_pct }}"
+                  data-tip="CPU: {{ v.reserved.cpu_pct }}% of the cluster — {{ v.reserved.cpu }} vCPU across {{ v.desired }} replica(s)"></span>
+            <span class="gauge gauge-inline gauge-mem" style="--v:{{ v.reserved.mem_pct }}"
+                  data-tip="Memory: {{ v.reserved.mem_pct }}% of the cluster — {{ v.reserved.mem_mb }} MB across {{ v.desired }} replica(s)"></span>
+          </span>
         </div>
         {% endif %}
       </a>

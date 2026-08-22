@@ -92,7 +92,9 @@ def component_view(component):
 
 
 def component_views():
-    return shape.component_views(service)
+    # Same shape as the live panel, cluster share included — the preview exists
+    # to catch a template reaching for a key one of them does not set.
+    return shape.with_cluster_share(shape.component_views(service), nodes())
 
 
 def system_view():
