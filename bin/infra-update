@@ -226,14 +226,43 @@ changed config     && deploy_monitoring=true
 # only ever adds, which leaves a deleted stack or a renamed script behind to be
 # found months later. The excludes are the runtime state that is this cluster's
 # and not the repo's — deleting those would take your components with them.
+# The runtime excludes are ANCHORED with a leading slash, and that slash is
+# load-bearing. An rsync pattern without one matches a directory of that name at
+# ANY depth: `components/` was meant to protect `/opt/infra/components/` — your
+# component specs, which the repo must never overwrite — and it silently also
+# matched `/opt/infra/admin/components/`, the component CLASS LIBRARY, which is
+# repo code and has to ship. The panel then built from a frozen copy of that
+# package forever: a Redis with no `credentials()` (500 on the tab), an app with
+# no Map tab, and no MongoDB in the create form, all while every other file in
+# `admin/` updated normally and the updater reported success.
+#
+# It could not self-heal either. `changed admin` compares the two trees, saw the
+# difference rsync had just refused to deliver, and rebuilt the same stale
+# package on every single tick — the "permanent phantom change" the DIFF_SKIP
+# comment above warns about, arrived at from the opposite direction.
 rsync -a --delete \
   --exclude '.git' \
-  --exclude 'components/' \
-  --exclude 'state/' \
+  --exclude '/components/' \
+  --exclude '/state/' \
   --exclude 'config/vmagent.yml' \
   --exclude 'config/alertmanager.yml' \
   --exclude 'config/worker-cloud-init.yaml' \
   "$work/repo/" "$INFRA_DIR/"
+
+# Did the copy actually deliver the code? The excludes above are the one thing
+# in this script that can decline to copy a file and report success, and when
+# one of them over-matches the result is a cluster that rebuilds a frozen
+# directory on every tick forever. Comparing the delivered tree against the
+# fetched one costs a directory walk and turns that into a loud failure — before
+# the commit is recorded, so the panel shows "update failing" rather than the new
+# SHA. Same exclusions as `changed()`, or generated config would fail it every
+# time.
+for area in admin autoscaler bin stacks config; do
+  [ -e "$work/repo/$area" ] || continue
+  diff -qr --no-dereference "${DIFF_SKIP[@]}" \
+       "$INFRA_DIR/$area" "$work/repo/$area" >/dev/null 2>&1 \
+    || die "$area still differs from the fetched tree after rsync — an exclude pattern is swallowing code. Refusing to build a stale image."
+done
 
 chmod +x "$INFRA_DIR"/bin/* 2>/dev/null || true
 # Recorded BEFORE the rebuilds, because the files on disk are already the new
