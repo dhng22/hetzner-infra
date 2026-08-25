@@ -221,6 +221,110 @@ finally deleted `APP_CPU_LIMIT` and its hand-synchronisation warning.
 
 Removal is LIFO: newest node first, least likely to hold warm state, and Hetzner bills hourly.
 
+## Vertical scaling: growing a worker instead of buying one
+
+There are FOUR tiers, cheapest and least disruptive first: right-size a replica's reservations
+(no restart of anything else) → more replicas (seconds) → **grow one worker onto the next plan up**
+(minutes, power-cycles that machine) → buy another worker (minutes, disrupts nothing). Tier 3 sits
+where it does because one bigger worker beats two small ones for large replicas and pays the per-node
+overhead tax — `global_service_reservations` — once instead of twice.
+
+**Nothing here knows a plan name.** `worker_ladder()` reads the catalogue and keeps the same family
+(the letters starting the name — `cpx22` → `cpx`, which is what separates `cpx` from `cx`; both are
+shared/x86), the same architecture and CPU type, nothing below `WORKER_TYPE` in cores, memory or
+disk, and nothing above the ceiling. It is sorted by **size, never by name**: `cpx12` is one core and
+`cpx11` is two, so sorting by name inverts rungs.
+
+**The ceiling is a CAPACITY, not a plan name, and both halves are required.** `MAX_WORKERS` counts
+servers, so it cannot cap a change that raises the bill without changing the count. `WORKER_MAX_CORES`
+and `WORKER_MAX_MEMORY_GB` are both needed or the feature stays off — half a ceiling is no ceiling.
+
+**Availability is keyed on LOCATION, never on the server's datacenter.** A Hetzner server object comes
+back with `datacenter=None`, so the per-datacenter version of this filter silently never ran — and the
+unfiltered ladder's next rung above `cpx22` is `cpx21`, which exists in the catalogue and *cannot be
+bought in hel1*. It is the INTERSECTION across the location's datacenters, because servers are created
+with a location and Hetzner picks the datacenter.
+
+**`upgrade_disk=False`, always — this is the single assumption the downscale path rests on.** The
+Hetzner SDK states it directly: *"If false, do not upgrade the disk. This allows downgrading the server
+type later."* Upgrading the disk is a ONE-WAY DOOR: Hetzner then permanently refuses any plan with a
+smaller disk, so the feature would only ever ratchet up. Keeping the disk means a worker created as
+cpx22 still has 80 GB while running cpx42 (nominal disk 320), and every rung below still offers at
+least 80 — so the way back is open. `test_the_ladder_is_a_round_trip_not_a_ratchet` walks up and back
+down and asserts the two sequences are reverses of each other.
+
+**The disk floor is read from the SERVER, not assumed from its type.** `primary_disk_size` is the disk
+the machine really has, which is not its type's nominal disk once it has been grown. Checking it is
+what turns "downgrades work because we never upgrade the disk" from a claim about our own code into a
+fact checked against the machine — and it is what makes a worker whose disk somebody upgraded by hand
+in the console report itself disk-locked once, instead of ordering a downgrade Hetzner refuses on
+every loop forever. The fallback when the field is absent is the ladder FLOOR's disk, never the current
+type's: the latter reads a grown worker as having a grown disk and silently disables every downscale.
+
+**The HA rule: a second ready worker must exist, AND everything running must fit without this one.**
+Counting workers is not enough — the other worker has to actually have room, which is the packer's
+question. `fits_without()` is the same test node REMOVAL uses, deliberately: taking a node away for
+four minutes and taking it away forever need the same guarantee, and two nearly-identical capacity
+tests that disagree by one replica is a fleet that drains a node one loop and refuses the next.
+
+**The drain is VERIFIED before the power-off, never assumed.** Tasks leaving the node is not the same
+as tasks running somewhere else, and the difference is the outage. `place()` models CPU and memory and
+nothing else — not published ports, not volume affinity, not `max_replicas_per_node`, not a constraint
+only the drained node satisfies — so "it fits" and "it restarted over there" are different claims. The
+`verifying` phase asks Swarm directly and holds the node UP and drained until every service is serving
+elsewhere; if that never happens it un-drains and abandons. That order is the point: an un-drain is the
+cheapest recovery there is, and it stops existing the moment the machine is switched off.
+
+**Capacity is not availability, and `fits_without` only answers the first.** A drain STOPS a task and
+Swarm starts its replacement afterwards — start-first applies to updates, not to rescheduling. So a
+service with two replicas across two nodes rides a drain out on the survivor, while a service whose
+single replica sits on the drained node is DOWN until it starts elsewhere. `would_lose_last_replica()`
+refuses any candidate holding the sole running replica of anything, in both directions. A resize is
+optional, so it holds itself to a stricter bar than node removal, which sometimes has to happen.
+
+**A stuck drain abandons the resize; it never forces the power-off.** `remove_worker` powers through
+because removal has to complete for the fleet to reach its floor. Cutting live tasks off a machine to
+save a few euros is the wrong trade, so the node goes back into service on its old plan.
+
+**Both directions refuse to start while any service is rolling.** Draining kills the tasks a rollout is
+midway through creating, `max_failure_ratio: 0` reads those deaths as the update failing, and Swarm
+reverts the deploy — the same failure documented for node removal, which happened for real once.
+
+**LIVE demand for the drain, WANTED demand for the verdict.** The offline window must hold what is
+*running*; whether growing was worth it is judged against what is *wanted*. Test the drain against the
+want and it can never pass — the want not fitting is the entire reason we are there — so every
+candidate is refused and the feature is dead code that looks alive.
+
+**Whether growing is enough is asked of the packer, not of `servers_needed`.** That function cannot
+price a new server when Hetzner is unreachable and returns the current fleet size, a value that reads
+as "growing was enough" when it means "cannot tell".
+
+**One fleet-changing action at a time.** While a resize is in flight no node is created, none is
+removed, and no right-sizing goes out — a right-size is itself a rolling update of every replica, and
+stacking it on a drain moves the same tasks twice. `ready` excludes a draining node, so the numbers
+are honest about the capacity actually available; the interlock is what stops that honest shortfall
+being read as "buy a worker" while the missing one is on its way back.
+
+**It is a state machine advanced one step per loop, and it advances BEFORE inventory.** `remove_worker`
+already blocks for up to four minutes and `AutoscalerStalled` fires at five, so a
+drain-poweroff-change-boot done inline would trip the alert on every resize. It runs above inventory
+for the same reason the emergency unpin does: a node left drained and powered off through a discovery
+outage is capacity being paid for and not used. Every phase has a deadline, and **every exit path —
+success, timeout, vanished node, failed change — puts the node back to `active` and the server back
+on**. `set_availability()` re-states the whole NodeSpec because Docker replaces it, so a partial write
+would drop `managedby` and orphan the server.
+
+**Scaling down runs biggest-saving-first: shed replicas → delete a whole worker → only then shrink a
+plan.** Removing a server saves all of its cost; dropping a rung saves a fraction of one. Shrinking
+first would keep servers alive the fleet no longer needs and would break the free zero-worker floor by
+leaving a shrunken worker where none is wanted.
+
+**A worker above a lowered ceiling can still come down.** Drop `WORKER_MAX_CORES` under a worker that
+already grew and it is off the ladder entirely: `next_rung` refuses to grow it and still finds the
+largest rung below it. Stranding an oversized worker with no way back is the outcome worth avoiding.
+Raising `WORKER_TYPE` above an existing worker is the mirror case and is *not* handled — that worker
+is below the floor, never resized, and leaves by LIFO removal.
+
 **The autoscaler's blast radius is the Hetzner label selector** `cluster==<APP_NAME>,role==swarm-worker`.
 `reap_orphans()` deletes servers matching it that never joined the swarm. Anything else in the same
 Hetzner project is protected only by that label.

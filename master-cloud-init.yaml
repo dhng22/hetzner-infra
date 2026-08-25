@@ -148,6 +148,27 @@ write_files:
       MIN_WORKERS=0
       MAX_WORKERS=5                  # a BUDGET cap, not a capacity plan
 
+      # Vertical scaling: grow ONE worker onto the next plan up instead of
+      # buying a second one. It sits between "more replicas" and "more workers".
+      #
+      # Set to 0 to turn OFF. Both are required — MAX_WORKERS counts
+      # servers, so it cannot cap a change that raises the bill without changing
+      # the count, and half a ceiling is no ceiling.
+      #
+      # A CAPACITY, never a plan name. Hetzner adds and retires plans and does
+      # not sell the same family everywhere (cpx21 does not exist in hel1 at
+      # all), so the ladder is read from the API — same family, architecture and
+      # CPU type as WORKER_TYPE — and simply cut off here. WORKER_TYPE stays the
+      # floor a worker is created at and shrinks back to.
+      #
+      #   WORKER_MAX_CORES=8 + WORKER_MAX_MEMORY_GB=16 with WORKER_TYPE=cpx22
+      #   allows cpx22 -> cpx32 -> cpx42, then buys a worker instead.
+      WORKER_MAX_CORES=8
+      WORKER_MAX_MEMORY_GB=16
+      # A resize power-cycles the machine, so it corrects the SHAPE of the fleet
+      # slowly. The replica count is what tracks traffic.
+      NODE_RESIZE_COOLDOWN_SECONDS=900
+
       # Placement guard, not a trigger: if a node is this loaded on CPU or
       # memory, another replica physically will not fit, so ask for a node.
       NODE_PRESSURE_PCT=80

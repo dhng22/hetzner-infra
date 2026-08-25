@@ -127,8 +127,33 @@ while the last node is still warming and badly overshoots.
 
 STATELESS BY DESIGN. Cooldowns derive from Hetzner creation timestamps and
 sustain windows from VictoriaMetrics subqueries, so restarting this container
-loses nothing. HORIZONTAL ONLY — no rescale calls; Hetzner rescale power-cycles
-the server and a grown disk can never shrink.
+loses nothing.
+
+THE FOUR WAYS THIS SCALES, cheapest and least disruptive first
+--------------------------------------------------------------
+  1. SOFT VERTICAL   right-size a replica's reservations from measured usage.
+                     No restart of anything else, no server changes.
+  2. SOFT HORIZONTAL more replicas of a service, onto capacity that exists.
+                     Seconds, and the only tier that tracks traffic.
+  3. HARD VERTICAL   grow ONE worker onto the next plan up. Minutes, and it
+                     power-cycles that machine, so it happens only when another
+                     ready worker can hold everything meanwhile.
+  4. HARD HORIZONTAL buy another worker. Minutes, no disruption to anything
+                     running, but it pays the per-node overhead tax again.
+
+Tier 3 was for a long time deliberately absent, on the grounds that a Hetzner
+rescale power-cycles the server and a grown disk can never shrink. Both are
+still true. The first is why it is a state machine that requires a second
+healthy worker; the second is why every `change_type` passes
+`upgrade_disk=False`, which keeps the disk at the size the server was built with
+and so keeps the downgrade legal. Nothing here knows a plan name — the ladder is
+read from the API, filtered to the same family, architecture and CPU type, and
+bounded by a capacity ceiling the operator sets.
+
+Scaling DOWN runs the other way, biggest saving first: shed replicas, then
+delete a whole worker, and only shrink a worker's plan when no worker can be
+deleted. Removing a server saves all of its cost; dropping it a rung saves a
+fraction of one.
 """
 
 import logging
@@ -221,6 +246,25 @@ WORKER_IMAGE = _env("WORKER_IMAGE", "ubuntu-24.04")
 WORKER_TYPE = _env("WORKER_TYPE", "cpx21")
 USERDATA_PATH = _env("WORKER_USERDATA_PATH", "/etc/infra/worker-cloud-init.yaml")
 
+# --- vertical scaling ------------------------------------------------------
+# A worker may be GROWN onto a bigger plan instead of a second worker being
+# bought. It sits between "more replicas" and "more workers": one bigger box
+# beats two small ones for a workload whose replicas are large, and it avoids
+# paying the per-node overhead tax (`global_service_reservations`) a second
+# time.
+#
+# OFF unless a ceiling is set, and the ceiling is a CAPACITY rather than a plan
+# name. MAX_WORKERS counts servers, so it cannot cap a change that raises the
+# bill without changing the count; and Hetzner adds and retires plans
+# constantly, so "8 cores / 16 GB" survives a catalogue change that "cpx42"
+# does not. Nothing here knows a plan name — the ladder is read from the API.
+WORKER_MAX_CORES = _env("WORKER_MAX_CORES", "8", int)
+WORKER_MAX_MEMORY_GB = _env("WORKER_MAX_MEMORY_GB", "16", float)
+# Long, and separate from every other cooldown. A resize power-cycles a machine:
+# it is a slow correction to the shape of the fleet, not a control loop chasing
+# load — the replica count does that.
+NODE_RESIZE_COOLDOWN = _env("NODE_RESIZE_COOLDOWN_SECONDS", "900", int)
+
 ORPHAN_GRACE_SECONDS = 900
 POST_DRAIN_GRACE = _env("POST_DRAIN_GRACE_SECONDS", "45", int)
 HANDOVER_STALL_SECONDS = 900
@@ -232,6 +276,17 @@ logging.basicConfig(
 )
 log = logging.getLogger("autoscaler")
 
+#: Both halves of the ceiling are required. One without the other is an
+#: operator who meant to cap something and capped nothing, so it is refused
+#: rather than half-applied.
+VERTICAL = WORKER_MAX_CORES > 0 and WORKER_MAX_MEMORY_GB > 0
+if not VERTICAL and (WORKER_MAX_CORES > 0 or WORKER_MAX_MEMORY_GB > 0):
+    log_pending_vertical = (
+        "vertical scaling needs BOTH WORKER_MAX_CORES and WORKER_MAX_MEMORY_GB; "
+        "only one is set, so workers will not be resized")
+else:
+    log_pending_vertical = ""
+
 if MIN_WORKERS < 0:
     log.warning("MIN_WORKERS=%d is negative; using 0", MIN_WORKERS)
     MIN_WORKERS = 0
@@ -239,6 +294,8 @@ if MAX_WORKERS < MIN_WORKERS:
     log.warning("MAX_WORKERS=%d is below MIN_WORKERS=%d; using %d",
                 MAX_WORKERS, MIN_WORKERS, MIN_WORKERS)
     MAX_WORKERS = MIN_WORKERS
+if log_pending_vertical:
+    log.warning("%s", log_pending_vertical)
 
 
 # ---------------------------------------------------------------------------
@@ -462,6 +519,8 @@ M_CURRENT = Gauge("autoscaler_current_workers", "Hetzner worker servers in the s
 # AutoscalerAtMax compares workers to workers.
 M_HOSTS = Gauge("autoscaler_current_hosts", "Boxes running applications, master included")
 M_DESIRED = Gauge("autoscaler_desired_workers", "Host count the autoscaler wants")
+M_WANTED_UNCAPPED = Gauge("autoscaler_wanted_workers_uncapped",
+                          "Workers the demand asks for, before MIN/MAX are applied")
 M_MAX = Gauge("autoscaler_max_workers", "Configured host ceiling")
 M_MIN = Gauge("autoscaler_effective_min_workers", "Host floor in force right now")
 M_CPU = Gauge("autoscaler_cluster_cpu_percent", "Mean worker CPU utilisation")
@@ -481,6 +540,8 @@ M_NEW_CPU = Gauge("autoscaler_new_worker_free_cpu_cores", "CPU a new worker woul
 M_NEW_MEM = Gauge("autoscaler_new_worker_free_memory_bytes", "Memory a new worker would offer applications")
 M_LOOP = Gauge("autoscaler_last_loop_timestamp_seconds", "Unix time of last completed loop")
 M_EVENTS = Counter("autoscaler_scale_events_total", "Scaling actions taken", ["direction"])
+M_RESIZING = Gauge("autoscaler_worker_resize_in_flight",
+                   "1 while a worker is being power-cycled onto another plan")
 M_ERRORS = Counter("autoscaler_errors_total", "Errors encountered", ["stage"])
 
 _SVC = ["service"]
@@ -1068,6 +1129,168 @@ def new_worker_free(services):
         return None
     total = Res(int(st.cores * 1e9), int(st.memory * 1024 ** 3))   # hcloud reports GB
     return total - global_service_reservations(services)
+
+
+# --- the plan ladder -------------------------------------------------------
+# Which server types a worker may sit on, and which rung is next.
+#
+# Nothing here contains a plan name. Hetzner adds plans, retires plans, and does
+# not offer the same ones everywhere: `cpx21` does not exist in hel1 at all
+# while `cpx22` does, so a hardcoded ladder would be wrong on the day it was
+# written and wronger every year after.
+
+def _family(name):
+    """`cpx22` -> `cpx`. The letters that start a plan name ARE its family."""
+    match = re.match(r"^[a-z]+", name or "")
+    return match.group(0) if match else ""
+
+
+def type_res(server_type):
+    """A plan as the same integer vector everything else in here is measured in."""
+    return Res(int(server_type.cores * 1e9),
+               int(server_type.memory * 1024 ** 3))     # hcloud reports GB
+
+
+#: The catalogue changes on Hetzner's timescale, not ours, and `plan_resize`
+#: asks for it once per candidate per loop. Uncached that is a handful of calls
+#: a minute against a 3600/hour budget shared with everything else in here.
+_catalogue = {"at": 0.0, "types": None, "dc": {}}
+CATALOGUE_TTL = 900
+
+
+def _catalogue_types():
+    if _catalogue["types"] is None or time.time() - _catalogue["at"] > CATALOGUE_TTL:
+        _catalogue["types"] = list(hcloud.server_types.get_all())
+        _catalogue["at"] = time.time()
+        _catalogue["dc"] = {}
+    return _catalogue["types"]
+
+
+def type_by_name(name):
+    """The FULL plan record. A server's own `server_type` may be a stub with
+    nothing but a name on it, and sizing arithmetic off a stub is silently zero."""
+    for t in _catalogue_types():
+        if t.name == name:
+            return t
+    return None
+
+
+def location_types():
+    """
+    Plan names actually orderable in LOCATION, or None if that cannot be read.
+
+    Keyed on the LOCATION rather than on the server's own datacenter, because a
+    server object comes back with `datacenter=None` — so a per-datacenter lookup
+    silently never filtered anything, and the ladder then offered plans this
+    location does not sell. With WORKER_TYPE=cpx22 in hel1 the very next rung it
+    picked was `cpx21`, which exists in the catalogue and cannot be bought there.
+
+    INTERSECTION across the location's datacenters, not union: servers are
+    created with a location and Hetzner chooses the datacenter, so a plan sold in
+    only one of them is a plan that may not be there when it is wanted.
+
+    None means "could not read it" and callers then do not filter — letting
+    Hetzner reject one `change_type`, which the abort path already handles, beats
+    disabling the feature because a listing call failed.
+    """
+    if "types" in _catalogue["dc"]:
+        return _catalogue["dc"]["types"]
+    found = None
+    try:
+        for dc in hcloud.datacenters.get_all():
+            if (dc.location.name if dc.location else None) != LOCATION:
+                continue
+            here = {t.name for t in (dc.server_types.available or [])}
+            found = here if found is None else (found & here)
+    except Exception as exc:                                     # noqa: BLE001
+        log.warning("cannot list what %s sells: %s", LOCATION, exc)
+        return None
+    if found is None:
+        log.warning("no datacenter found in %s; not filtering the ladder", LOCATION)
+    _catalogue["dc"]["types"] = found
+    return found
+
+
+def worker_ladder(available=None):
+    """
+    Plans a worker may run on, smallest first, WORKER_TYPE at the bottom.
+
+    Four filters, and each one is load-bearing:
+
+    * SAME FAMILY, cpu type and architecture. The prefix is what separates `cpx`
+      from `cx` — both are shared/x86 — while cpu type and architecture are what
+      stop a shared x86 worker being "grown" onto dedicated ARM, where the image
+      would not boot at all.
+    * NEVER BELOW WORKER_TYPE in either dimension. That is the floor a downgrade
+      returns to, and it is also what new workers are created as, so the two
+      cannot drift apart.
+    * DISK NEVER BELOW the floor's. Resizes are done with `upgrade_disk=False`
+      so the disk stays whatever it was created with; Hetzner then refuses any
+      plan whose disk is smaller than the one the server has. Growing the disk
+      would be a one-way door — a server whose disk has grown can never be
+      downgraded again — and this feature is worthless if it only goes up.
+    * WITHIN THE CEILING, which is the operator's budget and the only reason
+      this is not unbounded.
+    """
+    if not VERTICAL:
+        return []
+    try:
+        catalogue = _catalogue_types()
+    except Exception as exc:                                     # noqa: BLE001
+        log.warning("cannot read the server type catalogue: %s", exc)
+        return []
+    base = next((t for t in catalogue if t.name == WORKER_TYPE), None)
+    if base is None:
+        log.warning("unknown WORKER_TYPE %s; no ladder", WORKER_TYPE)
+        return []
+    family = _family(base.name)
+    out = []
+    for t in catalogue:
+        if t.deprecated:
+            continue
+        if _family(t.name) != family:
+            continue
+        if t.cpu_type != base.cpu_type or t.architecture != base.architecture:
+            continue
+        if t.cores < base.cores or t.memory < base.memory or t.disk < base.disk:
+            continue
+        if t.cores > WORKER_MAX_CORES or t.memory > WORKER_MAX_MEMORY_GB:
+            continue
+        if available is not None and t.name not in available:
+            continue
+        out.append(t)
+    # By size, never by name: `cpx12` is 1 core and `cpx11` is 2, so the names
+    # do not order the ladder and sorting by them silently inverts two rungs.
+    out.sort(key=lambda t: (t.cores, t.memory, t.disk))
+    return out
+
+
+def next_rung(current_name, ladder, direction):
+    """
+    The next plan up (or down) from `current_name`, or None at the end.
+
+    A current plan that is not ON the ladder — someone resized by hand, or the
+    ceiling was lowered under a worker that had already grown — can still come
+    DOWN to the largest rung below it, and can never go up. Stranding an
+    oversized worker with no way back is the one outcome worth avoiding here.
+    """
+    names = [t.name for t in ladder]
+    if current_name in names:
+        i = names.index(current_name)
+        j = i + (1 if direction > 0 else -1)
+        return ladder[j] if 0 <= j < len(ladder) else None
+    if direction > 0:
+        return None
+    try:
+        current = type_by_name(current_name)
+    except Exception:                                            # noqa: BLE001
+        return None
+    if current is None:
+        return None
+    smaller = [t for t in ladder
+               if t.cores <= current.cores and t.memory <= current.memory
+               and (t.cores, t.memory) != (current.cores, current.memory)]
+    return smaller[-1] if smaller else None
 
 
 # --- the packer ------------------------------------------------------------
@@ -1830,6 +2053,66 @@ def create_worker():
     log.info("created worker %s (%s in %s)", name, WORKER_TYPE, LOCATION)
 
 
+def fits_without(node_id, ready, node_free, items, manager_free):
+    """
+    Would every wanted replica still be placeable if this node vanished?
+
+    "Can I delete it" and "can I take it offline for four minutes to resize it"
+    are the SAME question, so they are the same code. Two nearly-identical
+    capacity tests that disagree by one replica is how you get a loop that
+    drains a node it should not have touched.
+
+    `manager_free` is passed only when every app is unpinned; without it the
+    master is not a placement target and must not be counted as one.
+    """
+    bins = [Bin(n.id, node_free.get(n.id, ZERO), False)
+            for n in ready if n.id != node_id]
+    if manager_free is not None:
+        bins.append(Bin("master", manager_free, True))
+    _, unplaced = place(items, bins)
+    return not unplaced
+
+
+def would_lose_last_replica(node_id, tasks_by_node, workloads):
+    """
+    Services whose ONLY running replica is on this node.
+
+    Capacity is not availability. `fits_without` proves the replicas would fit
+    somewhere else; it says nothing about the gap while they are being recreated,
+    because a drain STOPS a task and Swarm starts its replacement afterwards —
+    there is no start-first for rescheduling, only for updates.
+
+    So a service with two replicas spread over two nodes rides a drain out on the
+    surviving one, and a service whose single replica sits here goes down for as
+    long as it takes to pull and start elsewhere. That is the difference between
+    "reduced capacity" and "an outage", and it is the question this asks.
+    """
+    elsewhere = {w.id: 0 for w in workloads if w.spec_replicas >= 1}
+    for nid, tasks in tasks_by_node.items():
+        if nid == node_id:
+            continue
+        for task in tasks:
+            sid = task.get("ServiceID")
+            if sid in elsewhere and task.get("Status", {}).get("State") == "running":
+                elsewhere[sid] += 1
+    by_id = {w.id: w for w in workloads}
+    return [by_id[sid].name for sid, n in elsewhere.items() if n < 1]
+
+
+def holds_foreign_state(node, tasks_by_node, app_ids):
+    """
+    Tasks on this node that this autoscaler does not manage and that are not
+    global — something replicated that may be holding state.
+
+    Deleting such a node is data loss. Draining one to resize it is not, but it
+    IS an outage for whatever that is, so both paths refuse the node and say so.
+    """
+    return [t for t in tasks_by_node.get(node.id, [])
+            if t.get("ServiceID") not in app_ids
+            and t.get("Status", {}).get("State") == "running"
+            and not _is_global(t)]
+
+
 def pick_removal_candidate(ready, node_free, items, manager_free, tasks_by_node, app_ids):
     """
     Which worker to drop, or None if dropping any would leave demand unplaceable.
@@ -1855,21 +2138,14 @@ def pick_removal_candidate(ready, node_free, items, manager_free, tasks_by_node,
         # A node carrying something this loop does not understand — a replicated,
         # non-global service that is not an app workload — may be holding state.
         # Deleting it is data loss, so skip it and say so.
-        foreign = [t for t in tasks_by_node.get(node.id, [])
-                   if t.get("ServiceID") not in app_ids
-                   and t.get("Status", {}).get("State") == "running"
-                   and not _is_global(t)]
+        foreign = holds_foreign_state(node, tasks_by_node, app_ids)
         if foreign:
             warn_once((node.id, "foreign"),
                       "not removing %s: it runs %d task(s) this autoscaler does not "
                       "manage, which may be holding state",
                       node.attrs["Description"]["Hostname"], len(foreign))
             continue
-        bins = [Bin(n.id, node_free.get(n.id, ZERO), False) for n in ready if n.id != node.id]
-        if manager_free is not None:
-            bins.append(Bin("master", manager_free, True))
-        _, unplaced = place(items, bins)
-        if not unplaced:
+        if fits_without(node.id, ready, node_free, items, manager_free):
             return node
     return None
 
@@ -1944,6 +2220,441 @@ def remove_worker(node):
             log.info("rotated worker join token")
         except Exception as exc:  # noqa: BLE001
             log.warning("token rotation failed: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# vertical scaling — growing a worker instead of buying one
+# ---------------------------------------------------------------------------
+# A resize power-cycles a machine, so it takes minutes. It is therefore a STATE
+# MACHINE advanced one step per loop, never a blocking call: `remove_worker`
+# already blocks for up to four minutes and `AutoscalerStalled` fires at five,
+# so a drain-then-poweroff-then-change-then-boot done inline would trip the
+# alert on every single resize.
+#
+# Exactly one runs at a time, cluster-wide, and while one is in flight no node
+# is created and none is removed. That is the whole conflict story: three things
+# that change the size of the fleet, and only ever one of them moving.
+
+#: Per-phase deadline. Past it the resize ABORTS, and aborting always means
+#: putting the node back into service — a node left drained and powered off is
+#: capacity you are paying for and not using, which is worse than never having
+#: tried.
+RESIZE_DEADLINES = {
+    "draining": 300, "verifying": 300, "powering_off": 240, "changing": 600,
+    "powering_on": 300, "rejoining": 420,
+}
+
+_resize = None
+_last_node_resize = 0.0
+
+
+def resize_busy():
+    return _resize is not None
+
+
+def set_availability(node, value):
+    """
+    One field of a NodeSpec, with the rest re-stated.
+
+    Docker REPLACES a node spec rather than merging it, so posting a partial
+    payload drops every label — including `managedby`, which is the only thing
+    that makes this node ours to touch at all.
+    """
+    spec = dict(node.attrs.get("Spec") or {})
+    if spec.get("Availability") == value:
+        return
+    spec.setdefault("Role", "worker")
+    spec["Labels"] = dict(spec.get("Labels") or {})
+    spec["Availability"] = value
+    node.update(spec)
+
+
+def running_elsewhere(service_ids, node_id):
+    """
+    Running task count per service, excluding one node. {} if it cannot be read.
+
+    Asked of Swarm directly rather than of the packer. `place()` models CPU and
+    memory and nothing else — not published ports, not volume affinity, not
+    `max_replicas_per_node`, not a placement constraint that happens to match
+    only the node being drained. So "it fits" and "it actually restarted over
+    there" are different claims, and only the second one is availability.
+    """
+    try:
+        tasks = dkr.api.tasks(filters={"desired-state": "running"})
+    except Exception as exc:                                     # noqa: BLE001
+        log.warning("cannot read tasks while verifying a drain: %s", exc)
+        return {}
+    counts = {sid: 0 for sid in service_ids}
+    for task in tasks:
+        sid = task.get("ServiceID")
+        if (sid in counts and task.get("NodeID") != node_id
+                and task.get("Status", {}).get("State") == "running"):
+            counts[sid] += 1
+    return counts
+
+
+def begin_resize(node, server, target, direction, workloads=()):
+    global _resize
+    hostname = node.attrs["Description"]["Hostname"]
+    if DRY_RUN:
+        log.info("[dry-run] would resize %s %s -> %s", hostname,
+                 server.server_type.name, target.name)
+        # True, so the caller does NOT also report buying a server: the two are
+        # alternatives, and a rehearsal that prints both describes a loop that
+        # cannot happen.
+        return True
+    _resize = {
+        "node_id": node.id,
+        "hostname": hostname,
+        # Snapshotted here because the machine advances above discovery and has
+        # no workload list of its own.
+        "services": {w.id: w.name for w in workloads if w.spec_replicas >= 1},
+        "from": server.server_type.name,
+        "target": target.name,
+        "direction": direction,
+        "phase": "draining",
+        "since": time.time(),
+        "grace_until": 0.0,
+    }
+    log.info("resizing %s: %s -> %s (%s)", hostname, server.server_type.name,
+             target.name, "up" if direction > 0 else "down")
+    return True
+
+
+def _resize_phase(name):
+    _resize["phase"] = name
+    _resize["since"] = time.time()
+    log.info("resize %s: %s", _resize["hostname"], name)
+
+
+def end_resize(ok, why=""):
+    """
+    Put the node back into service, whatever happened.
+
+    Called on success AND on every failure path. The node is left `active` and
+    the server left running even when the resize did not happen, because the
+    alternative — a drained, powered-off worker nobody notices — costs money and
+    capacity silently.
+    """
+    global _resize, _last_node_resize
+    state = _resize
+    _resize = None
+    if state is None:
+        return
+    _last_node_resize = time.time()
+    try:
+        server = hcloud.servers.get_by_name(state["hostname"])
+        if server is not None and server.status == "off":
+            server.power_on()
+            log.info("resize %s: powered back on", state["hostname"])
+    except Exception as exc:                                     # noqa: BLE001
+        log.error("resize %s: could not power the server back on: %s",
+                  state["hostname"], exc)
+    try:
+        node = dkr.nodes.get(state["node_id"])
+        set_availability(node, "active")
+    except Exception as exc:                                     # noqa: BLE001
+        log.error("resize %s: could not return the node to active: %s",
+                  state["hostname"], exc)
+    if ok:
+        M_EVENTS.labels(direction="resize-up" if state["direction"] > 0
+                        else "resize-down").inc()
+        log.info("resize %s complete: %s -> %s", state["hostname"],
+                 state["from"], state["target"])
+        return
+
+    # Say what the machine ACTUALLY ended up as, not what was attempted. "The
+    # node is being returned to service" is a hope; the restore above can fail
+    # too, and a resize that left a server switched off has to be findable by
+    # reading the log rather than by noticing the bill.
+    M_ERRORS.labels(stage="resize").inc()
+    plan = status = avail = "unknown"
+    try:
+        server = hcloud.servers.get_by_name(state["hostname"])
+        if server is not None:
+            plan, status = server.server_type.name, server.status
+        else:
+            plan = status = "server gone"
+    except Exception:                                            # noqa: BLE001
+        pass
+    try:
+        avail = (dkr.nodes.get(state["node_id"]).attrs.get("Spec") or {}).get(
+            "Availability", "unknown")
+    except Exception:                                            # noqa: BLE001
+        avail = "node gone"
+    log.error("resize %s abandoned in %s: %s. Now on %s, power %s, availability "
+              "%s%s", state["hostname"], state["phase"], why, plan, status, avail,
+              "" if (status == "running" and avail == "active")
+              else " — NEEDS ATTENTION: this node is not serving")
+
+
+def advance_resize():
+    """
+    Move the in-flight resize on by one step. Returns True while it is busy.
+
+    Every step is idempotent and non-blocking: it looks at where things are and
+    acts only if that phase's action has not already taken effect, so a loop
+    that dies mid-resize resumes from the real state rather than from a memory
+    of it.
+    """
+    if _resize is None:
+        return False
+    phase = _resize["phase"]
+    late = time.time() - _resize["since"] > RESIZE_DEADLINES.get(phase, 300)
+
+    try:
+        node = dkr.nodes.get(_resize["node_id"])
+    except Exception as exc:                                     # noqa: BLE001
+        end_resize(False, f"the swarm node is gone ({exc})")
+        return False
+
+    if phase == "draining":
+        try:
+            set_availability(node, "drain")
+            remaining = tasks_on_node(_resize["node_id"])
+        except Exception as exc:                                 # noqa: BLE001
+            if late:
+                end_resize(False, f"cannot drain ({exc})")
+            return True
+        if remaining and not late:
+            log.info("resize %s: waiting for %d task(s) to leave",
+                     _resize["hostname"], len(remaining))
+            return True
+        if remaining:
+            # ABANDON, never force. `remove_worker` powers through a stuck drain
+            # because removal has to complete for the fleet to reach its floor;
+            # a resize does not have to happen at all, so cutting live tasks off
+            # a machine to save a few euros is the wrong trade. Put it back.
+            end_resize(False, f"{len(remaining)} task(s) would not leave")
+            return False
+        # cloudflared runs global on every worker and needs ~30s to let its edge
+        # connections go on SIGTERM. Cutting this short drops live requests —
+        # the same grace `remove_worker` waits out, for the same reason.
+        if not _resize["grace_until"]:
+            _resize["grace_until"] = time.time() + POST_DRAIN_GRACE
+            return True
+        if time.time() < _resize["grace_until"]:
+            return True
+        _resize_phase("verifying")
+        return True
+
+    if phase == "verifying":
+        # The tasks LEFT this node. That is not the same as them having started
+        # somewhere else, and the difference is the whole outage. Swarm may be
+        # unable to place them for reasons the packer never models — a published
+        # port already taken, a volume bound to this host, max_replicas_per_node,
+        # a constraint that only this node satisfies.
+        #
+        # So the node stays UP and drained until every service is serving
+        # elsewhere. If that never happens, un-drain and abandon: the machine is
+        # still here and can take its tasks straight back, which is the cheapest
+        # recovery available and stops existing once it is powered off.
+        counts = running_elsewhere(_resize["services"], _resize["node_id"])
+        missing = sorted(_resize["services"][sid] for sid, n in counts.items() if n < 1)
+        if not counts and _resize["services"]:
+            if late:
+                end_resize(False, "could not confirm the drained tasks restarted")
+                return False
+            return True
+        if missing and not late:
+            log.info("resize %s: waiting for %s to come back elsewhere",
+                     _resize["hostname"], ", ".join(missing))
+            return True
+        if missing:
+            end_resize(False, f"{', '.join(missing)} did not restart elsewhere")
+            return False
+        _resize_phase("powering_off")
+        return True
+
+    try:
+        server = hcloud.servers.get_by_name(_resize["hostname"])
+    except Exception as exc:                                     # noqa: BLE001
+        if late:
+            end_resize(False, f"cannot read the server ({exc})")
+        return True
+    if server is None:
+        end_resize(False, "the Hetzner server is gone")
+        return False
+
+    if phase == "powering_off":
+        if server.status == "off":
+            target = hcloud.server_types.get_by_name(_resize["target"])
+            if target is None:
+                end_resize(False, f"plan {_resize['target']} vanished from the catalogue")
+                return False
+            # upgrade_disk=False, ALWAYS. A grown disk can never shrink, so an
+            # upgraded one turns every future downscale into a permanent no.
+            server.change_type(target, upgrade_disk=False)
+            _resize_phase("changing")
+        elif late:
+            end_resize(False, "the server would not power off")
+        elif server.status == "running":
+            server.power_off()
+        return True
+
+    if phase == "changing":
+        if server.server_type.name == _resize["target"]:
+            if server.status == "off":
+                server.power_on()
+            _resize_phase("powering_on")
+        elif late:
+            end_resize(False, "the plan change did not take effect")
+        return True
+
+    if phase == "powering_on":
+        if server.status == "running":
+            _resize_phase("rejoining")
+        elif server.status == "off":
+            server.power_on()
+        elif late:
+            end_resize(False, "the server would not come back up")
+        return True
+
+    if phase == "rejoining":
+        if node.attrs.get("Status", {}).get("State") == "ready":
+            end_resize(True)
+            return False
+        if late:
+            end_resize(False, "the node did not rejoin the swarm")
+            return False
+        return True
+
+    end_resize(False, f"unknown phase {phase}")
+    return False
+
+
+def _resize_candidates(ready, tasks_by_node, app_ids):
+    """
+    Workers this autoscaler may power-cycle, with their live plan.
+
+    Owned, ready, active, and carrying nothing it does not manage. A worker
+    someone joined by hand is capacity the packer may use and a machine it must
+    never reboot.
+    """
+    out = []
+    for node in ready:
+        if not owned_by_autoscaler(node):
+            continue
+        if holds_foreign_state(node, tasks_by_node, app_ids):
+            continue
+        hostname = node.attrs["Description"]["Hostname"]
+        try:
+            server = hcloud.servers.get_by_name(hostname)
+        except Exception as exc:                                 # noqa: BLE001
+            log.warning("cannot read %s: %s", hostname, exc)
+            continue
+        if server is None or server.status != "running":
+            continue
+        out.append((node, server))
+    return out
+
+
+def plan_resize(ready, node_free, live_items, want_items, manager_free,
+                tasks_by_node, app_ids, workloads, direction):
+    """
+    Which worker to grow (or shrink), and onto which plan. None if none is safe.
+
+    THE HA RULE, and it is not negotiable: a second ready worker must exist, and
+    everything must still fit without this one. The node is drained and powered
+    off for minutes, so "there is another worker" alone is not enough — that
+    worker has to actually have room, which is the packer's question and not a
+    counting question. `fits_without` is the same test node REMOVAL uses,
+    deliberately: taking a node away for four minutes and taking it away forever
+    need the same guarantee.
+
+    TWO demand sets, and confusing them makes the feature dead code. The offline
+    window has to hold what is RUNNING (`live_items`); whether growing was worth
+    it is judged against what is WANTED (`want_items`). Test the drain against
+    the want and it can never pass — the want not fitting is the entire reason
+    we are here, so every candidate would be refused and no worker would ever
+    grow.
+
+    Growing is tried smallest-worker-first so a fleet levels up evenly instead
+    of growing one giant beside a row of small ones; shrinking is
+    largest-worker-first for the same reason from the other end. Both orders are
+    deterministic, which is what stops two loops disagreeing and flapping.
+    """
+    if len(ready) < 2:
+        return None
+    sized = []
+    for node, server in _resize_candidates(ready, tasks_by_node, app_ids):
+        # The full plan record, never the stub hanging off the server: a stub
+        # carries a name and nothing else, and sizing arithmetic on it is a
+        # silent zero that makes every delta look free.
+        current = type_by_name(server.server_type.name)
+        if current is None:
+            log.warning("%s runs unknown plan %s; not resizing it",
+                        server.name, server.server_type.name)
+            continue
+        sized.append((node, server, current))
+    sized.sort(key=lambda row: (row[2].cores, row[2].memory, row[2].name),
+               reverse=direction < 0)
+
+    for node, server, current in sized:
+        ladder = worker_ladder(location_types())
+        if not ladder:
+            continue
+        # The ACTUAL disk on this machine, which is not the same as its type's
+        # disk. A resize done with `upgrade_disk=False` leaves an 80 GB disk on a
+        # plan whose nominal disk is 160, and Hetzner refuses any plan whose disk
+        # is smaller than the one the server really has. Reading it from the
+        # server rather than assuming it is what turns "downgrades are allowed
+        # because we never upgraded the disk" from a claim about our own code
+        # into a fact checked against the machine — including when somebody
+        # upgraded that disk by hand in the console, which is a one-way door this
+        # cannot undo and must not keep retrying.
+        # Falls back to the ladder FLOOR, not to the current type's disk: this
+        # code only ever resizes with `upgrade_disk=False`, so a worker it made
+        # still carries the disk WORKER_TYPE was created with. Falling back to
+        # the current type's nominal disk would read a grown worker as having a
+        # grown disk and silently disable every downscale.
+        min_disk = getattr(server, "primary_disk_size", None) or ladder[0].disk
+        usable = [t for t in ladder if t.disk >= min_disk]
+        target = next_rung(current.name, usable, direction)
+        if target is None:
+            if direction < 0 and any(t.disk < min_disk for t in ladder):
+                warn_once((server.name, "disk-locked"),
+                          "%s cannot be downgraded: its disk is %d GB, and every "
+                          "smaller plan offers less. A disk upgrade is permanent, "
+                          "so this worker stays on %s until it is replaced.",
+                          server.name, min_disk, current.name)
+            continue
+        # Can the rest of the fleet carry what is running while this node is
+        # off? Same test node REMOVAL uses, on the same live demand.
+        if not fits_without(node.id, ready, node_free, live_items, manager_free):
+            continue
+        # Capacity is not availability. Fitting somewhere else is not the same as
+        # staying up while you get there, and a resize is optional — so it holds
+        # itself to the stricter bar that node removal, which sometimes has to
+        # happen, cannot.
+        losing = would_lose_last_replica(node.id, tasks_by_node, workloads)
+        if losing:
+            warn_once((node.id, "sole-replica", tuple(sorted(losing))),
+                      "not resizing %s: it holds the only running replica of %s, "
+                      "which would be down for the drain. Raise that service's "
+                      "minimum to 2 and this becomes free.",
+                      node.attrs["Description"]["Hostname"], ", ".join(sorted(losing)))
+            continue
+        delta = type_res(target) - type_res(current)
+        after = [Bin(n.id, node_free.get(n.id, ZERO) + (delta if n.id == node.id else ZERO),
+                     False) for n in ready]
+        if direction > 0:
+            # Worth a power cycle only if the whole want then FITS — asked of the
+            # packer directly rather than of `servers_needed`, which cannot
+            # price a new server when Hetzner is unreachable and returns the
+            # current fleet size, a value that reads as "growing was enough"
+            # when it means "cannot tell". Growth that does not close the gap is
+            # an outage for nothing; buy a server instead.
+            _, unplaced = place(want_items, after)
+            if unplaced:
+                continue
+        else:
+            # Shrink only if the smaller fleet still holds what is running.
+            _, unplaced = place(live_items, after)
+            if unplaced:
+                continue
+        return node, server, target
+    return None
 
 
 def reap_orphans():
@@ -2033,6 +2744,20 @@ def loop():
     except Exception as exc:  # noqa: BLE001
         M_ERRORS.labels(stage="reap").inc()
         log.warning("reaping failed: %s", exc)
+
+    # 1a. A RESIZE IN FLIGHT advances one step, and does so BEFORE inventory.
+    #     It needs only its own node and its own server, and a node left drained
+    #     and powered off through a discovery outage is capacity being paid for
+    #     and not used. Same reasoning that puts the emergency unpin above
+    #     everything that can fail.
+    try:
+        advance_resize()
+    except Exception as exc:                                     # noqa: BLE001
+        M_ERRORS.labels(stage="resize").inc()
+        log.error("resize step failed: %s", exc)
+        end_resize(False, str(exc))
+    resizing = resize_busy()
+    M_RESIZING.set(1 if resizing else 0)
 
     # 2. INVENTORY. Failing here is a HOLD: without it every later number is a
     #    guess, and acting on a guess is how a cluster deletes itself.
@@ -2148,6 +2873,10 @@ def loop():
     # 8. SIZING, from the UNCAPPED want.
     want_servers = workers_needed(workloads, wants, node_pressure, manager_free,
                                   worker_bins, new_free) if workloads else 0
+    # Exported BEFORE the clamp. M_DESIRED is post-clamp, so a fleet pinned at
+    # MAX_WORKERS reported exactly the same number whether demand wanted one more
+    # worker or nine — "we are at the ceiling" was visible, "by how much" was not.
+    M_WANTED_UNCAPPED.set(want_servers)
     want_servers = max(floor, min(MAX_WORKERS, want_servers))
     # One worker means the master is out of the request path entirely: there is
     # no half state where both carry replicas.
@@ -2188,10 +2917,40 @@ def loop():
             any_pinned = bool(pinned)
             all_unpinned = not any_pinned
 
-    # 11. SCALE UP nodes.
+    # 11. SCALE UP nodes — but try GROWING one first.
     booting = len(provisioning_workers())
     owned = current_workers + booting
-    if want_servers > owned:
+
+    # 11a. VERTICAL, and it sits exactly here on purpose: after replicas have
+    #      been asked for and before a server is bought. One bigger worker beats
+    #      two small ones when a replica is large, and it pays the per-node
+    #      overhead tax once instead of twice.
+    grew = False
+    # `w.rolling` for the same reason node REMOVAL checks it, and it is not
+    # hypothetical here either: draining kills the tasks a rollout is midway
+    # through creating, `max_failure_ratio: 0` reads those deaths as the update
+    # failing, and Swarm reverts the whole deploy. Growing a worker is never
+    # urgent — it can wait a loop.
+    if (VERTICAL and not resizing and workloads and want_servers > owned
+            and not any(w.rolling for w in workloads)
+            and time.time() - _last_node_resize >= NODE_RESIZE_COOLDOWN):
+        live_items = demand_items(
+            workloads, {w.name: admitted.get(w.name, w.spec_replicas) for w in workloads},
+            pinned_names=pinned)
+        want_items = demand_items(workloads, wants,
+                                  pinned_names=set(w.name for w in workloads))
+        plan = plan_resize(ready, node_free, live_items, want_items,
+                           manager_free if all_unpinned else None,
+                           tasks_by_node, app_ids, workloads, 1)
+        if plan:
+            grew = begin_resize(plan[0], plan[1], plan[2], 1, workloads)
+            resizing = resizing or grew
+
+    if grew or resizing:
+        # One fleet-changing action at a time. Buying now would order capacity
+        # for a shortfall that is already being answered.
+        pass
+    elif want_servers > owned:
         age = newest_worker_age()
         if age is not None and age < COOLDOWN_UP:
             log.info("worker scale-up suppressed: newest is %.0fs old, cooldown %ds",
@@ -2249,7 +3008,14 @@ def loop():
                 all_unpinned = False
 
     # 14. SCALE DOWN nodes: only after replicas have been shed, and slowly.
-    if want_servers < current_workers:
+    removed = False
+    if resize_busy():
+        # The real state, not the flag: in DRY_RUN a plan is "taken" with nothing
+        # behind it, and gating on the flag would both crash on `_resize` and
+        # silence the scale-down rehearsal on the one setting whose entire point
+        # is to show you what would happen.
+        log.info("worker scale-down held: %s is being resized", _resize["hostname"])
+    elif want_servers < current_workers:
         since = time.time() - _last_scale_down
         last_one = current_workers == 1
         items = demand_items(workloads,
@@ -2335,16 +3101,39 @@ def loop():
             try:
                 remove_worker(candidate)
                 _last_scale_down = time.time()
+                removed = True
             except Exception as exc:  # noqa: BLE001
                 M_ERRORS.labels(stage="remove").inc()
                 log.error("could not remove a worker: %s", exc)
+
+    # 14a. VERTICAL DOWN, and only once removal has had its turn and declined.
+    #      Deleting a whole server saves its whole cost; shrinking one rung saves
+    #      a fraction of one. Trying the smaller saving first would keep servers
+    #      alive that the fleet no longer needs, and would break the free
+    #      zero-worker floor by leaving a shrunken worker where none is wanted.
+    if (VERTICAL and not resize_busy() and not removed and workloads
+            and want_servers == current_workers
+            and time.time() - _last_node_resize >= NODE_RESIZE_COOLDOWN
+            and not any(w.rolling for w in workloads)):
+        down_items = demand_items(
+            workloads, {w.name: admitted.get(w.name, w.spec_replicas) for w in workloads},
+            pinned_names=pinned)
+        plan = plan_resize(ready, node_free, down_items, down_items,
+                           manager_free if all_unpinned else None,
+                           tasks_by_node, app_ids, workloads, -1)
+        if plan:
+            begin_resize(plan[0], plan[1], plan[2], -1, workloads)
 
     # 15. RIGHT-SIZE, last. A resize is itself a rolling update of every replica,
     #     so it runs after the replica count and the placement have settled —
     #     stacking it on either restarts that rollout from the beginning. The
     #     numbers it writes are picked up by the NEXT loop's discovery, which is
     #     what makes the correction visible in demand and fleet sizing.
-    if RIGHT_SIZE and workloads:
+    # ...and not while a worker is being power-cycled. A re-sizing is itself a
+    # rolling update of every replica of a service, and stacking that on top of a
+    # drain moves the same tasks twice. It is a slow correction; it can wait a
+    # loop.
+    if RIGHT_SIZE and workloads and not resize_busy():
         try:
             smallest_cpu = min((node_resources(n).cpu
                                 for n in ([manager_node] if manager_node else []) + ready),

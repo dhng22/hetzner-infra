@@ -933,6 +933,8 @@ PREVIEW_INFRA = {
     "HCLOUD_TOKEN": "hcl_9f2bc41d77aa0e35", "GHCR_USER": "acme-bot",
     "GHCR_TOKEN": "ghp_a71ccf20e9bb14d0",
     "NODE_PRESSURE_PCT": "80", "MIN_WORKERS": "0", "MAX_WORKERS": "5",
+    "WORKER_MAX_CORES": "8", "WORKER_MAX_MEMORY_GB": "16",
+    "NODE_RESIZE_COOLDOWN_SECONDS": "900",
     "COOLDOWN_UP_SECONDS": "300", "COOLDOWN_DOWN_SECONDS": "900",
     "SCHEDULE_FLOOR": "", "DRY_RUN": "false",
     "ADMIN_USER": "admin", "ADMIN_PASSWORD": "hunter2hunter2",

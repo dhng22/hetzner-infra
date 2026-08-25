@@ -33,6 +33,22 @@ FIELDS = {
                     "Applies to workers created from now on. How many replicas it holds is "
                     "read from the Hetzner catalogue, so there is nothing to keep in sync — "
                     "a bigger type simply means fewer, larger nodes."),
+    "WORKER_MAX_CORES": (EDIT, "monitoring",
+                         "Vertical scaling ceiling. A worker may be grown onto a bigger plan "
+                         "instead of a second worker being bought — up to this many cores. "
+                         "0 turns vertical scaling off. Both this and the memory ceiling must "
+                         "be set, because half a ceiling is no ceiling."),
+    "WORKER_MAX_MEMORY_GB": (EDIT, "monitoring",
+                             "The other half of the vertical ceiling, in GB. Stated as a "
+                             "CAPACITY rather than a plan name on purpose: Hetzner adds and "
+                             "retires plans, and the same family is not sold in every "
+                             "location, so the ladder is read from the API and simply cut "
+                             "off here."),
+    "NODE_RESIZE_COOLDOWN_SECONDS": (EDIT, "monitoring",
+                                     "How long after one worker resize before another may "
+                                     "start. Long on purpose: a resize power-cycles a machine, "
+                                     "so it corrects the shape of the fleet slowly while the "
+                                     "replica count handles traffic."),
 
     # --- registry -------------------------------------------------------------
     # Both are read exactly once, by bootstrap. Registry auth afterwards lives in
@@ -103,7 +119,9 @@ GROUPS = [
     ("Identity", ["APP_NAME", "ROOT_DOMAIN"]),
     ("Hetzner", ["HCLOUD_LOCATION", "HCLOUD_NETWORK_NAME", "HCLOUD_SSH_KEY_NAME",
                  "WORKER_IMAGE", "WORKER_TYPE", "HCLOUD_TOKEN"]),
-    ("Fleet", ["MIN_WORKERS", "MAX_WORKERS", "NODE_PRESSURE_PCT", "COOLDOWN_UP_SECONDS",
+    ("Fleet", ["MIN_WORKERS", "MAX_WORKERS", "WORKER_MAX_CORES", "WORKER_MAX_MEMORY_GB",
+               "NODE_RESIZE_COOLDOWN_SECONDS",
+               "NODE_PRESSURE_PCT", "COOLDOWN_UP_SECONDS",
                "COOLDOWN_DOWN_SECONDS", "SCHEDULE_FLOOR", "DRY_RUN"]),
     ("Access", ["ADMIN_USER", "ADMIN_PASSWORD", "GRAFANA_ADMIN_USER", "GRAFANA_ADMIN_PASSWORD",
                 "ALERT_TELEGRAM_BOT_TOKEN", "ALERT_TELEGRAM_CHAT_ID",
