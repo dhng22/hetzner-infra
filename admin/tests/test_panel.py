@@ -14,6 +14,7 @@ import os
 import shutil
 import sys
 import tempfile
+import re
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -473,6 +474,24 @@ class PanelTest(unittest.TestCase):
         # Missing either side is not a match — it is an unknown.
         self.assertFalse(same("", bare))
         self.assertFalse(same(bare, None))
+
+    def test_the_static_urls_carry_a_version_stamp(self):
+        """
+        Cloudflare replaces the origin's `no-cache` on static extensions with its
+        own browser TTL, so after a self-update the new HTML runs against the old
+        app.js. The stamp makes a changed file a different URL, which no cache
+        keyed on the old one can answer. Every reference has to carry it — the
+        login page is served before there is a session, so it counts too.
+        """
+        for path, expect in (("/login", ("fonts.css", "style.css")),
+                             ("/", ("fonts.css", "style.css", "app.js"))):
+            if path == "/":
+                self.login()
+            page = self.client.get(path).get_data(as_text=True)
+            for asset in expect:
+                m = re.search(r'/static/' + re.escape(asset) + r'(\?v=\d+)?', page)
+                self.assertIsNotNone(m, f"{asset} missing from {path}")
+                self.assertIsNotNone(m.group(1), f"{asset} unstamped on {path}")
 
     def test_the_map_tab_refreshes_itself(self):
         """

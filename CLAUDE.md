@@ -446,6 +446,15 @@ and read every credential in the cluster, so changes to it are security changes:
   image up and the header looked healthy. The second line is the newest history entry whatever
   became of it, and the Map tab colours each replica by the tag it is running, so a rolling update
   is two colours and a stuck one is two colours that stay.
+- **Static URLs carry a version stamp, because the origin's cache headers are not the ones the
+  browser sees.** The panel serves `app.js` and `style.css` with `Cache-Control: no-cache`, and
+  Cloudflare rewrites that to its own Browser Cache TTL — four hours by default — on anything with a
+  static extension. So a self-update lands, the HTML is dynamic and shows the new commit in the rail,
+  and the browser keeps running the old JavaScript against it: the exact shape of "the panel says it
+  updated but it did not". `app.url_defaults` appends `?v=<mtime>` to every `url_for('static', ...)`,
+  which is all five call sites and any future one. A changed file is then a different URL and no
+  cache keyed on the old one can answer it. Do not fix this by weakening the header instead — the
+  header is overwritten upstream, in a dashboard this repo deliberately never calls.
 - **The theme is applied before the first paint, from `<head>`.** `app.js` loads at the end of
   `<body>`, so a saved light theme used to be applied only after the dark markup had been drawn —
   one white flash per navigation, on every tab. The inline script in `base.html` and `login.html`

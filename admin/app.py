@@ -20,6 +20,7 @@ import os
 
 from flask import (Flask, abort, flash, jsonify, redirect, render_template,
                    request, session, url_for)
+from werkzeug.utils import safe_join
 
 import auth
 import catalog
@@ -117,6 +118,34 @@ def webhook_for(name):
                  f"curl -fsS {base}/hooks/deploy/{name}/status \\\n"
                  f"  -H 'X-Deploy-Token: {token}'"),
     }
+
+
+# Cloudflare rewrites the origin's `Cache-Control: no-cache` on static
+# extensions into its own Browser Cache TTL — four hours by default — so after a
+# self-update a browser keeps serving the previous app.js and style.css for
+# hours. The rail reads the new commit because the HTML is dynamic and never
+# cached, which is exactly the state that looks like the update did not happen.
+# The response header is a dashboard setting we do not control from here, so the
+# URL carries the version instead: a changed file is a different URL, and no
+# cache keyed on the old one can answer it.
+_STATIC_STAMPS = {}
+
+
+@app.url_defaults
+def _stamp_static(endpoint, values):
+    if endpoint != "static" or "v" in values:
+        return
+    filename = values.get("filename")
+    if not filename:
+        return
+    if filename not in _STATIC_STAMPS:
+        path = safe_join(app.static_folder or "", filename)
+        try:
+            _STATIC_STAMPS[filename] = str(int(os.stat(path).st_mtime))
+        except (OSError, TypeError):
+            _STATIC_STAMPS[filename] = ""
+    if _STATIC_STAMPS[filename]:
+        values["v"] = _STATIC_STAMPS[filename]
 
 
 def _section_href(item):
