@@ -96,7 +96,7 @@ def detail_contexts():
             "fields": type(component).fields(),
             "env_pairs": components.store.read_env(component.name),
             "logs": fixtures.logs(component.service),
-            "newest": panel._newest_deploy(component.name),
+            "newest": panel._newest_deploy(component.name, view),
         }
         # Gated on the tabs the component actually declares, exactly as the live
         # route is. Handing every component the deployments context rendered a
@@ -201,6 +201,7 @@ def main():
             node_views=fleet,
             node_href=lambda node_id, origin="cluster": f"#view-node-{node_id}",
             node_action_href=lambda node_id: "#",
+            map_href=lambda name: "#",
             creds_href=lambda name: "#",
             create_href=lambda: "#",
             settings_href=lambda: "#",

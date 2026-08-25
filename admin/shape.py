@@ -34,6 +34,23 @@ def short_image(image):
     return image.split("@")[0].rsplit("/", 1)[-1]
 
 
+def same_image(a, b):
+    """
+    Whether two references name the same image, ignoring any pinned digest.
+
+    Swarm PINS a digest onto every image it can resolve against a registry, so a
+    running service reads `ghcr.io/you/app:main-9db4e08@sha256:ab1b…` while the
+    deploy that asked for it recorded `ghcr.io/you/app:main-9db4e08`. Plain
+    equality therefore calls an image that has been serving for days "not live
+    yet", and does it only for registry-backed images — which is every real
+    application. The two locally-built infrastructure images never get a digest
+    (nothing pushes them), compared equal, and hid this.
+    """
+    if not a or not b:
+        return False
+    return a.split("@")[0] == b.split("@")[0]
+
+
 def image_tag(image):
     """
     `ghcr.io/you/app:sha-abc@sha256:...` -> `sha-abc`.

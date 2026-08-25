@@ -315,6 +315,28 @@ and read every credential in the cluster, so changes to it are security changes:
   as the first step of deleting it and re-reads availability every loop, so a value set here on one
   of its nodes is reverted underneath you. The control is faded and `disabled` with the reason next
   to it — a control that silently loses is worse than no control.
+- **Image references are compared with `shape.same_image`, never with `==`.** Swarm PINS a digest
+  onto every image it can resolve against a registry, so a running service reads
+  `ghcr.io/you/app:main-9db4e08@sha256:ab1b…` while the deploy that asked for it recorded the bare
+  tag. Plain equality called an image that had been serving for days "not live yet — done", and did
+  it only for registry-backed images — which is every real application. The two locally-built
+  infrastructure images never get a digest, compared equal, and hid it; the fixtures held the bare tag
+  on both sides and hid it again, so `_SERVICES["api_app"]` now carries a digest on purpose. The
+  verdict is computed in `_newest_deploy()`, not in the template, because two builders render that
+  template and each would need its own copy of the comparison.
+- **Topology filters on DESIRED state, never on current state.** Keeping only tasks already `running`
+  is what made a rolling restart invisible: the replacement spends ten-plus seconds in
+  `pending`/`preparing`/`starting`, so the map dropped it until it was already finished, and a
+  start-first rollout held a green dot up throughout. A task that cannot be placed sits in `pending`
+  forever and was likewise never drawn — the one state most worth seeing. `_TASK_TONES` already had a
+  colour for every state. Tasks Swarm has finished with are excluded by the desired-state filter,
+  which is what stops the map filling with the task history Swarm keeps forever.
+- **The Map tab refreshes by re-rendering the server's own partial.** The Overview map has a JSON feed
+  and a painter in `app.js`; the Map tab draws different blocks from the same data, so a second feed
+  would need a second painter and two painters over one dataset drift. `/components/<name>/map`
+  returns `_map.html` alone and `data-live-html` swaps it in — only when the HTML actually differs, so
+  a quiet cluster never touches the DOM. `livePoll()` gates both on the same three conditions: tab
+  visible, element on screen, panel not `hidden`.
 - **The header shows the newest image asked for above the one running.** `running` is read off the
   service, so it is a success by construction — a failed or in-flight deploy leaves the previous
   image up and the header looked healthy. The second line is the newest history entry whatever

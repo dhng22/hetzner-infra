@@ -161,6 +161,7 @@ def _globals():
         "node_href": lambda node_id, origin="cluster": url_for(
             "node_detail", node_id=node_id, **({"from": origin} if origin != "cluster" else {})),
         "node_action_href": lambda node_id: url_for("node_action", node_id=node_id),
+        "map_href": lambda name: url_for("component_map_fragment", name=name),
         "creds_href": lambda name: url_for("save_credentials", name=name),
         "new_href": lambda type_name: url_for("component_new", type=type_name),
         "create_href": lambda: url_for("component_create"),
@@ -361,6 +362,24 @@ def api_topology():
     return jsonify(data.topology())
 
 
+@app.get("/components/<name>/map")
+@auth.login_required
+def component_map_fragment(name):
+    """
+    Just the Map panel, re-rendered.
+
+    The Overview map has a JSON feed and a painter in `app.js` that rebuilds its
+    blocks. The Map tab draws different blocks from the same data — one
+    component's replicas, labelled by tag — so a second feed would need a second
+    painter, and two painters over one dataset drift. Returning the rendered
+    partial instead means the server stays the only thing that knows how a block
+    is drawn, and a change to `_map.html` is live on both paths at once.
+    """
+    component = _load(name)
+    return render_template("_map.html", component=component,
+                           map=data.component_map(component.services()))
+
+
 # --- components ------------------------------------------------------------
 
 @app.get("/components")
@@ -487,12 +506,12 @@ def component_detail(name):
 
     return render_template("page_component_detail.html", section="components",
                            component=component, view=view, tabs=tabs, tab=tab,
-                           lazy_tabs=LAZY_TABS, newest=_newest_deploy(name),
+                           lazy_tabs=LAZY_TABS, newest=_newest_deploy(name, view),
                            fields=type(component).fields(),
                            env_pairs=component_store.read_env(name), **extra)
 
 
-def _newest_deploy(name):
+def _newest_deploy(name, view=None):
     """
     The last image anybody ASKED for, whatever became of it.
 
@@ -508,8 +527,16 @@ def _newest_deploy(name):
     if not recent:
         return None
     entry = recent[0]
-    return {"image": entry.get("image") or "",
-            "image_short": shape.short_image(entry.get("image")),
+    image = entry.get("image") or ""
+    running = getattr(getattr(view, "primary", None), "image", None) if view else None
+    if running is None and isinstance(view, dict):
+        running = (view.get("primary") or {}).get("image")
+    return {"image": image,
+            "image_short": shape.short_image(image),
+            # Computed HERE, not in the template, because the comparison is not
+            # string equality — see shape.same_image — and the template is
+            # rendered by two builders that would each need their own copy of it.
+            "live": shape.same_image(running, image),
             "status": entry.get("status") or "",
             "source": entry.get("source") or "",
             "at": entry.get("at") or ""}

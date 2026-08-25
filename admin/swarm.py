@@ -720,12 +720,24 @@ def short_service(name):
 
 def topology():
     """
-    Per-node composition: every RUNNING task on every box, named individually.
+    Per-node composition: every task Swarm INTENDS to run on every box, named
+    individually and carrying the state it is actually in.
 
     One entry per task, not per service — three replicas of api-prod are three
     entries, because "how many of this are on that node" is the whole question
-    the view answers. Counts are of running tasks rather than desired replicas
-    on purpose: "desired 6, running 4" is exactly the state worth seeing.
+    the view answers.
+
+    The filter is on DESIRED state, never on current state. Keeping only tasks
+    already `running` is what made a rolling restart invisible: the replacement
+    task spends its whole life in `pending`/`preparing`/`starting`, so the map
+    dropped it until the moment it was already finished, and a start-first
+    rollout kept a green dot up throughout. A task that cannot be placed at all
+    sits in `pending` forever and was likewise never drawn — the one state most
+    worth seeing. `_TASK_TONES` already had a colour for every one of them.
+
+    Tasks Swarm has finished with (`shutdown`, `complete`) are excluded by the
+    desired-state filter, which is what stops the map filling with the task
+    history Swarm keeps for every replica that ever ran.
     """
     # Applications first, then data, then the infrastructure that carries them —
     # the order you read a node in when you are asking "what is on this box".
@@ -742,8 +754,6 @@ def topology():
     by_node = {}
     for t in tasks:
         state = t.get("Status", {}).get("State")
-        if state != "running":
-            continue
         node_id = t.get("NodeID")
         if not node_id:
             continue

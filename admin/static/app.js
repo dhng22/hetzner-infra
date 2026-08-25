@@ -630,35 +630,36 @@
     el.lastChild.nodeValue = state;
   }
 
-  var topo = document.querySelector("[data-topology]");
-  if (topo && window.fetch) {
+  // Poll `tick` while `el` is genuinely being looked at: the browser tab
+  // visible AND the element on screen. Extracted so the Map tab gets exactly
+  // the same restraint the Overview map has — a background tab hitting the
+  // Docker socket every five seconds forever is pure waste, and so is polling a
+  // panel sitting below the fold or behind another tab.
+  function livePoll(el, tick, onPause) {
+    if (!el || !window.fetch) { return; }
     var timer = null;
-    // When we can observe visibility, assume NOT on screen until the observer
-    // says otherwise — so a load that lands with the map below the fold makes
-    // no request at all. Without observer support, fall back to "visible".
+    // Where we can observe visibility, assume NOT on screen until the observer
+    // says otherwise, so a load that lands below the fold makes no request at
+    // all. Without observer support, fall back to "visible".
     var onScreen = !window.IntersectionObserver;
     var everRan = false;
 
-    var fetchOnce = function () {
-      fetch("/api/topology", { headers: { "Accept": "application/json" },
-                               credentials: "same-origin" })
-        .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
-        .then(function (d) { paintTopology(d); markLive("live"); })
-        .catch(function () { markLive("stale"); });  // preview build, or logged out
-    };
-
     var sync = function () {
-      if (onScreen && !document.hidden) {
+      // `hidden` also covers a panel on a tab you are not looking at: the tab
+      // strip sets it, so switching away stops the timer without any coupling
+      // between the two mechanisms.
+      var showing = onScreen && !document.hidden && !el.hasAttribute("hidden");
+      if (showing) {
         if (timer !== null) { return; }
         // The server rendered this markup moments ago, so the first start has
         // nothing to catch up on. Every later resume does.
-        if (everRan) { fetchOnce(); } else { everRan = true; }
-        markLive("live");
-        timer = setInterval(fetchOnce, TOPO_MS);
+        if (everRan) { tick(); } else { everRan = true; }
+        if (onPause) { onPause("live"); }
+        timer = setInterval(tick, TOPO_MS);
       } else if (timer !== null) {
         clearInterval(timer);                // stop the timer, not just its body
         timer = null;
-        markLive("paused");
+        if (onPause) { onPause("paused"); }
       }
     };
 
@@ -666,9 +667,50 @@
       new IntersectionObserver(function (entries) {
         onScreen = entries[0].isIntersecting;
         sync();
-      }, { rootMargin: "120px" }).observe(topo);
+      }, { rootMargin: "120px" }).observe(el);
     }
     document.addEventListener("visibilitychange", sync);
+    // Tab switching toggles `hidden` rather than firing an event, so watch the
+    // attribute directly instead of teaching the tab code about polling.
+    if (window.MutationObserver) {
+      new MutationObserver(sync).observe(el, { attributes: true,
+                                               attributeFilter: ["hidden"] });
+    }
     sync();
+    return sync;
+  }
+
+  livePoll(document.querySelector("[data-topology]"), function () {
+    fetch("/api/topology", { headers: { "Accept": "application/json" },
+                             credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+      .then(function (d) { paintTopology(d); markLive("live"); })
+      .catch(function () { markLive("stale"); });  // preview build, or logged out
+  }, markLive);
+
+  // A panel that re-renders itself from the server. The Overview map has a JSON
+  // feed and a painter; this one swaps the SERVER'S own markup in, so the two
+  // views of the same data cannot disagree about how a block is drawn — there
+  // is only one place that draws it.
+  //
+  // Replaced only when the HTML actually differs, so a quiet cluster never
+  // touches the DOM and nothing flickers under the cursor.
+  var fragments = document.querySelectorAll("[data-live-html]");
+  for (var fi = 0; fi < fragments.length; fi++) {
+    (function (host) {
+      var url = host.getAttribute("data-live-html");
+      livePoll(host, function () {
+        fetch(url, { headers: { "Accept": "text/html" }, credentials: "same-origin" })
+          .then(function (r) { return r.ok ? r.text() : Promise.reject(r.status); })
+          .then(function (html) {
+            if (html !== host.getAttribute("data-live-cache")) {
+              host.setAttribute("data-live-cache", html);
+              host.innerHTML = html;
+              localiseTimes(host);
+            }
+          })
+          .catch(function () { /* logged out, or the preview build */ });
+      });
+    })(fragments[fi]);
   }
 })();

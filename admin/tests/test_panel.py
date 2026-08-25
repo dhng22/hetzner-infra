@@ -450,6 +450,46 @@ class PanelTest(unittest.TestCase):
         settings = self.client.get("/components/api?tab=settings").get_data(as_text=True)
         self.assertNotIn('name="image"', settings)
 
+    def test_the_header_reads_a_digest_pinned_image_as_live(self):
+        """
+        Swarm pins `@sha256:...` onto anything it can resolve against a registry,
+        so the running service and the deploy that asked for it are never equal
+        as strings. Plain equality called an image that had been serving for days
+        "not live yet — done", and only for registry-backed images — which is
+        every real application, and none of the fixtures until now.
+        """
+        self.login()
+        body = self.client.get("/components/api").get_data(as_text=True)
+        self.assertIn("live", body)
+        self.assertNotIn("not live yet", body)
+
+    def test_same_image_ignores_the_digest_and_nothing_else(self):
+        same = self.shape.same_image
+        bare = "ghcr.io/you/app:main-9db4e08"
+        self.assertTrue(same(bare + "@sha256:abc", bare))
+        self.assertTrue(same(bare, bare))
+        # A different tag is a different image, digest or not.
+        self.assertFalse(same(bare + "@sha256:abc", "ghcr.io/you/app:main-0000000"))
+        # Missing either side is not a match — it is an unknown.
+        self.assertFalse(same("", bare))
+        self.assertFalse(same(bare, None))
+
+    def test_the_map_tab_refreshes_itself(self):
+        """
+        The Map tab draws different blocks from the same data as the Overview
+        map, so it returns the server's own markup rather than growing a second
+        painter that could disagree about how a block is drawn.
+        """
+        self.login()
+        page = self.client.get("/components/api?tab=map").get_data(as_text=True)
+        self.assertIn("data-live-html", page)
+        frag = self.client.get("/components/api/map")
+        self.assertEqual(frag.status_code, 200)
+        body = frag.get_data(as_text=True)
+        self.assertIn("Rollout map", body)
+        # A fragment, not a page.
+        self.assertNotIn("<html", body)
+
     def test_the_map_tab_colours_replicas_by_tag(self):
         """
         The rollout view: two tags on one component is an update in flight, and

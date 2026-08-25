@@ -40,8 +40,15 @@ def _svc(name, image, running, desired, state="healthy", tone="ok", mode="replic
     }
 
 
+#: Swarm PINS a digest onto any image it can resolve against a registry, so a
+#: live service spec carries `tag@sha256:...` while the deploy that asked for it
+#: recorded the bare tag. The fixtures used to hold the bare tag on both sides,
+#: which is precisely why "is the newest image live?" compared equal here and
+#: reported "not live yet" against a real cluster for days.
+_DIGEST = "@sha256:ab1b76aeca1837e20a816bfea14687d41d86942bac091969dcf5384b514c95c0"
+
 _SERVICES = {
-    "api_app": _svc("api_app", f"{_IMG}:sha-9f3ac21", 6, 6),
+    "api_app": _svc("api_app", f"{_IMG}:sha-9f3ac21{_DIGEST}", 6, 6),
     "api-staging_app": _svc("api-staging_app", f"{_IMG}:sha-c40e8b7", 1, 1,
                             cpu=0.5, mem=512, cpu_res=0.1, mem_res=128, updated="2h ago"),
     "cache_redis": _svc("cache_redis", "redis:7.4-alpine", 1, 1, cpu=None, mem=None,

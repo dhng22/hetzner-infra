@@ -18,7 +18,7 @@
     <p class="head-image">
       <span class="muted">newest</span>
       <code class="mono" title="{{ newest.image }}">{{ newest.image_short }}</code>
-      {% if view.primary and view.primary.image == newest.image %}
+      {% if newest.live %}
         <span class="pill ok plain">live</span>
       {% elif newest.status == 'failed' %}
         <span class="pill bad plain">not live — last deploy failed</span>
@@ -395,7 +395,11 @@
   <!-- settings -------------------------------------------------------------->
   <!-- map --------------------------------------------------------------->
   {% if map is defined %}
-  <div data-panel="map" {% if tab != 'map' %}hidden{% endif %}>
+  {# Re-rendered in place while you are looking at it, so a rolling restart is
+     something you WATCH rather than something you reload to discover. The URL
+     is a global so the preview can point it at nothing. #}
+  <div data-panel="map" {% if tab != 'map' %}hidden{% endif %}
+       {% if not preview %}data-live-html="{{ map_href(component.name) }}"{% endif %}>
     {% include "_map.html" %}
   </div>
   {% endif %}
