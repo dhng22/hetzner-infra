@@ -1,0 +1,4 @@
+{% extends "base.html" %}
+{% block title %}{{ n.hostname }} · {{ cluster_name }}{% endblock %}
+{% block crumb %}{{ cluster_name }} / <a href="{{ section_href({'key': 'cluster'}) }}">Cluster</a> / <strong>{{ n.hostname }}</strong>{% endblock %}
+{% block main %}{% include "_node.html" %}{% endblock %}

@@ -1,0 +1,102 @@
+{#
+  The editable half of a component's spec — Configuration, then the autoscale
+  policy — rendered from `fields()` against a `spec` mapping.
+
+  The create page and the Settings tab both include this. They used to carry
+  their own copy of the loop and drifted the moment either changed: the create
+  form offered every `managed` field (numbers the autoscaler overwrites within
+  minutes, so your input was lost silently), and it flattened the autoscale
+  policy into Configuration with no switch above it — twelve policy inputs
+  presented as live on a component whose autoscaling was off. One partial is
+  what stops that happening a second time.
+
+  Callers set: fields, spec (name -> value; {} on create so defaults show),
+  and optionally secret_inputs (create only — Settings has a Credentials tab)
+  and creating.
+#}
+<section class="panel">
+  <div class="panel-head"><h2>Configuration</h2></div>
+  <div class="panel-body">
+    <div class="grid-2">
+      {# `managed` fields — the image CI owns, the reservations the autoscaler
+         re-sizes — are seeds at create time and read-only afterwards. Before
+         anything has run there is no live value to preserve and no image to
+         deploy, so creation must ask; once it is running, offering a form field
+         for a number something else rewrites every few minutes only loses your
+         input silently. Settings shows them in "Managed for you" instead. #}
+      {% for f in fields if not f.group and (creating|default(false) or not f.managed) %}
+        {% set value = spec.get(f.name, f.default) %}
+        {% include "_field.html" %}
+      {% endfor %}
+
+      {# Credentials are not spec fields: a Field's value is written to
+         component.json, and a password must never be in there. #}
+      {% for secret in secret_inputs|default([]) %}
+      <div class="field">
+        <label for="s-{{ secret.key }}">{{ secret.label }}</label>
+        <input id="s-{{ secret.key }}" type="text" name="{{ secret.key }}"
+               autocomplete="off" spellcheck="false"
+               placeholder="leave blank to generate one"
+               value="{{ spec.get(secret.key, '') }}">
+        <p class="hint">{{ secret.help }}</p>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% if secret_inputs %}
+  <div class="panel-note">
+    Leave a credential blank and one is generated for you. Set it yourself if you
+    are moving an existing database whose clients already know the password.
+  </div>
+  {% endif %}
+  {% if creating|default(false) %}
+  <div class="panel-note">
+    Reservations are not optional. Swarm subtracts them when it places a task, and
+    they are the only thing the autoscaler measures node capacity with — a component
+    with none looks free and gets packed on top of the metrics database.
+  </div>
+  {% else %}
+  <div class="panel-note">
+    Saving redeploys this component. The live image, replica count, placement
+    and resource sizing are read back first and preserved, so changing a
+    setting here will not roll back your last deploy or undo the autoscaler.
+  </div>
+  {% endif %}
+</section>
+
+{% set policy = fields|selectattr('group', 'equalto', 'autoscale')|list %}
+{% if policy %}
+{% set toggle = policy|selectattr('name', 'equalto', 'autoscale')|first %}
+<section class="panel" data-toggle-section>
+  <div class="panel-head">
+    <h2>Autoscale</h2>
+    {% if toggle %}
+    {# The switch that owns the section, in its title rather than as the
+       first of thirteen inputs — it decides whether the other twelve mean
+       anything at all. #}
+    <label class="switch" title="Let the autoscaler own the replica count">
+      <input type="hidden" name="__bool__" value="{{ toggle.name }}">
+      <input type="checkbox" name="{{ toggle.name }}" value="true"
+             data-toggle-master
+             {% if spec.get(toggle.name, toggle.default) %}checked{% endif %}>
+      <span class="switch-track" aria-hidden="true"></span>
+      <span class="switch-label">on</span>
+    </label>
+    {% endif %}
+    <span class="spacer"></span>
+  </div>
+  <div class="panel-body" data-toggle-body>
+    <div class="grid-2">
+      {% for f in policy if f.name != 'autoscale' %}
+        {% set value = spec.get(f.name, f.default) %}
+        {% include "_field.html" %}
+      {% endfor %}
+    </div>
+  </div>
+  <div class="panel-note">
+    With this off the replica count is yours and nothing below applies. The
+    autoscaler still measures this component and still right-sizes its
+    reservations — it just stops changing how many of it there are.
+  </div>
+</section>
+{% endif %}

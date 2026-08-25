@@ -139,22 +139,34 @@ def nodes():
          "role": "manager", "state": "ready",
          "availability": "active", "tone": "ok", "cpus": 4, "memory_gb": 7.6,
          "engine": "27.3.1", "cpu_reserved": 1.2, "mem_reserved_mb": 1400,
-         "cpu_reserved_pct": 62.0, "mem_reserved_pct": 48.0, "addr": "10.0.0.2"},
+         "cpu_reserved_pct": 62.0, "mem_reserved_pct": 48.0, "addr": "10.0.0.2",
+         "labels": {"disk": "ssd"}, "os": "linux", "arch": "x86_64",
+         "leader": True, "reachability": "reachable",
+         "created_at": "2025-06-01T09:14:02", "updated_at": "2025-08-09T11:02:44"},
         {"id": "w1af02c9be47", "full_id": "w1af02c9be47aa",
          "hostname": "aichat-worker-1754812203", "role": "worker",
          "state": "ready", "availability": "active", "tone": "ok", "cpus": 3, "memory_gb": 3.8,
          "engine": "27.3.1", "cpu_reserved": 1.2, "mem_reserved_mb": 1400,
-         "cpu_reserved_pct": 62.0, "mem_reserved_pct": 48.0, "addr": "10.0.0.5"},
+         "cpu_reserved_pct": 62.0, "mem_reserved_pct": 48.0, "addr": "10.0.0.5",
+         "labels": {"managedby": "autoscaler"}, "os": "linux", "arch": "x86_64",
+         "leader": False, "reachability": "",
+         "created_at": "2025-08-10T07:10:03", "updated_at": "2025-08-10T07:11:19"},
         {"id": "w2bc71d0aa93", "full_id": "w2bc71d0aa93aa",
          "hostname": "aichat-worker-1754819114", "role": "worker",
          "state": "ready", "availability": "active", "tone": "ok", "cpus": 3, "memory_gb": 3.8,
          "engine": "27.3.1", "cpu_reserved": 1.2, "mem_reserved_mb": 1400,
-         "cpu_reserved_pct": 62.0, "mem_reserved_pct": 48.0, "addr": "10.0.0.6"},
+         "cpu_reserved_pct": 62.0, "mem_reserved_pct": 48.0, "addr": "10.0.0.6",
+         "labels": {"zone": "eu", "managedby": "autoscaler"}, "os": "linux", "arch": "x86_64",
+         "leader": False, "reachability": "",
+         "created_at": "2025-08-10T09:05:14", "updated_at": "2025-08-10T09:06:31"},
         {"id": "w3de92f1cc05", "full_id": "w3de92f1cc05aa",
          "hostname": "aichat-worker-1754823887", "role": "worker",
          "state": "ready", "availability": "drain", "tone": "warn", "cpus": 3, "memory_gb": 3.8,
          "engine": "27.3.1", "cpu_reserved": 1.2, "mem_reserved_mb": 1400,
-         "cpu_reserved_pct": 62.0, "mem_reserved_pct": 48.0, "addr": "10.0.0.7"},
+         "cpu_reserved_pct": 62.0, "mem_reserved_pct": 48.0, "addr": "10.0.0.7",
+         "labels": {"managedby": "autoscaler"}, "os": "linux", "arch": "x86_64",
+         "leader": False, "reachability": "",
+         "created_at": "2025-08-10T10:24:47", "updated_at": "2025-08-10T12:41:02"},
     ]
 
 
@@ -168,6 +180,7 @@ _BAND_OF = {
     "api-staging": ("applications", "prod"),
     "cache": ("data", "data"),
     "sessions": ("data", "data"),
+    "documents": ("data", "data"),
     "cloudflared": ("ingress", "staging"),
     "ui": ("platform", "platform"),
     "autoscaler": ("platform", "platform"),
@@ -175,7 +188,18 @@ _BAND_OF = {
 _SERVICE_OF = {
     "api": "api_app", "api-staging": "api-staging_app",
     "cache": "cache_redis", "sessions": "sessions_redis",
+    "documents": "documents_mongo",
     "cloudflared": "ingress_cloudflared", "ui": "admin_ui",
+}
+
+
+_IMAGE_OF = {
+    "api": "ghcr.io/acme/aichat-api:sha-9f3ac21",
+    "api-staging": "ghcr.io/acme/aichat-api:sha-c40e8b7",
+    "cache": "redis:7.4-alpine", "sessions": "redis:7.2-alpine",
+    "documents": "mongo:7.0",
+    "cloudflared": "cloudflare/cloudflared:2024.8.3",
+    "ui": "aichat-admin:local",
 }
 
 
@@ -198,8 +222,15 @@ def _tasks(spec):
             share = {"victoriametrics": (7.5, 10.1), "loki": (5.0, 8.4),
                      "api": (18.0, 12.0), "grafana": (2.5, 3.4),
                      "cache": (10.5, 16.8)}.get(name, (1.5, 2.5))
+            # Two tags on `api`, one of them on a single replica: a rolling
+            # update caught halfway is the state the Map tab exists for, so the
+            # preview shows one rather than a uniform fleet.
+            image = _IMAGE_OF.get(name, f"{name}:v1.0.0")
+            if name == "api" and i == 0:
+                image = "ghcr.io/acme/aichat-api:sha-c40e8b7"
             out.append({"id": f"{name[:6]}{i}kd93jf01"[:12], "name": name,
                         "service": full, "band": band, "key": key,
+                        "image": image, "tag": shape.image_tag(image),
                         "state": state,
                         "tone": {"running": "ok", "starting": "warn",
                                  "failed": "bad"}.get(state, "mute"),
@@ -217,7 +248,7 @@ def topology():
             ("victoriametrics", 1), ("vmagent", 1), ("vmalert", 1),
             ("alertmanager", 1), ("loki", 1), ("grafana", 1),
             ("node-exporter", 1), ("cadvisor", 1),
-            ("cache", 1), ("sessions", 1), ("redis-exporter", 1),
+            ("cache", 1), ("sessions", 1), ("redis-exporter", 1), ("documents", 1),
             ("cloudflared", 1), ("autoscaler", 1), ("ui", 1),
         ]),
         (n["aichat-worker-1754812203"], 64.0, 47.0, [
@@ -243,6 +274,22 @@ def topology():
     return {"nodes": out,
             "bands": [{"band": b, "key": k} for b, k in _BANDS],
             "max_tasks": max(x["tasks_total"] for x in out)}
+
+
+def node(node_id):
+    return shape.find_node(topology(), node_id)
+
+
+def update_node(node_id, availability=None, labels=None):
+    return True, "Preview build — nothing was changed."
+
+
+def remove_node(node_id):
+    return True, "Preview build — nothing was changed."
+
+
+def component_map(services):
+    return shape.component_map(topology(), services)
 
 
 def summary():

@@ -90,7 +90,10 @@
       <div class="tree-kids">
         {% for n in topo.nodes %}
           <div class="tree-branch" data-node="{{ n.id }}">
-            <div class="tnode tnode-host has-gauges {{ 'is-manager' if n.role == 'manager' }}">
+            {# Clickable here too: the map is where you notice a node, and the
+               node's own page is where you can do anything about it. #}
+            <a class="tnode tnode-host is-link has-gauges {{ 'is-manager' if n.role == 'manager' }}"
+               href="{{ node_href(n.id, 'overview') }}">
               <span class="tnode-head">
                 <span class="pill {{ 'accent' if n.role == 'manager' else n.tone }}">{{ n.role }}</span>
                 {% if n.availability != 'active' %}<span class="pill warn">{{ n.availability }}</span>{% endif %}
@@ -110,7 +113,7 @@
                     data-tip="CPU reserved: {{ n.cpu_reserved_pct }}% — {{ n.cpu_reserved }} of {{ n.cpus }} vCPU promised to tasks here"></span>
               <span class="gauge gauge-mem" data-f="memres" style="--v:{{ n.mem_reserved_pct }}"
                     data-tip="Memory reserved: {{ n.mem_reserved_pct }}% — {{ n.mem_reserved_mb }} MB of {{ n.memory_gb }} GB promised to tasks here"></span>
-            </div>
+            </a>
 
             <!-- data-sig matches the signature the poller computes, so the first
                  tick on an unchanged cluster rebuilds nothing at all. -->

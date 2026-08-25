@@ -261,15 +261,129 @@
   });
 
   // --- destructive actions --------------------------------------------------
-  // A form carrying data-confirm asks before it submits. Deliberately native
-  // confirm(): the panel has no modal, and a hand-rolled one that fails open on
-  // a JS error would be worse than the browser's.
+  // A form carrying data-confirm asks before it submits.
+  //
+  // This used to be native confirm(), on the reasoning that a hand-rolled modal
+  // failing open on a JS error is worse than the browser's. That reasoning is
+  // kept, not dropped: `ask()` returns false if it cannot build or open the
+  // dialog, and the caller then falls back to window.confirm() — the submit is
+  // blocked either way, and there is no path where a delete goes through
+  // unasked.
+  //
+  // <dialog>.showModal() is what makes it worth doing at all: focus trapping,
+  // Escape-to-cancel and inertness of the page behind come from the platform
+  // rather than from three more listeners here.
+  var confirmBox = null;
+
+  function buildConfirmBox() {
+    var d = document.createElement("dialog");
+    d.className = "modal";
+    d.innerHTML =
+      '<form method="dialog" class="modal-card">' +
+        '<div class="modal-ico" data-ico></div>' +
+        '<div class="modal-text">' +
+          '<h2 data-title></h2>' +
+          '<p data-body></p>' +
+        '</div>' +
+        '<div class="modal-actions">' +
+          '<button class="btn" value="cancel" type="submit">Cancel</button>' +
+          '<button class="btn" value="ok" type="submit" data-ok></button>' +
+        '</div>' +
+      '</form>';
+    document.body.appendChild(d);
+    return d;
+  }
+
+  // Two rounded glyphs, both drawn into a circle by the stylesheet: a warning
+  // for anything that changes state, a bin for anything that destroys it.
+  var ICONS = {
+    warn: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.6 1.8 20.4h20.4L12 3.6Z" ' +
+          'fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>' +
+          '<path d="M12 10v4.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>' +
+          '<circle cx="12" cy="17.4" r="1.05" fill="currentColor"/></svg>',
+    danger: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M10 7V5.2h4V7m-7.4 0 .9 12.2' +
+            'a1.6 1.6 0 0 0 1.6 1.5h5.8a1.6 1.6 0 0 0 1.6-1.5L17.4 7" fill="none" ' +
+            'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>' +
+            '<path d="M10.4 11v6M13.6 11v6" stroke="currentColor" stroke-width="1.8" ' +
+            'stroke-linecap="round"/></svg>'
+  };
+
+  // "Stop api? Its files are kept." -> title "Stop api?", body the rest. The
+  // confirm strings are already written as a question followed by the
+  // consequence, so this needs no second attribute on every form.
+  function splitPrompt(text) {
+    var m = /^(.+?[?.!])\s+(.*)$/.exec(text.trim());
+    return m ? [m[1], m[2]] : [text.trim(), ""];
+  }
+
+  function ask(form, message, onOk) {
+    try {
+      if (typeof HTMLDialogElement !== "function" ||
+          typeof document.createElement("dialog").showModal !== "function") {
+        return false;
+      }
+      confirmBox = confirmBox || buildConfirmBox();
+      var danger = !!form.querySelector("button.btn-danger, .btn-danger");
+      var parts = splitPrompt(message);
+      var ok = confirmBox.querySelector("[data-ok]");
+
+      confirmBox.querySelector("[data-ico]").innerHTML = danger ? ICONS.danger : ICONS.warn;
+      confirmBox.querySelector("[data-ico]").className = "modal-ico " + (danger ? "is-danger" : "is-warn");
+      confirmBox.querySelector("[data-title]").textContent = parts[0];
+      var body = confirmBox.querySelector("[data-body]");
+      body.textContent = parts[1];
+      body.hidden = !parts[1];
+      ok.textContent = danger ? "Yes, continue" : "Confirm";
+      ok.className = "btn " + (danger ? "btn-danger" : "btn-primary");
+
+      confirmBox.onclose = function () {
+        var chose = confirmBox.returnValue === "ok";
+        confirmBox.returnValue = "";
+        if (chose) { onOk(); }
+      };
+      confirmBox.showModal();
+      // Cancel takes focus, not the destructive button: Enter on a dialog you
+      // did not read should do nothing.
+      confirmBox.querySelector("button[value=cancel]").focus();
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   document.addEventListener("submit", function (ev) {
     var form = ev.target.closest("form[data-confirm]");
     if (!form) { return; }
-    if (!window.confirm(form.getAttribute("data-confirm"))) {
-      ev.preventDefault();
-      ev.stopImmediatePropagation();
+
+    // Second pass, after the dialog said yes. Let it through untouched so the
+    // other submit listeners (the preview notice) still see it.
+    if (form.getAttribute("data-confirmed") === "1") {
+      form.removeAttribute("data-confirmed");
+      return;
+    }
+
+    var message = form.getAttribute("data-confirm");
+    var submitter = ev.submitter || null;
+
+    // requestSubmit() re-fires the submit event, which form.submit() does not —
+    // without it the preview notice would never run on a confirmed form.
+    if (typeof form.requestSubmit !== "function") {
+      if (!window.confirm(message)) {
+        ev.preventDefault();
+        ev.stopImmediatePropagation();
+      }
+      return;
+    }
+
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+
+    var go = function () {
+      form.setAttribute("data-confirmed", "1");
+      form.requestSubmit(submitter);
+    };
+    if (!ask(form, message, go)) {
+      if (window.confirm(message)) { go(); }
     }
   }, true);
 

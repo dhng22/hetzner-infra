@@ -6,77 +6,6 @@
   </div>
 </div>
 
-{# What this cluster is RUNNING, and whether the thing that keeps it current is
-   still alive. The commit alone cannot tell you the second one: a cluster that
-   is up to date and a cluster whose updater died last week show the same SHA. #}
-<section class="panel">
-  <div class="panel-head">
-    <h2>Infrastructure version</h2>
-    <span class="spacer"></span>
-    {% if not version.configured %}
-      <span class="pill mute">not self-updating</span>
-    {% elif version.status == 'error' %}
-      <span class="pill bad">update failing</span>
-    {% elif version.behind %}
-      <span class="pill warn">update pending</span>
-    {% else %}
-      <span class="pill ok">current</span>
-    {% endif %}
-  </div>
-  <div class="panel-body">
-    {% if not version.configured %}
-    <p class="hint">
-      No <code>INFRA_REPO_URL</code> in <code>infra.env</code>, so this master never
-      pulls. Infrastructure changes have to be copied into <code>/opt/infra</code> by
-      hand, which is how a box and its repo drift apart without anyone noticing.
-    </p>
-    {% else %}
-    <div class="grid-3">
-      <div>
-        <div class="eyebrow">Running</div>
-        <div class="v small mono" title="{{ version.commit }}">{{ version.short or '—' }}</div>
-        <div class="row-sub">{{ version.branch or '—' }}{% if version.previous %} · was {{ version.previous }}{% endif %}</div>
-      </div>
-      <div>
-        <div class="eyebrow">Last updated</div>
-        <div class="v small">
-          {% if version.updated_at %}
-          <time datetime="{{ version.updated_at }}" data-localtime>{{ version.updated_at }}</time>
-          {% else %}never{% endif %}
-        </div>
-      </div>
-      <div>
-        <div class="eyebrow">Last checked</div>
-        <div class="v small">
-          {% if version.checked_at %}
-          <time datetime="{{ version.checked_at }}" data-localtime>{{ version.checked_at }}</time>
-          {% else %}never{% endif %}
-        </div>
-      </div>
-    </div>
-    {% if version.status == 'error' %}
-    <p class="hint is-bad">
-      The last check or apply failed: {{ version.detail or 'no detail recorded' }}.
-      This cluster is still running {{ version.short }} — see
-      <code>journalctl -u infra-update</code> on the master.
-    </p>
-    {% elif version.behind %}
-    <p class="hint">
-      The branch has moved to <code>{{ version.remote_short }}</code> and this master is
-      still on <code>{{ version.short }}</code>. The timer applies it on its next tick;
-      if this persists, the apply half is failing rather than the check.
-    </p>
-    {% endif %}
-    {% endif %}
-  </div>
-  <div class="panel-note">
-    The repo is the source of truth. A timer asks whether the branch has moved and
-    re-applies the bundle when it has, rebuilding only the images whose source
-    changed and redeploying only the stacks that differ. It never touches
-    <code>infra.env</code>, your components, or this cluster's state.
-  </div>
-</section>
-
 <div class="tiles">
   <div class="tile">
     <span class="k">Nodes</span>
@@ -131,7 +60,12 @@
       <div class="tree-kids">
         {% for n in nodes %}
         <div class="tree-branch">
-          <div class="tnode tnode-host has-gauges {{ 'is-manager' if n.role == 'manager' }}">
+          {# The whole card is the link. Everything a node has — its labels, its
+             tasks, its availability — is on its own page rather than crammed in
+             here, because "what is this box and what may it run" is a question
+             with a dozen answers and this is a row in a fleet. #}
+          <a class="tnode tnode-host is-link has-gauges {{ 'is-manager' if n.role == 'manager' }}"
+             href="{{ node_href(n.id) }}">
             <span class="tnode-head">
               <span class="pill {{ 'accent' if n.role == 'manager' else n.tone }}">{{ n.role }}</span>
               <span class="pill {{ n.tone }}">{{ n.state }}</span>
@@ -140,6 +74,9 @@
             <span class="tnode-title" title="{{ n.hostname }}">{{ n.hostname }}</span>
             <span class="tnode-sub mono">{{ n.addr }} · {{ n.cpus }} vCPU · {{ n.memory_gb }} GB</span>
             <span class="tnode-sub muted">{{ n.tasks_total }} tasks · engine {{ n.engine }}</span>
+            {% if n.labels %}
+            <span class="tnode-sub mono">{% for k, v in n.labels.items() %}{{ k }}={{ v }}{{ ' · ' if not loop.last }}{% endfor %}</span>
+            {% endif %}
             <span class="tnode-meters">
               <span title="node CPU utilisation">used cpu <b>{% if n.cpu_pct is not none %}{{ n.cpu_pct|round|int }}%{% else %}—{% endif %}</b></span>
               <span title="node memory utilisation">used mem <b>{% if n.mem_pct is not none %}{{ n.mem_pct|round|int }}%{% else %}—{% endif %}</b></span>
@@ -150,7 +87,7 @@
                   data-tip="CPU reserved: {{ n.cpu_reserved_pct }}% — {{ n.cpu_reserved }} of {{ n.cpus }} vCPU promised to tasks on this node"></span>
             <span class="gauge gauge-mem" style="--v:{{ n.mem_reserved_pct }}"
                   data-tip="Memory reserved: {{ n.mem_reserved_pct }}% — {{ n.mem_reserved_mb }} MB of {{ n.memory_gb }} GB promised to tasks on this node"></span>
-          </div>
+          </a>
         </div>
         {% endfor %}
       </div>

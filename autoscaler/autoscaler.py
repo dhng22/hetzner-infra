@@ -780,6 +780,60 @@ def hetzner_workers():
     return hcloud.servers.get_all(label_selector=f"cluster=={CLUSTER},role==swarm-worker")
 
 
+# Who is allowed to drain and delete a node.
+#
+# The autoscaler's blast radius has always been the Hetzner label selector. This
+# is that ownership written onto the SWARM node, where the panel can read it and
+# where a node that is not ours is visibly not ours. `adopt_workers()` derives it
+# from the selector rather than anyone configuring it, so a node someone joined
+# by hand carries no owner and is never drained, never deleted, never reaped.
+#
+# The key holds an owner NAME rather than a boolean on purpose: a node stamped
+# `managedby=dbmanager` later is refused by this same check, with no code here to
+# change. It is also why the panel treats the whole key as reserved rather than
+# blacklisting one value.
+NODE_OWNER_LABEL = "managedby"
+OWNER_AUTOSCALER = "autoscaler"
+
+
+def node_owner(node):
+    return (node.attrs.get("Spec", {}).get("Labels") or {}).get(NODE_OWNER_LABEL, "")
+
+
+def owned_by_autoscaler(node):
+    return node_owner(node) == OWNER_AUTOSCALER
+
+
+def adopt_workers(nodes, server_names):
+    """
+    Stamp `managedby=autoscaler` on every worker whose Hetzner server carries our
+    selector and that is not stamped yet.
+
+    Failing on a node leaves it unowned for a loop, which is the safe direction:
+    unowned costs a server we keep paying for, never a node we should not have
+    touched. Docker REPLACES a NodeSpec rather than merging it, so the whole spec
+    is read, one key added, and the whole thing written back — a partial payload
+    drops every other label.
+    """
+    for node in nodes:
+        hostname = node.attrs["Description"]["Hostname"]
+        if hostname not in server_names or node_owner(node):
+            continue
+        if DRY_RUN:
+            log.info("[dry-run] would mark %s as %s=%s",
+                     hostname, NODE_OWNER_LABEL, OWNER_AUTOSCALER)
+            continue
+        try:
+            spec = node.attrs["Spec"]
+            spec.setdefault("Role", "worker")
+            spec.setdefault("Availability", "active")
+            spec.setdefault("Labels", {})[NODE_OWNER_LABEL] = OWNER_AUTOSCALER
+            node.update(spec)
+            log.info("marked %s as managed by the autoscaler", hostname)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("could not mark ownership on %s: %s", hostname, exc)
+
+
 def provisioning_workers():
     """
     Servers that exist and are being paid for but have not joined the swarm as
@@ -1793,7 +1847,11 @@ def pick_removal_candidate(ready, node_free, items, manager_free, tasks_by_node,
     def created(node):
         return node.attrs.get("CreatedAt", "")
 
-    for node in sorted(ready, key=created, reverse=True):
+    # A worker the autoscaler did not create is capacity it may use and must not
+    # remove — someone else joined it and owns its lifecycle.
+    mine = [n for n in ready if owned_by_autoscaler(n)]
+
+    for node in sorted(mine, key=created, reverse=True):
         # A node carrying something this loop does not understand — a replicated,
         # non-global service that is not an app workload — may be holding state.
         # Deleting it is data loss, so skip it and say so.
@@ -1830,6 +1888,14 @@ def tasks_on_node(node_id):
 def remove_worker(node):
     hostname = node.attrs["Description"]["Hostname"]
     node_id = node.id
+
+    # The last gate before a drain. Candidate selection already filters to owned
+    # nodes; this repeats the check because the cost of the two disagreeing is a
+    # node someone else's manager depends on, drained and deleted.
+    if not owned_by_autoscaler(node):
+        log.warning("refusing to drain %s: it is managed by %r, not the autoscaler",
+                    hostname, node_owner(node) or "nobody")
+        return
 
     if DRY_RUN:
         log.info("[dry-run] would drain and delete %s", hostname)
@@ -1882,8 +1948,16 @@ def remove_worker(node):
 
 def reap_orphans():
     """Hetzner servers that never joined, and swarm nodes that went away."""
-    swarm_hostnames = {n.attrs["Description"]["Hostname"] for n in swarm_workers()}
+    workers = swarm_workers()
+    swarm_hostnames = {n.attrs["Description"]["Hostname"] for n in workers}
     servers = hetzner_workers()
+    hetzner_names = {s.name for s in servers}
+
+    # Before anything is judged removable. A node that joins and dies inside one
+    # loop is the only window where ours goes unstamped, and the cost of that is
+    # a leaked swarm entry rather than a deleted node.
+    adopt_workers(workers, hetzner_names)
+
     for server in servers:
         if server.name in swarm_hostnames:
             continue
@@ -1895,10 +1969,11 @@ def reap_orphans():
         if not DRY_RUN:
             server.delete()
 
-    hetzner_names = {s.name for s in servers}
-    for node in swarm_workers():
+    for node in workers:
         hostname = node.attrs["Description"]["Hostname"]
         state = node.attrs.get("Status", {}).get("State")
+        if not owned_by_autoscaler(node):
+            continue
         if state == "down" and hostname not in hetzner_names:
             log.warning("swarm node %s is down and its server is gone; removing", hostname)
             if DRY_RUN:

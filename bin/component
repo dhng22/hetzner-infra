@@ -9,6 +9,7 @@ component — create, configure and deploy the things that run on this cluster.
     component env <name> [get|set KEY=VALUE|unset KEY|edit]
     component render <name>
     component deploy <name>
+    component stop <name>
     component secret <name> [show|set KEY=VALUE|generate]
     component rotate <name>
     component remove <name> [--yes]
@@ -246,6 +247,19 @@ def cmd_deploy(argv):
     _print_result(*c.deploy())
 
 
+def cmd_stop(argv):
+    """
+    Take a component's services down and leave everything else alone.
+
+    Not `--replicas 0`: the autoscaler discovers services by label and reads its
+    own floor off them, so a scaled-to-zero app is back within one loop.
+    """
+    if not argv:
+        die("usage: component stop <name>")
+    c = components.load(argv[0])
+    _print_result(*c.stop())
+
+
 def cmd_secret(argv):
     """Show, set or regenerate a component's own credentials."""
     if not argv:
@@ -305,6 +319,7 @@ COMMANDS = {
     "env": cmd_env,
     "render": cmd_render,
     "deploy": cmd_deploy,
+    "stop": cmd_stop,
     "secret": cmd_secret,
     "rotate": cmd_rotate,
     "remove": cmd_remove, "rm": cmd_remove,

@@ -45,12 +45,9 @@ def _age(iso):
     return f"{int(secs / 86400)}d ago"
 
 
-def _short_image(image):
-    """`ghcr.io/you/app:sha-abc@sha256:...` -> `app:sha-abc`."""
-    if not image:
-        return "—"
-    ref = image.split("@")[0]
-    return ref.rsplit("/", 1)[-1]
+#: Both live in shape.py, next to everything else that is pure derivation from
+#: a service dict — the Map tab needs the tag and the fixtures need both.
+_short_image = shape.short_image
 
 
 def vm_query(expr):
@@ -606,6 +603,15 @@ def nodes():
                 "memory_gb": round((resources.get("MemoryBytes", 0) or 0) / 1024 ** 3, 1),
                 "engine": desc.get("Engine", {}).get("EngineVersion", "—"),
                 "addr": attrs.get("Status", {}).get("Addr", "—"),
+                # Labels are what a component's placement constraints match on,
+                # so they are editable from the node's own page.
+                "labels": dict(spec.get("Labels") or {}),
+                "os": (desc.get("Platform") or {}).get("OS", "—"),
+                "arch": (desc.get("Platform") or {}).get("Architecture", "—"),
+                "leader": bool((attrs.get("ManagerStatus") or {}).get("Leader")),
+                "reachability": (attrs.get("ManagerStatus") or {}).get("Reachability", ""),
+                "created_at": (attrs.get("CreatedAt") or "")[:19],
+                "updated_at": (attrs.get("UpdatedAt") or "")[:19],
                 **_reserved_fields(reserved.get(n.id, (0, 0)),
                                    resources.get("NanoCPUs", 0) or 0,
                                    resources.get("MemoryBytes", 0) or 0),
@@ -632,15 +638,19 @@ _SYSTEM_BANDS = {
     "ingress": ("ingress", "staging"),
     "admin": ("platform", "platform"),
 }
-_TYPE_BANDS = {
-    "app": ("applications", "prod"),
-    "redis": ("data", "data"),
+#: Keyed on the component's own CATEGORY rather than on its TYPE. A type
+#: declares which section of the panel it belongs in already; keying on TYPE
+#: made this a second registry that had to be edited alongside `TYPES`, and a
+#: type added to one and not the other went silently grey on every chart.
+_CATEGORY_BANDS = {
+    "Application": ("applications", "prod"),
+    "Data": ("data", "data"),
 }
 PLATFORM_BAND = ("platform", "platform")
 
 #: band label -> colour key, for the legend. One dict so the chart and the
 #: legend cannot disagree about which hue means what.
-_BAND_KEYS = dict([*_SYSTEM_BANDS.values(), *_TYPE_BANDS.values(), PLATFORM_BAND])
+_BAND_KEYS = dict([*_SYSTEM_BANDS.values(), *_CATEGORY_BANDS.values(), PLATFORM_BAND])
 
 
 #: Task state -> tone. The chip's background already carries what a task IS;
@@ -654,30 +664,42 @@ _TASK_TONES = {
 }
 
 
-def _band_of(service_name, component_types=None):
+def _band_of(service_name, categories=None):
     """
     (label, colour key) for a Swarm service name.
 
-    `component_types` maps a stack name to a component type, so a component's
+    `categories` maps a stack name to its component's category, so a component's
     band follows what it IS rather than what it is called.
     """
     stack = service_name.split("_", 1)[0] if "_" in service_name else ""
     if stack in _SYSTEM_BANDS:
         return _SYSTEM_BANDS[stack]
-    kind = (component_types or {}).get(stack)
-    if kind in _TYPE_BANDS:
-        return _TYPE_BANDS[kind]
-    return PLATFORM_BAND
+    return _CATEGORY_BANDS.get((categories or {}).get(stack), PLATFORM_BAND)
 
 
-def _component_types():
-    """{stack name: component type}, read from the specs on disk."""
+def _component_categories():
+    """{stack name: component category}, read from the specs on disk."""
     try:
         import components
         found, _ = components.all_components()
-        return {c.name: c.TYPE for c in found}
+        return {c.name: c.CATEGORY for c in found}
     except Exception:
         return {}
+
+
+def _primary_keys():
+    """
+    The compose key each component type gives its main service.
+
+    `api_app` reads better as `api` only because `app` is that type's own key —
+    so the set comes from the registry rather than from a literal tuple that a
+    new type would not be in.
+    """
+    try:
+        import components
+        return set(components.TYPES)
+    except Exception:
+        return {"app"}
 
 
 def short_service(name):
@@ -693,7 +715,7 @@ def short_service(name):
         return name
     if stack in _SYSTEM_BANDS:
         return key
-    return stack if key in ("app", "redis") else f"{stack}·{key}"
+    return stack if key in _primary_keys() else f"{stack}·{key}"
 
 
 def topology():
@@ -709,7 +731,7 @@ def topology():
     # the order you read a node in when you are asking "what is on this box".
     band_order = ["applications", "data", "ingress", "observability", "platform"]
     band_rank = {b: i for i, b in enumerate(band_order)}
-    types = _component_types()
+    categories = _component_categories()
 
     try:
         svc_names = {s.id: s.name for s in client().services.list()}
@@ -726,17 +748,23 @@ def topology():
         if not node_id:
             continue
         full = svc_names.get(t.get("ServiceID"), "unknown")
-        band, key = _band_of(full, types)
+        band, key = _band_of(full, categories)
         # What this task RESERVES, which is the number placement is decided on.
         # Utilisation says how busy a box is; reservation says whether another
         # replica can go on it at all, and the two routinely disagree by an
         # order of magnitude — a node can read 4% busy and still have no room.
         res = (t.get("Spec", {}) or {}).get("Resources", {}) or {}
         reservations = res.get("Reservations") or {}
+        # The image is read off the TASK, not the service: during a rolling
+        # update the two disagree, and the disagreement is the entire subject of
+        # the Map tab.
+        image = ((t.get("Spec", {}) or {}).get("ContainerSpec") or {}).get("Image", "")
         by_node.setdefault(node_id, []).append({
             "id": (t.get("ID") or "")[:12],
             "name": short_service(full),
             "service": full,
+            "image": image,
+            "tag": shape.image_tag(image),
             "band": band,
             "key": key,
             "state": state,
@@ -782,6 +810,89 @@ def topology():
         "bands": [{"band": b, "key": _BAND_KEYS[b]} for b in band_order],
         "max_tasks": max([n["tasks_total"] for n in out], default=0),
     }
+
+
+def node(node_id):
+    """
+    One node with everything on it, or None.
+
+    Read out of topology() rather than assembled separately, so the node page
+    and the cluster map cannot disagree about what is running where — that split
+    is the exact drift shape.py exists to prevent, one level up.
+    """
+    return shape.find_node(topology(), node_id)
+
+
+def _node_object(node_id):
+    for obj in client().nodes.list():
+        if node_id in (obj.id, obj.id[:12]):
+            return obj
+    return None
+
+
+def update_node(node_id, availability=None, labels=None):
+    """
+    Change what Swarm may do with a node, or what components may match on it.
+
+    `labels` is the list of {key, value} pairs the form posted, not a dict: the
+    reserved owner label is never on that form, and `shape.merge_labels` is what
+    puts it back before the whole map is replaced.
+
+    The WHOLE NodeSpec is read, changed and written back. Docker replaces the
+    spec rather than merging it, so posting only `Availability` would drop every
+    label — and posting only `Labels` would demote the manager to a worker,
+    because an absent Role defaults. One field changes; the rest is re-stated.
+    """
+    try:
+        obj = _node_object(node_id)
+        if obj is None:
+            return False, "No such node."
+        spec = dict(obj.attrs.get("Spec") or {})
+        spec.setdefault("Role", "worker")
+        spec.setdefault("Availability", "active")
+        spec["Labels"] = dict(spec.get("Labels") or {})
+        if availability is not None:
+            spec["Availability"] = availability
+        if labels is not None:
+            # The reserved owner label survives the replace; see shape.merge_labels.
+            spec["Labels"] = shape.merge_labels(spec["Labels"], labels)
+        obj.update(spec)
+    except Exception as exc:                                   # noqa: BLE001
+        return False, f"Could not update the node: {exc}"
+    if availability is not None:
+        return True, f"Availability set to {availability}."
+    return True, "Labels saved. Placement constraints match on them immediately."
+
+
+def remove_node(node_id):
+    """
+    Forget a node the swarm can no longer reach.
+
+    Only one that is already down. Removing a live node leaves the daemon on it
+    still believing it is a member, and the server behind a worker belongs to
+    the autoscaler's reaper, not to this button: deleting the swarm entry of a
+    running worker is how you get a server nobody is managing and a bill nobody
+    is reading. This is for the leftover entry, which is the state the reaper
+    itself cannot always clear.
+    """
+    try:
+        obj = _node_object(node_id)
+        if obj is None:
+            return False, "No such node."
+        if (obj.attrs.get("Status") or {}).get("State") == "ready":
+            return False, ("That node is still ready. Drain it and let the "
+                           "autoscaler delete the server it runs on — removing a "
+                           "live node leaves its daemon believing it is still a "
+                           "member of this swarm.")
+        client().api.remove_node(obj.id, force=True)
+    except Exception as exc:                                   # noqa: BLE001
+        return False, f"Could not remove the node: {exc}"
+    return True, "Node removed from the swarm."
+
+
+def component_map(services):
+    """The Map tab's data: one live topology, narrowed and coloured by tag."""
+    return shape.component_map(topology(), services)
 
 
 def summary():

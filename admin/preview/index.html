@@ -391,6 +391,11 @@ textarea { resize: vertical; min-height: 260px; }
 .field { margin-bottom: var(--s-5); }
 .field .hint { margin-top: var(--s-1); }
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0 var(--s-6); }
+/* Three across for a row of related facts — a version, when it landed, when it
+   was last confirmed — which read as one statement rather than three tiles. */
+.grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: var(--s-4); }
+@media (max-width: 720px) { .grid-3 { grid-template-columns: 1fr; } }
 
 .kv-grid { display: grid; grid-template-columns: minmax(180px, 280px) 1fr auto; gap: 8px; align-items: center; }
 .kv-grid .k-in { font-weight: 600; }
@@ -602,6 +607,18 @@ ul.tight li { margin-bottom: 2px; }
   --s-observe: #d55181; --s-platform: #7d919c;
 }
 
+/* The infrastructure version, under the theme button on every page. Three
+   label/value rows at the smallest step in the scale — it is a footnote about
+   the panel you are looking at, not a panel of its own, which is what it was
+   when it lived on the Cluster tab. */
+.rail-version { display: flex; flex-direction: column; gap: 4px; margin-top: 10px;
+  padding-top: 10px; border-top: 1px solid var(--line); }
+.rail-version-row { display: flex; align-items: baseline; justify-content: space-between;
+  gap: 8px; font-size: var(--t-xs); }
+.rail-version-row .k { color: var(--text-mute); text-transform: uppercase;
+  letter-spacing: .06em; }
+.rail-version-row .v { color: var(--text); text-align: right; overflow-wrap: anywhere; }
+
 .panel-intro { margin: 0 16px 12px; color: var(--text-mute); font-size: 13px; max-width: 74ch; }
 
 .live { display: inline-flex; align-items: center; gap: 6px; font-size: 11px;
@@ -672,6 +689,14 @@ ul.tight li { margin-bottom: 2px; }
   background: var(--surface-2); padding: 9px 12px; min-width: 168px;
   text-align: left;
 }
+/* A node card that is a link. Everything about a machine — its labels, its
+   tasks, what it may run — is on its own page, so the card in the fleet view is
+   the way in rather than the whole story. */
+a.tnode.is-link { color: inherit; text-decoration: none; cursor: pointer;
+  transition: border-color .12s ease, background .12s ease; }
+a.tnode.is-link:hover { border-color: var(--accent); background: var(--surface); }
+a.tnode.is-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 .tnode-root { background: var(--surface); border-color: var(--accent);
   align-items: center; text-align: center; }
 .tnode-host.is-manager { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
@@ -863,7 +888,88 @@ ul.tight li { margin-bottom: 2px; }
 .head-reserved { font-size: 12px; color: var(--text-mute);
                  border: 1px solid var(--line); border-radius: var(--r-sm);
                  padding: 2px 8px; white-space: nowrap; }
+
+/* --- confirm dialog ------------------------------------------------------
+   Replaces window.confirm() for anything destructive. The rounded icon is the
+   whole point of hand-rolling it: a red circle with a bin in it says "this
+   deletes something" before the sentence has been read, which the browser's
+   chrome-coloured box never did. Tokens only, so it inherits both themes. */
+dialog.modal {
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  max-width: 30rem;
+  width: calc(100vw - var(--s-8));
+}
+dialog.modal::backdrop {
+  background: rgb(4 10 14 / .58);
+  backdrop-filter: blur(2px);
+}
+.modal-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--s-4);
+  padding: var(--s-5);
+}
+.modal-ico {
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  display: grid; place-items: center;
+  flex: none;
+}
+.modal-ico svg { width: 21px; height: 21px; display: block; }
+.modal-ico.is-warn   { color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, transparent); }
+.modal-ico.is-danger { color: var(--bad);  background: color-mix(in srgb, var(--bad) 16%, transparent); }
+.modal-text h2 { margin: 3px 0 0; font-size: 1rem; line-height: 1.35; }
+.modal-text p {
+  margin: var(--s-2) 0 0;
+  color: var(--text-mute);
+  font-size: .86rem;
+  line-height: 1.5;
+}
+.modal-actions {
+  grid-column: 1 / -1;
+  display: flex; justify-content: flex-end; gap: var(--s-2);
+  margin-top: var(--s-1);
+}
+
+/* --- a control someone else owns ----------------------------------------
+   Faded and inert, with the reason next to it. `disabled` on the fieldset is
+   what actually stops interaction; the opacity is only so it reads as
+   unavailable rather than broken. */
+fieldset.bare {
+  border: 0; padding: 0; margin: 0;
+  display: flex; align-items: center; gap: var(--s-2);
+  min-width: 0;
+}
+fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
+.note-locked {
+  display: flex; align-items: flex-start; gap: var(--s-2);
+}
+.note-locked .ico {
+  flex: none;
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: .68rem; line-height: 1;
+  font-weight: 700;
+}
+.note-locked .ico-warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, transparent); }
+.note-locked .ico-lock { background: color-mix(in srgb, var(--text-mute) 16%, transparent); font-size: .6rem; }
 </style>
+<script>
+(function () {
+  try {
+    var t = localStorage.getItem("panel-theme");
+    if (t === "light" || t === "dark") {
+      document.documentElement.setAttribute("data-theme", t);
+    }
+  } catch (e) { /* private mode */ }
+})();
+</script>
 </head>
 <body>
 <div class="shell">
@@ -915,6 +1021,32 @@ ul.tight li { margin-bottom: 2px; }
 
     <div class="rail-foot">
       <button class="btn btn-sm" type="button" data-theme-toggle style="width:100%">Switch theme</button>
+      
+<div class="rail-version">
+  
+    <div class="rail-version-row">
+      <span class="k">Running</span>
+      <span class="v mono" title="9f2c1ab77e40c3d5b81aa0e6f4c92db3e77a1c40">9f2c1ab77e40</span>
+    </div>
+    <div class="rail-version-row">
+      <span class="k">Last updated</span>
+      <span class="v">
+        
+        <time datetime="2026-08-08T18:41:02+00:00" data-localtime>2026-08-08T18:41:02+00:00</time>
+        
+      </span>
+    </div>
+    <div class="rail-version-row">
+      <span class="k">Last checked</span>
+      <span class="v">
+        
+        <time datetime="2026-08-08T19:12:44+00:00" data-localtime>2026-08-08T19:12:44+00:00</time>
+        
+      </span>
+    </div>
+    
+  
+</div>
     </div>
   </nav>
 
@@ -938,8 +1070,8 @@ ul.tight li { margin-bottom: 2px; }
 <div class="tiles">
   <div class="tile">
     <span class="k">Components</span>
-    <span class="v">4<span class="muted">/4</span></span>
-    <span class="m">healthy</span>
+    <span class="v">4<span class="muted">/5</span></span>
+    <span class="m">healthy · 1 not deployed</span>
   </div>
 
   <div class="tile is-bad">
@@ -1006,7 +1138,7 @@ ul.tight li { margin-bottom: 2px; }
           <span class="tnode-title">aichat</span>
           <span class="tnode-sub">
             <b data-f="hosts">4</b> hosts
-            · <b data-f="total">29</b> tasks
+            · <b data-f="total">30</b> tasks
           </span>
         </div>
       </div>
@@ -1014,14 +1146,16 @@ ul.tight li { margin-bottom: 2px; }
       <div class="tree-kids">
         
           <div class="tree-branch" data-node="k39dl2mzq018">
-            <div class="tnode tnode-host has-gauges is-manager">
+            
+            <a class="tnode tnode-host is-link has-gauges is-manager"
+               href="#view-node-k39dl2mzq018">
               <span class="tnode-head">
                 <span class="pill accent">manager</span>
                 
               </span>
               <span class="tnode-title" title="aichat-master">aichat-master</span>
               <span class="tnode-sub">
-                <b data-f="tasks">14</b> tasks · 4 vCPU · 7.6 GB
+                <b data-f="tasks">15</b> tasks · 4 vCPU · 7.6 GB
               </span>
               <span class="tnode-meters">
                 <span title="node CPU utilisation — how busy it is right now">cpu <b data-f="cpu">78%</b></span>
@@ -1033,18 +1167,25 @@ ul.tight li { margin-bottom: 2px; }
                     data-tip="CPU reserved: 62.0% — 1.2 of 4 vCPU promised to tasks here"></span>
               <span class="gauge gauge-mem" data-f="memres" style="--v:48.0"
                     data-tip="Memory reserved: 48.0% — 1400 MB of 7.6 GB promised to tasks here"></span>
-            </div>
+            </a>
 
             <!-- data-sig matches the signature the poller computes, so the first
                  tick on an unchanged cluster rebuilds nothing at all. -->
             <div class="slots" data-slots
-                 data-sig="cache|data|ok|10.5|16.8;sessions|data|ok|1.5|2.5;cloudflared|staging|ok|1.5|2.5;alertmanager|observe|ok|1.5|2.5;cadvisor|observe|ok|1.5|2.5;grafana|observe|ok|2.5|3.4;loki|observe|ok|5.0|8.4;node-exporter|observe|ok|1.5|2.5;redis-exporter|observe|ok|1.5|2.5;victoriametrics|observe|ok|7.5|10.1;vmagent|observe|ok|1.5|2.5;vmalert|observe|ok|1.5|2.5;autoscaler|platform|ok|1.5|2.5;ui|platform|ok|1.5|2.5;">
+                 data-sig="cache|data|ok|10.5|16.8;documents|data|ok|1.5|2.5;sessions|data|ok|1.5|2.5;cloudflared|staging|ok|1.5|2.5;alertmanager|observe|ok|1.5|2.5;cadvisor|observe|ok|1.5|2.5;grafana|observe|ok|2.5|3.4;loki|observe|ok|5.0|8.4;node-exporter|observe|ok|1.5|2.5;redis-exporter|observe|ok|1.5|2.5;victoriametrics|observe|ok|7.5|10.1;vmagent|observe|ok|1.5|2.5;vmalert|observe|ok|1.5|2.5;autoscaler|platform|ok|1.5|2.5;ui|platform|ok|1.5|2.5;">
               
                 
                 <span class="slot slot-data" tabindex="0"
                       style="--cpu:10.5;--mem:16.8"
                       data-tip="cache_redis — task cache0kd93jf on aichat-master&#10;state: running&#10;reserves 10.5% of this node's CPU, 16.8% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>cache
+                </span>
+              
+                
+                <span class="slot slot-data" tabindex="0"
+                      style="--cpu:1.5;--mem:2.5"
+                      data-tip="documents_mongo — task docume0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                  <i class="dot dot-ok" aria-hidden="true"></i>documents
                 </span>
               
                 
@@ -1142,7 +1283,9 @@ ul.tight li { margin-bottom: 2px; }
           </div>
         
           <div class="tree-branch" data-node="w1af02c9be47">
-            <div class="tnode tnode-host has-gauges ">
+            
+            <a class="tnode tnode-host is-link has-gauges "
+               href="#view-node-w1af02c9be47">
               <span class="tnode-head">
                 <span class="pill ok">worker</span>
                 
@@ -1161,7 +1304,7 @@ ul.tight li { margin-bottom: 2px; }
                     data-tip="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks here"></span>
               <span class="gauge gauge-mem" data-f="memres" style="--v:48.0"
                     data-tip="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks here"></span>
-            </div>
+            </a>
 
             <!-- data-sig matches the signature the poller computes, so the first
                  tick on an unchanged cluster rebuilds nothing at all. -->
@@ -1214,7 +1357,9 @@ ul.tight li { margin-bottom: 2px; }
           </div>
         
           <div class="tree-branch" data-node="w2bc71d0aa93">
-            <div class="tnode tnode-host has-gauges ">
+            
+            <a class="tnode tnode-host is-link has-gauges "
+               href="#view-node-w2bc71d0aa93">
               <span class="tnode-head">
                 <span class="pill ok">worker</span>
                 
@@ -1233,7 +1378,7 @@ ul.tight li { margin-bottom: 2px; }
                     data-tip="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks here"></span>
               <span class="gauge gauge-mem" data-f="memres" style="--v:48.0"
                     data-tip="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks here"></span>
-            </div>
+            </a>
 
             <!-- data-sig matches the signature the poller computes, so the first
                  tick on an unchanged cluster rebuilds nothing at all. -->
@@ -1286,7 +1431,9 @@ ul.tight li { margin-bottom: 2px; }
           </div>
         
           <div class="tree-branch" data-node="w3de92f1cc05">
-            <div class="tnode tnode-host has-gauges ">
+            
+            <a class="tnode tnode-host is-link has-gauges "
+               href="#view-node-w3de92f1cc05">
               <span class="tnode-head">
                 <span class="pill warn">worker</span>
                 <span class="pill warn">drain</span>
@@ -1305,7 +1452,7 @@ ul.tight li { margin-bottom: 2px; }
                     data-tip="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks here"></span>
               <span class="gauge gauge-mem" data-f="memres" style="--v:48.0"
                     data-tip="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks here"></span>
-            </div>
+            </a>
 
             <!-- data-sig matches the signature the poller computes, so the first
                  tick on an unchanged cluster rebuilds nothing at all. -->
@@ -1387,6 +1534,19 @@ ul.tight li { margin-bottom: 2px; }
             <span class="v num">1/1</span>
           </span>
           <span class="pill ok">healthy</span>
+        </a>
+      
+        <a class="row mute" href="#view-component-documents">
+          <span class="stripe"></span>
+          <span>
+            <span class="row-title">documents</span>
+            <span class="row-sub">mongo:7.0</span>
+          </span>
+          <span class="row-metric hide-sm">
+            <span class="k">Tasks</span>
+            <span class="v num">0/0</span>
+          </span>
+          <span class="pill mute">not deployed</span>
         </a>
       
         <a class="row ok" href="#view-component-sessions">
@@ -1529,7 +1689,7 @@ ul.tight li { margin-bottom: 2px; }
   <div class="panel-head">
     <h2>Data</h2>
     <span class="spacer"></span>
-    <span class="muted">2</span>
+    <span class="muted">3</span>
   </div>
   <div class="panel-body">
     <div class="cards">
@@ -1556,6 +1716,21 @@ ul.tight li { margin-bottom: 2px; }
             <span class="gauge gauge-inline gauge-mem" style="--v:3.5"
                   data-tip="Memory: 3.5% of the cluster — 672 MB across 1 replica(s)"></span>
           </span>
+        </div>
+        
+      </a>
+      
+      <a class="card" href="#view-component-documents">
+        <div class="card-head">
+          <span class="card-name">documents</span>
+          <span class="pill mute">not deployed</span>
+        </div>
+        <div class="card-sub mono">mongo:7.0</div>
+        <div class="card-foot">
+          <span class="muted">MongoDB</span>
+          
+            <span class="muted">not deployed</span>
+          
         </div>
         
       </a>
@@ -1844,6 +2019,17 @@ ul.tight li { margin-bottom: 2px; }
     
     
     <p class="head-image">
+      <span class="muted">newest</span>
+      <code class="mono" title="ghcr.io/acme/aichat-api:sha-9f3ac21">aichat-api:sha-9f3ac21</code>
+      
+        <span class="pill ok plain">live</span>
+      
+      <span class="muted">via ci</span>
+    </p>
+    
+    
+    
+    <p class="head-image">
       <span class="muted">running</span>
       <code class="mono" title="ghcr.io/acme/aichat-api:sha-9f3ac21">aichat-api:sha-9f3ac21</code>
       <button class="btn btn-ghost btn-xs" type="button"
@@ -1884,6 +2070,11 @@ ul.tight li { margin-bottom: 2px; }
      aria-selected="false">Deployments</a>
   
   
+  <a class="tab" role="tab" data-tab="map" href="#view-component-api"
+     
+     aria-selected="false">Map</a>
+  
+  
   <a class="tab" role="tab" data-tab="settings" href="#view-component-api"
      
      aria-selected="false">Settings</a>
@@ -1912,7 +2103,7 @@ ul.tight li { margin-bottom: 2px; }
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-22T07:17:17Z" data-localtime>2026-08-22T07:17:17Z</time>
+          <time datetime="2026-08-25T03:09:11Z" data-localtime>2026-08-25T03:09:11Z</time>
           
         </div>
       </div>
@@ -1936,89 +2127,46 @@ ul.tight li { margin-bottom: 2px; }
     </section>
     
 
-    <div class="split">
-      <section class="panel">
-        <div class="panel-head"><h2>Services</h2></div>
-        <div class="panel-body">
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>Service</th><th>Image</th><th>Running</th><th>State</th></tr></thead>
-              <tbody>
-                
-                <tr>
-                  <td class="mono">api_app</td>
-                  <td class="mono small">aichat-api:sha-9f3ac21</td>
-                  <td class="num">6/6</td>
-                  <td><span class="pill ok">healthy</span></td>
-                </tr>
-                
-              </tbody>
-            </table>
-          </div>
+    <section class="panel">
+      <div class="panel-head"><h2>Services</h2></div>
+      <div class="panel-body">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Service</th><th>Image</th><th>Running</th><th>State</th></tr></thead>
+            <tbody>
+              
+              <tr>
+                <td class="mono">api_app</td>
+                <td class="mono small">aichat-api:sha-9f3ac21</td>
+                <td class="num">6/6</td>
+                <td><span class="pill ok">healthy</span></td>
+              </tr>
+              
+            </tbody>
+          </table>
         </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head"><h2>Placement</h2></div>
-        <div class="panel-body stack">
-          
-            <div class="mono">node.role == worker</div>
-          
-
-          
-          
-          
-          <form method="post" action="#" class="inline-form"
-                data-preview>
-            <input type="hidden" name="csrf" value="preview">
-            <label class="sr-only" for="pm-api">Placement mode</label>
-            <select id="pm-api" name="placement_mode">
-              
-              <option value="auto"
-                      selected>
-                auto
-              </option>
-              
-              <option value="master"
-                      >
-                master
-              </option>
-              
-              <option value="workers"
-                      >
-                workers
-              </option>
-              
-              <option value="any"
-                      >
-                any
-              </option>
-              
-            </select>
-            <input type="text" name="placement_extra" class="mono"
-                   value=""
-                   placeholder="extra constraints, comma separated">
-            <button class="btn btn-sm" type="submit">Apply</button>
-          </form>
-          
-          
-          <p class="hint">
-            On <code>auto</code> the autoscaler owns this: it adds
-            <code>node.role == worker</code> once workers exist and removes it when the
-            pool empties, so the master serves at the free floor and never during a
-            scale-out, and deploys re-state whatever is live rather than applying a
-            stored copy. Choose anything else and it stops moving this component at
-            all — including away from a worker that is about to be deleted.
-          </p>
-          
-        </div>
-      </section>
-    </div>
+      </div>
+    </section>
 
     <section class="panel">
       <div class="panel-head"><h2>Actions</h2></div>
       <div class="panel-body">
         <div class="btn-row">
+          
+          
+          
+          
+          <form method="post" action="#"
+                data-preview
+                data-confirm="Stop api? Its services leave the cluster; its files, environment, credentials and volumes stay, and Deploy brings it back.">
+            <input type="hidden" name="csrf" value="preview">
+            <input type="hidden" name="action" value="stop">
+            <button class="btn btn-danger"
+                    type="submit">Stop</button>
+          </form>
+          
+          
+          
           
           
           <form method="post" action="#"
@@ -2057,9 +2205,14 @@ ul.tight li { margin-bottom: 2px; }
           
         </div>
         <p class="hint">
+          
           Redeploy re-applies this component's stack. It reads the live image and
           replica count back first, so it will not undo the autoscaler or roll back
           whatever CI last shipped. Nothing outside this component is touched.
+          Stop removes its services from the cluster and keeps everything else —
+          the spec, the environment, the credentials and the volumes are files, not
+          Swarm state.
+          
         </p>
       </div>
     </section>
@@ -2376,17 +2529,183 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
   
 
   <!-- settings -------------------------------------------------------------->
+  <!-- map --------------------------------------------------------------->
+  
+  <div data-panel="map" hidden>
+    
+<section class="panel">
+  <div class="panel-head">
+    <h2>Rollout map</h2>
+    <span class="spacer"></span>
+    <span class="pill mute plain mono">6 replicas</span>
+  </div>
+
+  <p class="panel-intro">
+    Every node, and every replica of <strong>api</strong> on it. The label
+    on a block is the image tag that replica is running, not the service name — one colour
+    means the fleet agrees, two means an update is in flight or a rollback left it split.
+  </p>
+
+  <div class="legend">
+    
+      <span class="legend-item"><i class="sw sw-prod"></i>sha-9f3ac21 · 3</span>
+    
+      <span class="legend-item"><i class="sw sw-staging"></i>sha-c40e8b7 · 3</span>
+    
+  </div>
+
+  <div class="tree-scroll">
+    <div class="tree">
+      <div class="tree-top">
+        <div class="tnode tnode-root">
+          <span class="tnode-title">api</span>
+          <span class="tnode-sub">
+            <b>2</b> tags
+            · <b>6</b> replicas
+          </span>
+        </div>
+      </div>
+
+      <div class="tree-kids">
+        
+          <div class="tree-branch">
+            <a class="tnode tnode-host is-link is-manager"
+               href="#view-node-k39dl2mzq018">
+              <span class="tnode-head">
+                <span class="pill accent">manager</span>
+                
+              </span>
+              <span class="tnode-title" title="aichat-master">aichat-master</span>
+              <span class="tnode-sub">
+                <b>0</b> here · 4 vCPU · 7.6 GB
+              </span>
+            </a>
+
+            <div class="slots">
+              
+                <span class="slot is-empty">none here</span>
+              
+            </div>
+          </div>
+        
+          <div class="tree-branch">
+            <a class="tnode tnode-host is-link "
+               href="#view-node-w1af02c9be47">
+              <span class="tnode-head">
+                <span class="pill ok">worker</span>
+                
+              </span>
+              <span class="tnode-title" title="aichat-worker-1754812203">aichat-worker-1754812203</span>
+              <span class="tnode-sub">
+                <b>3</b> here · 3 vCPU · 3.8 GB
+              </span>
+            </a>
+
+            <div class="slots">
+              
+                <span class="slot slot-staging" tabindex="0"
+                      style="--cpu:18.0;--mem:12.0"
+                      data-tip="ghcr.io/acme/aichat-api:sha-c40e8b7&#10;task api0kd93jf01 on aichat-worker-1754812203&#10;state: running">
+                  <i class="dot dot-ok" aria-hidden="true"></i>sha-c40e8b7
+                </span>
+              
+                <span class="slot slot-prod" tabindex="0"
+                      style="--cpu:18.0;--mem:12.0"
+                      data-tip="ghcr.io/acme/aichat-api:sha-9f3ac21&#10;task api1kd93jf01 on aichat-worker-1754812203&#10;state: running">
+                  <i class="dot dot-ok" aria-hidden="true"></i>sha-9f3ac21
+                </span>
+              
+                <span class="slot slot-prod" tabindex="0"
+                      style="--cpu:18.0;--mem:12.0"
+                      data-tip="ghcr.io/acme/aichat-api:sha-9f3ac21&#10;task api2kd93jf01 on aichat-worker-1754812203&#10;state: starting">
+                  <i class="dot dot-warn" aria-hidden="true"></i>sha-9f3ac21
+                </span>
+              
+            </div>
+          </div>
+        
+          <div class="tree-branch">
+            <a class="tnode tnode-host is-link "
+               href="#view-node-w2bc71d0aa93">
+              <span class="tnode-head">
+                <span class="pill ok">worker</span>
+                
+              </span>
+              <span class="tnode-title" title="aichat-worker-1754819114">aichat-worker-1754819114</span>
+              <span class="tnode-sub">
+                <b>2</b> here · 3 vCPU · 3.8 GB
+              </span>
+            </a>
+
+            <div class="slots">
+              
+                <span class="slot slot-staging" tabindex="0"
+                      style="--cpu:18.0;--mem:12.0"
+                      data-tip="ghcr.io/acme/aichat-api:sha-c40e8b7&#10;task api0kd93jf01 on aichat-worker-1754819114&#10;state: running">
+                  <i class="dot dot-ok" aria-hidden="true"></i>sha-c40e8b7
+                </span>
+              
+                <span class="slot slot-prod" tabindex="0"
+                      style="--cpu:18.0;--mem:12.0"
+                      data-tip="ghcr.io/acme/aichat-api:sha-9f3ac21&#10;task api1kd93jf01 on aichat-worker-1754819114&#10;state: running">
+                  <i class="dot dot-ok" aria-hidden="true"></i>sha-9f3ac21
+                </span>
+              
+            </div>
+          </div>
+        
+          <div class="tree-branch">
+            <a class="tnode tnode-host is-link "
+               href="#view-node-w3de92f1cc05">
+              <span class="tnode-head">
+                <span class="pill warn">worker</span>
+                <span class="pill warn">drain</span>
+              </span>
+              <span class="tnode-title" title="aichat-worker-1754823887">aichat-worker-1754823887</span>
+              <span class="tnode-sub">
+                <b>1</b> here · 3 vCPU · 3.8 GB
+              </span>
+            </a>
+
+            <div class="slots">
+              
+                <span class="slot slot-staging" tabindex="0"
+                      style="--cpu:18.0;--mem:12.0"
+                      data-tip="ghcr.io/acme/aichat-api:sha-c40e8b7&#10;task api0kd93jf01 on aichat-worker-1754823887&#10;state: running">
+                  <i class="dot dot-ok" aria-hidden="true"></i>sha-c40e8b7
+                </span>
+              
+            </div>
+          </div>
+        
+      </div>
+    </div>
+  </div>
+
+  <div class="panel-note">
+    Replicas are counted from RUNNING tasks. A rollout that is stuck shows the old tag
+    holding steady while the new one never grows — Swarm rolls a failing update back, so
+    the end state of a bad deploy is one colour again, and the Deployments tab is where
+    the verdict is written down.
+  </div>
+</section>
+  </div>
+  
+
   
   <div data-panel="settings" hidden>
     <form method="post" action="#" data-preview>
       <input type="hidden" name="csrf" value="preview">
-      <section class="panel">
-        <div class="panel-head"><h2>Configuration</h2></div>
-        <div class="panel-body">
-          <div class="grid-2">
-            
-              
-              
+      
+        
+<section class="panel">
+  <div class="panel-head"><h2>Configuration</h2></div>
+  <div class="panel-body">
+    <div class="grid-2">
+      
+      
+        
+        
 <div class="field">
   <label for="f-port">Port</label>
 
@@ -2403,9 +2722,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
 
   <p class="hint">The port your app listens on inside the container.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-start_period">Startup grace</label>
 
@@ -2422,9 +2741,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
 
   <p class="hint">Seconds before a failing healthcheck counts. A JVM needs 60.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-placement_mode">Placement</label>
 
@@ -2445,9 +2764,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
 
   <p class="hint">auto lets the autoscaler move this between the master and the worker pool as the fleet grows and shrinks. Anything else pins it and the autoscaler stops moving it — useful for something that must stay put, and a good way to strand yourself if you pin to workers and the pool empties.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-placement_extra">Extra constraints</label>
 
@@ -2464,9 +2783,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
 
   <p class="hint">Comma separated, added to whatever the mode above implies. Swarm syntax, e.g. node.labels.zone == eu.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-stop_grace">Shutdown grace</label>
 
@@ -2483,40 +2802,46 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
 
   <p class="hint">Seconds to finish in-flight requests on SIGTERM. Pair it with a shutdown hook in your app; the Docker default of 10 cuts them.</p>
 </div>
-            
-          </div>
-        </div>
-        <div class="panel-note">
-          Saving redeploys this component. The live image, replica count, placement
-          and resource sizing are read back first and preserved, so changing a
-          setting here will not roll back your last deploy or undo the autoscaler.
-        </div>
-      </section>
+      
 
       
       
+    </div>
+  </div>
+  
+  
+  <div class="panel-note">
+    Saving redeploys this component. The live image, replica count, placement
+    and resource sizing are read back first and preserved, so changing a
+    setting here will not roll back your last deploy or undo the autoscaler.
+  </div>
+  
+</section>
+
+
+
+
+<section class="panel" data-toggle-section>
+  <div class="panel-head">
+    <h2>Autoscale</h2>
+    
+    
+    <label class="switch" title="Let the autoscaler own the replica count">
+      <input type="hidden" name="__bool__" value="autoscale">
+      <input type="checkbox" name="autoscale" value="true"
+             data-toggle-master
+             checked>
+      <span class="switch-track" aria-hidden="true"></span>
+      <span class="switch-label">on</span>
+    </label>
+    
+    <span class="spacer"></span>
+  </div>
+  <div class="panel-body" data-toggle-body>
+    <div class="grid-2">
       
-      <section class="panel" data-toggle-section>
-        <div class="panel-head">
-          <h2>Autoscale</h2>
-          
-          
-          <label class="switch" title="Let the autoscaler own the replica count">
-            <input type="hidden" name="__bool__" value="autoscale">
-            <input type="checkbox" name="autoscale" value="true"
-                   data-toggle-master
-                   checked>
-            <span class="switch-track" aria-hidden="true"></span>
-            <span class="switch-label">on</span>
-          </label>
-          
-          <span class="spacer"></span>
-        </div>
-        <div class="panel-body" data-toggle-body>
-          <div class="grid-2">
-            
-              
-              
+        
+        
 <div class="field">
   <label for="f-min_replicas">Minimum replicas</label>
 
@@ -2533,9 +2858,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
 
   <p class="hint">Two is the usual floor: with one, a crash is an outage and a rolling update has nowhere to shift traffic.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-max_replicas">Maximum replicas</label>
 
@@ -2552,9 +2877,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
 
   <p class="hint">A budget cap. The ReplicaCeiling alert compares against it.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-slo_p95_ms">p95 SLO (ms)</label>
 
@@ -2571,9 +2896,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
 
   <p class="hint">THE number. Scale-up and scale-down thresholds are fractions of it.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-up_p95_ratio">Scale up at</label>
 
@@ -2590,9 +2915,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
 
   <p class="hint">Fraction of the SLO that triggers growth — act before users feel it.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-down_p95_ratio">Scale down below</label>
 
@@ -2609,9 +2934,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
 
   
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-up_cpu_pct">Scale up above CPU %</label>
 
@@ -2628,9 +2953,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
 
   <p class="hint">CPU of ONE replica against its own limit. This is the secondary signal, and at low traffic it is the only one: p95 over an empty histogram returns nothing at all.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-down_cpu_pct">Scale down below CPU %</label>
 
@@ -2647,9 +2972,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
 
   
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-sustain_up_seconds">Sustain up (s)</label>
 
@@ -2666,9 +2991,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
 
   <p class="hint">How long a signal must stay high. Up fast, down slow — never make these two symmetric.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-sustain_down_seconds">Sustain down (s)</label>
 
@@ -2685,9 +3010,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
 
   
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-up_factor">Growth step</label>
 
@@ -2704,9 +3029,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
 
   <p class="hint">+50% of current, minimum +1. One at a time cannot track a spike.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-cooldown_seconds">Replica cooldown (s)</label>
 
@@ -2723,9 +3048,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
 
   
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-priority">Priority</label>
 
@@ -2742,17 +3067,20 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
 
   <p class="hint">Lower wins when several components compete for the same node capacity. Leave it alone unless one app genuinely matters more.</p>
 </div>
-            
-          </div>
-        </div>
-        <div class="panel-note">
-          With this off the replica count is yours and nothing below applies. The
-          autoscaler still measures this component and still right-sizes its
-          reservations — it just stops changing how many of it there are.
-        </div>
-      </section>
+      
+    </div>
+  </div>
+  <div class="panel-note">
+    With this off the replica count is yours and nothing below applies. The
+    autoscaler still measures this component and still right-sizes its
+    reservations — it just stops changing how many of it there are.
+  </div>
+</section>
+
       
 
+      
+      
       
       <section class="panel">
         <div class="panel-head"><h2>Managed for you</h2></div>
@@ -2841,6 +3169,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
           your app really differs.
         </div>
       </section>
+      
 
       <div class="sticky-save">
         <button class="btn btn-primary" type="submit">Save and deploy</button>
@@ -2910,6 +3239,17 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
     
     
     <p class="head-image">
+      <span class="muted">newest</span>
+      <code class="mono" title="ghcr.io/acme/aichat-api:sha-c40e8b7">aichat-api:sha-c40e8b7</code>
+      
+        <span class="pill ok plain">live</span>
+      
+      <span class="muted">via ci</span>
+    </p>
+    
+    
+    
+    <p class="head-image">
       <span class="muted">running</span>
       <code class="mono" title="ghcr.io/acme/aichat-api:sha-c40e8b7">aichat-api:sha-c40e8b7</code>
       <button class="btn btn-ghost btn-xs" type="button"
@@ -2950,6 +3290,11 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
      aria-selected="false">Deployments</a>
   
   
+  <a class="tab" role="tab" data-tab="map" href="#view-component-api-staging"
+     
+     aria-selected="false">Map</a>
+  
+  
   <a class="tab" role="tab" data-tab="settings" href="#view-component-api-staging"
      
      aria-selected="false">Settings</a>
@@ -2978,7 +3323,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-22T07:17:17Z" data-localtime>2026-08-22T07:17:17Z</time>
+          <time datetime="2026-08-25T03:09:11Z" data-localtime>2026-08-25T03:09:11Z</time>
           
         </div>
       </div>
@@ -3002,89 +3347,46 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
     </section>
     
 
-    <div class="split">
-      <section class="panel">
-        <div class="panel-head"><h2>Services</h2></div>
-        <div class="panel-body">
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>Service</th><th>Image</th><th>Running</th><th>State</th></tr></thead>
-              <tbody>
-                
-                <tr>
-                  <td class="mono">api-staging_app</td>
-                  <td class="mono small">aichat-api:sha-c40e8b7</td>
-                  <td class="num">1/1</td>
-                  <td><span class="pill ok">healthy</span></td>
-                </tr>
-                
-              </tbody>
-            </table>
-          </div>
+    <section class="panel">
+      <div class="panel-head"><h2>Services</h2></div>
+      <div class="panel-body">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Service</th><th>Image</th><th>Running</th><th>State</th></tr></thead>
+            <tbody>
+              
+              <tr>
+                <td class="mono">api-staging_app</td>
+                <td class="mono small">aichat-api:sha-c40e8b7</td>
+                <td class="num">1/1</td>
+                <td><span class="pill ok">healthy</span></td>
+              </tr>
+              
+            </tbody>
+          </table>
         </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head"><h2>Placement</h2></div>
-        <div class="panel-body stack">
-          
-            <div class="mono">node.role == worker</div>
-          
-
-          
-          
-          
-          <form method="post" action="#" class="inline-form"
-                data-preview>
-            <input type="hidden" name="csrf" value="preview">
-            <label class="sr-only" for="pm-api-staging">Placement mode</label>
-            <select id="pm-api-staging" name="placement_mode">
-              
-              <option value="auto"
-                      selected>
-                auto
-              </option>
-              
-              <option value="master"
-                      >
-                master
-              </option>
-              
-              <option value="workers"
-                      >
-                workers
-              </option>
-              
-              <option value="any"
-                      >
-                any
-              </option>
-              
-            </select>
-            <input type="text" name="placement_extra" class="mono"
-                   value=""
-                   placeholder="extra constraints, comma separated">
-            <button class="btn btn-sm" type="submit">Apply</button>
-          </form>
-          
-          
-          <p class="hint">
-            On <code>auto</code> the autoscaler owns this: it adds
-            <code>node.role == worker</code> once workers exist and removes it when the
-            pool empties, so the master serves at the free floor and never during a
-            scale-out, and deploys re-state whatever is live rather than applying a
-            stored copy. Choose anything else and it stops moving this component at
-            all — including away from a worker that is about to be deleted.
-          </p>
-          
-        </div>
-      </section>
-    </div>
+      </div>
+    </section>
 
     <section class="panel">
       <div class="panel-head"><h2>Actions</h2></div>
       <div class="panel-body">
         <div class="btn-row">
+          
+          
+          
+          
+          <form method="post" action="#"
+                data-preview
+                data-confirm="Stop api-staging? Its services leave the cluster; its files, environment, credentials and volumes stay, and Deploy brings it back.">
+            <input type="hidden" name="csrf" value="preview">
+            <input type="hidden" name="action" value="stop">
+            <button class="btn btn-danger"
+                    type="submit">Stop</button>
+          </form>
+          
+          
+          
           
           
           <form method="post" action="#"
@@ -3123,9 +3425,14 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
           
         </div>
         <p class="hint">
+          
           Redeploy re-applies this component's stack. It reads the live image and
           replica count back first, so it will not undo the autoscaler or roll back
           whatever CI last shipped. Nothing outside this component is touched.
+          Stop removes its services from the cluster and keeps everything else —
+          the spec, the environment, the credentials and the volumes are files, not
+          Swarm state.
+          
         </p>
       </div>
     </section>
@@ -3385,17 +3692,155 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   
 
   <!-- settings -------------------------------------------------------------->
+  <!-- map --------------------------------------------------------------->
+  
+  <div data-panel="map" hidden>
+    
+<section class="panel">
+  <div class="panel-head">
+    <h2>Rollout map</h2>
+    <span class="spacer"></span>
+    <span class="pill mute plain mono">1 replica</span>
+  </div>
+
+  <p class="panel-intro">
+    Every node, and every replica of <strong>api-staging</strong> on it. The label
+    on a block is the image tag that replica is running, not the service name — one colour
+    means the fleet agrees, two means an update is in flight or a rollback left it split.
+  </p>
+
+  <div class="legend">
+    
+      <span class="legend-item"><i class="sw sw-prod"></i>sha-c40e8b7 · 1</span>
+    
+  </div>
+
+  <div class="tree-scroll">
+    <div class="tree">
+      <div class="tree-top">
+        <div class="tnode tnode-root">
+          <span class="tnode-title">api-staging</span>
+          <span class="tnode-sub">
+            <b>1</b> tag
+            · <b>1</b> replica
+          </span>
+        </div>
+      </div>
+
+      <div class="tree-kids">
+        
+          <div class="tree-branch">
+            <a class="tnode tnode-host is-link is-manager"
+               href="#view-node-k39dl2mzq018">
+              <span class="tnode-head">
+                <span class="pill accent">manager</span>
+                
+              </span>
+              <span class="tnode-title" title="aichat-master">aichat-master</span>
+              <span class="tnode-sub">
+                <b>0</b> here · 4 vCPU · 7.6 GB
+              </span>
+            </a>
+
+            <div class="slots">
+              
+                <span class="slot is-empty">none here</span>
+              
+            </div>
+          </div>
+        
+          <div class="tree-branch">
+            <a class="tnode tnode-host is-link "
+               href="#view-node-w1af02c9be47">
+              <span class="tnode-head">
+                <span class="pill ok">worker</span>
+                
+              </span>
+              <span class="tnode-title" title="aichat-worker-1754812203">aichat-worker-1754812203</span>
+              <span class="tnode-sub">
+                <b>0</b> here · 3 vCPU · 3.8 GB
+              </span>
+            </a>
+
+            <div class="slots">
+              
+                <span class="slot is-empty">none here</span>
+              
+            </div>
+          </div>
+        
+          <div class="tree-branch">
+            <a class="tnode tnode-host is-link "
+               href="#view-node-w2bc71d0aa93">
+              <span class="tnode-head">
+                <span class="pill ok">worker</span>
+                
+              </span>
+              <span class="tnode-title" title="aichat-worker-1754819114">aichat-worker-1754819114</span>
+              <span class="tnode-sub">
+                <b>1</b> here · 3 vCPU · 3.8 GB
+              </span>
+            </a>
+
+            <div class="slots">
+              
+                <span class="slot slot-prod" tabindex="0"
+                      style="--cpu:1.5;--mem:2.5"
+                      data-tip="ghcr.io/acme/aichat-api:sha-c40e8b7&#10;task api-st0kd93j on aichat-worker-1754819114&#10;state: failed">
+                  <i class="dot dot-bad" aria-hidden="true"></i>sha-c40e8b7
+                </span>
+              
+            </div>
+          </div>
+        
+          <div class="tree-branch">
+            <a class="tnode tnode-host is-link "
+               href="#view-node-w3de92f1cc05">
+              <span class="tnode-head">
+                <span class="pill warn">worker</span>
+                <span class="pill warn">drain</span>
+              </span>
+              <span class="tnode-title" title="aichat-worker-1754823887">aichat-worker-1754823887</span>
+              <span class="tnode-sub">
+                <b>0</b> here · 3 vCPU · 3.8 GB
+              </span>
+            </a>
+
+            <div class="slots">
+              
+                <span class="slot is-empty">none here</span>
+              
+            </div>
+          </div>
+        
+      </div>
+    </div>
+  </div>
+
+  <div class="panel-note">
+    Replicas are counted from RUNNING tasks. A rollout that is stuck shows the old tag
+    holding steady while the new one never grows — Swarm rolls a failing update back, so
+    the end state of a bad deploy is one colour again, and the Deployments tab is where
+    the verdict is written down.
+  </div>
+</section>
+  </div>
+  
+
   
   <div data-panel="settings" hidden>
     <form method="post" action="#" data-preview>
       <input type="hidden" name="csrf" value="preview">
-      <section class="panel">
-        <div class="panel-head"><h2>Configuration</h2></div>
-        <div class="panel-body">
-          <div class="grid-2">
-            
-              
-              
+      
+        
+<section class="panel">
+  <div class="panel-head"><h2>Configuration</h2></div>
+  <div class="panel-body">
+    <div class="grid-2">
+      
+      
+        
+        
 <div class="field">
   <label for="f-port">Port</label>
 
@@ -3412,9 +3857,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   <p class="hint">The port your app listens on inside the container.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-start_period">Startup grace</label>
 
@@ -3431,9 +3876,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   <p class="hint">Seconds before a failing healthcheck counts. A JVM needs 60.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-placement_mode">Placement</label>
 
@@ -3454,9 +3899,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   <p class="hint">auto lets the autoscaler move this between the master and the worker pool as the fleet grows and shrinks. Anything else pins it and the autoscaler stops moving it — useful for something that must stay put, and a good way to strand yourself if you pin to workers and the pool empties.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-placement_extra">Extra constraints</label>
 
@@ -3473,9 +3918,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   <p class="hint">Comma separated, added to whatever the mode above implies. Swarm syntax, e.g. node.labels.zone == eu.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-stop_grace">Shutdown grace</label>
 
@@ -3492,40 +3937,46 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   <p class="hint">Seconds to finish in-flight requests on SIGTERM. Pair it with a shutdown hook in your app; the Docker default of 10 cuts them.</p>
 </div>
-            
-          </div>
-        </div>
-        <div class="panel-note">
-          Saving redeploys this component. The live image, replica count, placement
-          and resource sizing are read back first and preserved, so changing a
-          setting here will not roll back your last deploy or undo the autoscaler.
-        </div>
-      </section>
+      
 
       
       
+    </div>
+  </div>
+  
+  
+  <div class="panel-note">
+    Saving redeploys this component. The live image, replica count, placement
+    and resource sizing are read back first and preserved, so changing a
+    setting here will not roll back your last deploy or undo the autoscaler.
+  </div>
+  
+</section>
+
+
+
+
+<section class="panel" data-toggle-section>
+  <div class="panel-head">
+    <h2>Autoscale</h2>
+    
+    
+    <label class="switch" title="Let the autoscaler own the replica count">
+      <input type="hidden" name="__bool__" value="autoscale">
+      <input type="checkbox" name="autoscale" value="true"
+             data-toggle-master
+             >
+      <span class="switch-track" aria-hidden="true"></span>
+      <span class="switch-label">on</span>
+    </label>
+    
+    <span class="spacer"></span>
+  </div>
+  <div class="panel-body" data-toggle-body>
+    <div class="grid-2">
       
-      <section class="panel" data-toggle-section>
-        <div class="panel-head">
-          <h2>Autoscale</h2>
-          
-          
-          <label class="switch" title="Let the autoscaler own the replica count">
-            <input type="hidden" name="__bool__" value="autoscale">
-            <input type="checkbox" name="autoscale" value="true"
-                   data-toggle-master
-                   >
-            <span class="switch-track" aria-hidden="true"></span>
-            <span class="switch-label">on</span>
-          </label>
-          
-          <span class="spacer"></span>
-        </div>
-        <div class="panel-body" data-toggle-body>
-          <div class="grid-2">
-            
-              
-              
+        
+        
 <div class="field">
   <label for="f-min_replicas">Minimum replicas</label>
 
@@ -3542,9 +3993,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   <p class="hint">Two is the usual floor: with one, a crash is an outage and a rolling update has nowhere to shift traffic.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-max_replicas">Maximum replicas</label>
 
@@ -3561,9 +4012,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   <p class="hint">A budget cap. The ReplicaCeiling alert compares against it.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-slo_p95_ms">p95 SLO (ms)</label>
 
@@ -3580,9 +4031,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   <p class="hint">THE number. Scale-up and scale-down thresholds are fractions of it.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-up_p95_ratio">Scale up at</label>
 
@@ -3599,9 +4050,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   <p class="hint">Fraction of the SLO that triggers growth — act before users feel it.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-down_p95_ratio">Scale down below</label>
 
@@ -3618,9 +4069,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-up_cpu_pct">Scale up above CPU %</label>
 
@@ -3637,9 +4088,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   <p class="hint">CPU of ONE replica against its own limit. This is the secondary signal, and at low traffic it is the only one: p95 over an empty histogram returns nothing at all.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-down_cpu_pct">Scale down below CPU %</label>
 
@@ -3656,9 +4107,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-sustain_up_seconds">Sustain up (s)</label>
 
@@ -3675,9 +4126,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   <p class="hint">How long a signal must stay high. Up fast, down slow — never make these two symmetric.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-sustain_down_seconds">Sustain down (s)</label>
 
@@ -3694,9 +4145,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-up_factor">Growth step</label>
 
@@ -3713,9 +4164,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   <p class="hint">+50% of current, minimum +1. One at a time cannot track a spike.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-cooldown_seconds">Replica cooldown (s)</label>
 
@@ -3732,9 +4183,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-priority">Priority</label>
 
@@ -3751,17 +4202,20 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   <p class="hint">Lower wins when several components compete for the same node capacity. Leave it alone unless one app genuinely matters more.</p>
 </div>
-            
-          </div>
-        </div>
-        <div class="panel-note">
-          With this off the replica count is yours and nothing below applies. The
-          autoscaler still measures this component and still right-sizes its
-          reservations — it just stops changing how many of it there are.
-        </div>
-      </section>
+      
+    </div>
+  </div>
+  <div class="panel-note">
+    With this off the replica count is yours and nothing below applies. The
+    autoscaler still measures this component and still right-sizes its
+    reservations — it just stops changing how many of it there are.
+  </div>
+</section>
+
       
 
+      
+      
       
       <section class="panel">
         <div class="panel-head"><h2>Managed for you</h2></div>
@@ -3850,6 +4304,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           your app really differs.
         </div>
       </section>
+      
 
       <div class="sticky-save">
         <button class="btn btn-primary" type="submit">Save and deploy</button>
@@ -3918,6 +4373,8 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
     <p class="hint">A password-protected Redis, with its own volume.</p>
     
     
+    
+    
     <p class="head-image">
       <span class="muted">running</span>
       <code class="mono" title="redis:7.4-alpine">redis:7.4-alpine</code>
@@ -3982,7 +4439,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-22T07:17:17Z" data-localtime>2026-08-22T07:17:17Z</time>
+          <time datetime="2026-08-25T03:09:11Z" data-localtime>2026-08-25T03:09:11Z</time>
           
         </div>
       </div>
@@ -4006,82 +4463,53 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
     </section>
     
 
-    <div class="split">
-      <section class="panel">
-        <div class="panel-head"><h2>Services</h2></div>
-        <div class="panel-body">
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>Service</th><th>Image</th><th>Running</th><th>State</th></tr></thead>
-              <tbody>
-                
-                <tr>
-                  <td class="mono">cache_redis</td>
-                  <td class="mono small">redis:7.4-alpine</td>
-                  <td class="num">1/1</td>
-                  <td><span class="pill ok">healthy</span></td>
-                </tr>
-                
-                <tr>
-                  <td class="mono">cache_redis-exporter</td>
-                  <td class="mono small">redis_exporter:v1.66.0</td>
-                  <td class="num">1/1</td>
-                  <td><span class="pill ok">healthy</span></td>
-                </tr>
-                
-              </tbody>
-            </table>
-          </div>
+    <section class="panel">
+      <div class="panel-head"><h2>Services</h2></div>
+      <div class="panel-body">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Service</th><th>Image</th><th>Running</th><th>State</th></tr></thead>
+            <tbody>
+              
+              <tr>
+                <td class="mono">cache_redis</td>
+                <td class="mono small">redis:7.4-alpine</td>
+                <td class="num">1/1</td>
+                <td><span class="pill ok">healthy</span></td>
+              </tr>
+              
+              <tr>
+                <td class="mono">cache_redis-exporter</td>
+                <td class="mono small">redis_exporter:v1.66.0</td>
+                <td class="num">1/1</td>
+                <td><span class="pill ok">healthy</span></td>
+              </tr>
+              
+            </tbody>
+          </table>
         </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head"><h2>Placement</h2></div>
-        <div class="panel-body stack">
-          
-            <div class="mono">node.role == manager</div>
-          
-
-          
-          
-          
-          <form method="post" action="#" class="inline-form"
-                data-preview>
-            <input type="hidden" name="csrf" value="preview">
-            <label class="sr-only" for="pm-cache">Placement mode</label>
-            <select id="pm-cache" name="placement_mode">
-              
-              <option value="master"
-                      selected>
-                master
-              </option>
-              
-              <option value="any"
-                      >
-                any
-              </option>
-              
-            </select>
-            <input type="text" name="placement_extra" class="mono"
-                   value=""
-                   placeholder="extra constraints, comma separated">
-            <button class="btn btn-sm" type="submit">Apply</button>
-          </form>
-          
-          
-          <p class="hint">
-            Pinned to the manager because it has a volume. The autoscaler never moves
-            it, which is what stops a stateful service being deleted with a worker.
-          </p>
-          
-        </div>
-      </section>
-    </div>
+      </div>
+    </section>
 
     <section class="panel">
       <div class="panel-head"><h2>Actions</h2></div>
       <div class="panel-body">
         <div class="btn-row">
+          
+          
+          
+          
+          <form method="post" action="#"
+                data-preview
+                data-confirm="Stop cache? Its services leave the cluster; its files, environment, credentials and volumes stay, and Deploy brings it back.">
+            <input type="hidden" name="csrf" value="preview">
+            <input type="hidden" name="action" value="stop">
+            <button class="btn btn-danger"
+                    type="submit">Stop</button>
+          </form>
+          
+          
+          
           
           
           <form method="post" action="#"
@@ -4108,6 +4536,17 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           
           <form method="post" action="#"
                 data-preview
+                data-confirm="Drop EVERY key in cache? Persistence is on, so the append-only file is rewritten empty too and nothing comes back on a restart. There is no undo and no backup.">
+            <input type="hidden" name="csrf" value="preview">
+            <input type="hidden" name="action" value="purge">
+            <button class="btn btn-danger"
+                    type="submit">Purge data</button>
+          </form>
+          
+          
+          
+          <form method="post" action="#"
+                data-preview
                 data-confirm="Generate a new password and restart the server with it? Anything still using the old one will stop being able to authenticate.">
             <input type="hidden" name="csrf" value="preview">
             <input type="hidden" name="action" value="rotate">
@@ -4118,9 +4557,14 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           
         </div>
         <p class="hint">
+          
           Redeploy re-applies this component's stack. It reads the live image and
           replica count back first, so it will not undo the autoscaler or roll back
           whatever CI last shipped. Nothing outside this component is touched.
+          Stop removes its services from the cluster and keeps everything else —
+          the spec, the environment, the credentials and the volumes are files, not
+          Swarm state.
+          
         </p>
       </div>
     </section>
@@ -4143,9 +4587,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis://default:212c282e0a207aae91d2d57e3ac7a2d9cd25bb9f1fbd3caf@cache_redis:6379</code>
+              <code>redis://default:94955817d68abbe0e7175ef87b28fd335d9c3815e4aa4a0a@cache_redis:6379</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis://default:212c282e0a207aae91d2d57e3ac7a2d9cd25bb9f1fbd3caf@cache_redis:6379">Copy</button>
+                      data-copy-text="redis://default:94955817d68abbe0e7175ef87b28fd335d9c3815e4aa4a0a@cache_redis:6379">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -4156,7 +4600,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="212c282e0a207aae91d2d57e3ac7a2d9cd25bb9f1fbd3caf">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="94955817d68abbe0e7175ef87b28fd335d9c3815e4aa4a0a">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -4182,9 +4626,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="panel-body stack">
           
           <div class="conn">
-            <code>redis://default:212c282e0a207aae91d2d57e3ac7a2d9cd25bb9f1fbd3caf@10.0.0.2:46379</code>
+            <code>redis://default:94955817d68abbe0e7175ef87b28fd335d9c3815e4aa4a0a@10.0.0.2:46379</code>
             <button class="btn btn-sm" type="button" data-copy
-                    data-copy-text="redis://default:212c282e0a207aae91d2d57e3ac7a2d9cd25bb9f1fbd3caf@10.0.0.2:46379">Copy</button>
+                    data-copy-text="redis://default:94955817d68abbe0e7175ef87b28fd335d9c3815e4aa4a0a@10.0.0.2:46379">Copy</button>
           </div>
           <div class="table-wrap">
             <table>
@@ -4269,192 +4713,25 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   <!-- deployments ----------------------------------------------------------->
   
-  <div data-panel="deployments" hidden>
-    
-
-
-<section class="panel">
-  <div class="panel-head">
-    <h2>Currently running</h2>
-    <span class="spacer"></span>
-    <span class="pill ok">
-      converged
-      
-    </span>
-  </div>
-  <div class="rows">
-    <div class="deploy-row ok">
-      <span class="stripe"></span>
-      <span class="src">swarm</span>
-      <span>
-        
-        <span class="row-title mono" title="ghcr.io/acme/aichat-api:sha-4c9920a">
-          aichat-api:sha-4c9920a
-        </span>
-        <span class="row-sub">
-          completed · 6m ago · update completed
-          
-        </span>
-      </span>
-    </div>
-  </div>
-</section>
-
-
-<section class="panel">
-  <div class="panel-head">
-    <h2>CI webhook</h2>
-    <span class="spacer"></span>
-    <span class="pill mute plain">POST</span>
-  </div>
-  <div class="panel-body stack">
-    <div>
-      <div class="eyebrow">Endpoint</div>
-      <div class="conn">
-        <code>https://admin-aichat.acme.dev/hooks/deploy/cache</code>
-        <button class="btn btn-sm" type="button" data-copy data-copy-text="https://admin-aichat.acme.dev/hooks/deploy/cache">Copy</button>
-      </div>
-    </div>
-    <div>
-      <div class="eyebrow">Deploy token — send as <code>X-Deploy-Token</code></div>
-      <div class="conn">
-        <code data-secret-text="preview-token-not-real-000000" class="masked">••••••••••••••••••••</code>
-        <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
-        <button class="btn btn-sm" type="button" data-copy data-copy-text="preview-token-not-real-000000">Copy</button>
-      </div>
-    </div>
-    <div>
-      <div class="eyebrow">Call it from your pipeline</div>
-      <div class="conn">
-        <code style="white-space:pre">curl -fsS -X POST https://admin-aichat.acme.dev/hooks/deploy/cache \
-  -H &#39;X-Deploy-Token: preview-token-not-real-000000&#39; \
-  -H &#39;Content-Type: application/json&#39; \
-  -d &#39;{&#34;image&#34;: &#34;ghcr.io/you/app:sha-&#39;&#34;$GITHUB_SHA&#34;&#39;&#34;}&#39;
-
-# then poll until it is no longer &#39;pending&#39;
-curl -fsS https://admin-aichat.acme.dev/hooks/deploy/cache/status \
-  -H &#39;X-Deploy-Token: preview-token-not-real-000000&#39;</code>
-        <button class="btn btn-sm" type="button" data-copy data-copy-text="curl -fsS -X POST https://admin-aichat.acme.dev/hooks/deploy/cache \
-  -H &#39;X-Deploy-Token: preview-token-not-real-000000&#39; \
-  -H &#39;Content-Type: application/json&#39; \
-  -d &#39;{&#34;image&#34;: &#34;ghcr.io/you/app:sha-&#39;&#34;$GITHUB_SHA&#34;&#39;&#34;}&#39;
-
-# then poll until it is no longer &#39;pending&#39;
-curl -fsS https://admin-aichat.acme.dev/hooks/deploy/cache/status \
-  -H &#39;X-Deploy-Token: preview-token-not-real-000000&#39;">Copy</button>
-      </div>
-    </div>
-    <form method="post" action="#" data-preview
-          data-confirm="Issue a new deploy token? The current one stops working immediately.">
-      <input type="hidden" name="csrf" value="preview">
-      <button class="btn btn-danger btn-sm" type="submit">Regenerate token</button>
-    </form>
-  </div>
-  <div class="panel-note">
-    One token per component, so a leaked staging token cannot reach production.
-    The update is graceful because of the service's own policy, not this endpoint:
-    <code>start-first</code> brings the new task to healthy before stopping the old one,
-    <code>monitor</code> gives it time to boot before Swarm judges it, and a failure rolls
-    back automatically. The call waits for that and returns <code>502</code> if Swarm
-    rolled the deploy back, so a bad image fails your pipeline instead of quietly
-    reverting. <strong>:latest is rejected</strong> — Swarm compares the reference
-    string, so an unchanged tag is a silent no-op.
-    If the panel is behind Cloudflare Access, exempt this path or give CI a service token.
-  </div>
-</section>
-
-<section class="panel">
-  <div class="panel-head">
-    <h2>Registry credentials</h2>
-    <span class="spacer"></span>
-    <span class="eyebrow">2 logged in</span>
-  </div>
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>Registry</th><th>Username</th></tr></thead>
-      <tbody>
-        
-        <tr><td class="mono">ghcr.io</td><td class="mono">acme-bot</td></tr>
-        
-        <tr><td class="mono">registry.gitlab.com</td><td class="mono">deploy-token-91</td></tr>
-        
-      </tbody>
-    </table>
-  </div>
-  <form method="post" action="#" data-preview>
-    <input type="hidden" name="csrf" value="preview">
-    <input type="hidden" name="component" value="cache">
-    <div class="setting-row">
-      <label for="reg-host">Registry</label>
-      <input id="reg-host" type="text" name="registry" value="ghcr.io" placeholder="ghcr.io">
-      <p class="why">Any registry: <code>ghcr.io</code>, <code>registry.gitlab.com</code>,
-         <code>docker.io</code>, or your own.</p>
-    </div>
-    <div class="setting-row">
-      <label for="reg-user">Username</label>
-      <input id="reg-user" type="text" name="username" placeholder="github-username">
-    </div>
-    <div class="setting-row">
-      <label for="reg-pass">Password or token</label>
-      <input id="reg-pass" type="password" name="password" placeholder="PAT with read:packages">
-      <p class="why">Sent on stdin to <code>docker login</code>, never on the command line.</p>
-    </div>
-    <div class="panel-body tight-top">
-      <button class="btn btn-primary" type="submit">Save credentials</button>
-    </div>
-  </form>
-  <div class="panel-note">
-    Stored in the docker config the panel shares with the host, which is what
-    <code>--with-registry-auth</code> ships to workers with the service spec. That is why
-    a worker created an hour from now can still pull your private image — it never talks
-    to the registry with its own credentials.
-  </div>
-</section>
-
-<section class="panel">
-  <div class="panel-head"><h2>Deploy an image now</h2></div>
-  <form method="post" action="#" data-preview>
-    <input type="hidden" name="csrf" value="preview">
-    <input type="hidden" name="action" value="deploy-image">
-    <div class="setting-row">
-      <label for="img-now">Image reference</label>
-      <input id="img-now" type="text" name="image"
-             value="redis:7.4-alpine">
-      <p class="why">The same path CI takes. Must be an immutable tag.</p>
-    </div>
-    <div class="panel-body tight-top">
-      <button class="btn btn-primary" type="submit">Deploy</button>
-    </div>
-  </form>
-</section>
-
-<section class="panel">
-  <div class="panel-head">
-    <h2>History</h2>
-    <span class="spacer"></span>
-    <span class="eyebrow">0 recorded</span>
-  </div>
-  <div class="rows">
-    
-    <div class="empty">Nothing deployed through the panel or the webhook yet.</div>
-    
-  </div>
-</section>
-  </div>
-  
 
   <!-- settings -------------------------------------------------------------->
+  <!-- map --------------------------------------------------------------->
+  
+
   
   <div data-panel="settings" hidden>
     <form method="post" action="#" data-preview>
       <input type="hidden" name="csrf" value="preview">
-      <section class="panel">
-        <div class="panel-head"><h2>Configuration</h2></div>
-        <div class="panel-body">
-          <div class="grid-2">
-            
-              
-              
+      
+        
+<section class="panel">
+  <div class="panel-head"><h2>Configuration</h2></div>
+  <div class="panel-body">
+    <div class="grid-2">
+      
+      
+        
+        
 <div class="field">
   <label for="f-placement_mode">Placement</label>
 
@@ -4471,9 +4748,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/cache/status \
 
   <p class="hint">This has a VOLUME, and a volume lives on one machine. `master` keeps it on the node that will not be deleted. `any` lets Swarm place it anywhere — including a worker the autoscaler deletes later, taking the data with it. Only useful if you have moved the data yourself.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-placement_extra">Extra constraints</label>
 
@@ -4490,9 +4767,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/cache/status \
 
   <p class="hint">Comma separated, added to whatever the mode implies.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-version">Version</label>
 
@@ -4511,9 +4788,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/cache/status \
 
   <p class="hint">Changing this restarts the server. The volume survives.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-maxmemory_mb">Max memory (MB)</label>
 
@@ -4530,9 +4807,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/cache/status \
 
   <p class="hint">Redis evicts above this. Keep it below the memory limit or the container is OOM-killed before Redis ever starts evicting.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-maxmemory_policy">Eviction policy</label>
 
@@ -4555,9 +4832,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/cache/status \
 
   <p class="hint">`noeviction` turns a full cache into write errors — correct for a queue, wrong for a cache.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-appendonly">Persist to disk (AOF)</label>
 
@@ -4574,9 +4851,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/cache/status \
 
   
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-external_port">Published port</label>
 
@@ -4593,9 +4870,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/cache/status \
 
   <p class="hint">Optional. Publishes Redis on the master at this port for an external client. The firewall still denies it until you open it on the component&#39;s page.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-exporter">Metrics exporter</label>
 
@@ -4612,9 +4889,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/cache/status \
 
   
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-cpu_reservation">CPU reserved</label>
 
@@ -4631,9 +4908,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/cache/status \
 
   
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-memory_reservation_mb">Memory reserved (MB)</label>
 
@@ -4650,37 +4927,29 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/cache/status \
 
   <p class="hint">Must exceed max memory with room for Redis itself and its AOF buffer, or eviction never gets the chance to run.</p>
 </div>
-            
-          </div>
-        </div>
-        <div class="panel-note">
-          Saving redeploys this component. The live image, replica count, placement
-          and resource sizing are read back first and preserved, so changing a
-          setting here will not roll back your last deploy or undo the autoscaler.
-        </div>
-      </section>
-
-      
       
 
       
-      <section class="panel">
-        <div class="panel-head"><h2>Managed for you</h2></div>
-        <div class="panel-body">
-          <div class="rows">
-            
-            
-          </div>
-        </div>
-        <div class="panel-note">
-          <b>ci</b> — set by whatever last deployed you.
-          <b>autoscaler</b> — measured from what this component actually uses and
-          re-sized as that changes; a reservation set from real usage is what lets
-          the master carry the load on its own and the worker fleet drop to zero.
-          <b>convention</b> — a fixed default; override it with a deploy label if
-          your app really differs.
-        </div>
-      </section>
+      
+    </div>
+  </div>
+  
+  
+  <div class="panel-note">
+    Saving redeploys this component. The live image, replica count, placement
+    and resource sizing are read back first and preserved, so changing a
+    setting here will not roll back your last deploy or undo the autoscaler.
+  </div>
+  
+</section>
+
+
+
+      
+
+      
+      
+      
 
       <div class="sticky-save">
         <button class="btn btn-primary" type="submit">Save and deploy</button>
@@ -4742,6 +5011,546 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/cache/status \
         
       </section>
       
+      <section data-view="component-documents" hidden>
+        
+          
+<div class="page-head">
+  <div>
+    <div class="eyebrow"><a href="#view-components">Components</a></div>
+    <h1>documents</h1>
+    <p class="hint">An authenticated MongoDB, with its own volume.</p>
+    
+    
+    
+    
+  </div>
+  <div class="head-side">
+    <div class="head-pills">
+      <span class="pill mute">not deployed</span>
+      <span class="pill mute plain">MongoDB</span>
+    </div>
+    
+  </div>
+</div>
+
+<div class="tabs" data-tabs role="tablist">
+  
+  
+  <a class="tab" role="tab" data-tab="overview" href="#view-component-documents"
+     
+     aria-selected="false">Overview</a>
+  
+  
+  <a class="tab" role="tab" data-tab="credentials" href="#view-component-documents"
+     
+     aria-selected="true">Credentials</a>
+  
+  
+  <a class="tab" role="tab" data-tab="settings" href="#view-component-documents"
+     
+     aria-selected="false">Settings</a>
+  
+  
+  <a class="tab" role="tab" data-tab="logs" href="#view-component-documents"
+     
+     aria-selected="false">Logs</a>
+  
+</div>
+
+<div data-panels>
+
+  <!-- overview -------------------------------------------------------------->
+  <div data-panel="overview" hidden>
+    <div class="tiles">
+      <div class="tile">
+        <div class="eyebrow">Replicas</div>
+        <div class="v">0<span class="of">/0</span></div>
+      </div>
+      <div class="tile">
+        <div class="eyebrow">State</div>
+        <div class="v"><span class="pill mute">not deployed</span></div>
+      </div>
+      <div class="tile">
+        <div class="eyebrow">Created</div>
+        <div class="v small mono">
+          
+          <time datetime="2026-08-25T03:09:11Z" data-localtime>2026-08-25T03:09:11Z</time>
+          
+        </div>
+      </div>
+      <div class="tile">
+        <div class="eyebrow">Updated</div>
+        <div class="v small">—</div>
+      </div>
+    </div>
+
+    
+    <section class="panel">
+      <div class="panel-head"><h2>How to reach it</h2></div>
+      <div class="panel-body stack">
+        <div class="conn">
+          <code>documents_mongo:27017</code>
+          <button class="btn btn-sm" type="button" data-copy
+                  data-copy-text="documents_mongo:27017">Copy</button>
+        </div>
+        <p class="hint">Reachable from any component on the edge network by this name. Do not put it behind the tunnel — the tunnel speaks HTTP.</p>
+      </div>
+    </section>
+    
+
+    <section class="panel">
+      <div class="panel-head"><h2>Services</h2></div>
+      <div class="panel-body">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Service</th><th>Image</th><th>Running</th><th>State</th></tr></thead>
+            <tbody>
+              
+              <tr>
+                <td class="mono">documents_mongo</td>
+                <td class="mono small">—</td>
+                <td class="num">0/0</td>
+                <td><span class="pill mute">missing</span></td>
+              </tr>
+              
+              <tr>
+                <td class="mono">documents_mongo-exporter</td>
+                <td class="mono small">—</td>
+                <td class="num">0/0</td>
+                <td><span class="pill mute">missing</span></td>
+              </tr>
+              
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Actions</h2></div>
+      <div class="panel-body">
+        <div class="btn-row">
+          
+          
+          
+          
+          
+          
+          <form method="post" action="#"
+                data-preview
+                >
+            <input type="hidden" name="csrf" value="preview">
+            <input type="hidden" name="action" value="start">
+            <button class="btn btn-primary"
+                    type="submit">Deploy</button>
+          </form>
+          
+          
+          
+          
+          
+          
+          
+          
+        </div>
+        <p class="hint">
+          
+          Nothing of this component is running. Its files are still here, so Deploy
+          brings it back exactly as it was; delete it from Settings if you want it
+          gone for good.
+          
+        </p>
+      </div>
+    </section>
+  </div>
+
+  <!-- environment ----------------------------------------------------------->
+  
+
+  <!-- credentials ----------------------------------------------------------->
+  
+  <div data-panel="credentials" >
+    <div class="split">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Internal</h2>
+          <span class="spacer"></span>
+          <span class="pill ok plain">in-cluster</span>
+        </div>
+        <div class="panel-body stack">
+          <div>
+            <div class="eyebrow">Connection URL</div>
+            <div class="conn">
+              <code>mongodb://root:3bd7bd78bdfde98e7f9bb430995b5b0a626f234938e1bae3@documents_mongo:27017/?authSource=admin</code>
+              <button class="btn btn-sm" type="button" data-copy
+                      data-copy-text="mongodb://root:3bd7bd78bdfde98e7f9bb430995b5b0a626f234938e1bae3@documents_mongo:27017/?authSource=admin">Copy</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <tbody>
+                <tr><th>Host</th><td class="mono">documents_mongo</td></tr>
+                <tr><th>Port</th><td class="mono">27017</td></tr>
+                <tr>
+                  <th>Password</th>
+                  <td class="secret-val">
+                    <code class="masked mono" data-secret-text="3bd7bd78bdfde98e7f9bb430995b5b0a626f234938e1bae3">••••••••••••</code>
+                    <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="hint">
+            Reachable from any component on the edge network. This password is stored
+            in <code>components/documents/secret.env</code> and injected into
+            this service alone — nothing else in the cluster holds a copy, and nothing
+            is written into any application's environment for you.
+          </p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>External</h2>
+          <span class="spacer"></span>
+          <span class="pill mute plain">
+            not published</span>
+        </div>
+        <div class="panel-body stack">
+          
+          <p class="muted">
+            Not published. Set a port in Settings to expose it on the master's private
+            address — then open the firewall below, deliberately.
+          </p>
+          
+
+          
+        </div>
+      </section>
+    </div>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Change the password</h2></div>
+      <form method="post" action="#"
+            data-preview>
+        <input type="hidden" name="csrf" value="preview">
+        <div class="panel-body">
+          
+          <div class="field">
+            <label for="s-MONGO_PASSWORD">Password</label>
+            <input id="s-MONGO_PASSWORD" type="text" name="MONGO_PASSWORD"
+                   autocomplete="off" spellcheck="false"
+                   placeholder="leave blank to keep the current one">
+            <p class="hint">Leave blank to generate a strong one. Set it yourself if you are moving an existing database and its clients already know the password.</p>
+          </div>
+          
+          <div class="btn-row">
+            <button class="btn btn-primary" type="submit">Save and restart</button>
+          </div>
+        </div>
+      </form>
+      <div class="panel-note">
+        Saving restarts this component with the new password and touches nothing
+        else. Your own clients need the new URL — nothing in the cluster holds a
+        copy to update.
+      </div>
+    </section>
+
+    <section class="panel danger-zone">
+      <div class="panel-head"><h2>Rotate</h2></div>
+      <div class="panel-body">
+        <form method="post" action="#"
+              data-preview
+              data-confirm="Generate a new password and restart documents with it? Anything still using the old one will stop being able to authenticate.">
+          <input type="hidden" name="csrf" value="preview">
+          <input type="hidden" name="regenerate" value="1">
+          <button class="btn btn-danger" type="submit">Generate a new password</button>
+        </form>
+        <p class="hint">
+          The same thing as the form above with a random value — there when you do
+          not want to think of one.
+        </p>
+      </div>
+    </section>
+  </div>
+  
+
+  <!-- deployments ----------------------------------------------------------->
+  
+
+  <!-- settings -------------------------------------------------------------->
+  <!-- map --------------------------------------------------------------->
+  
+
+  
+  <div data-panel="settings" hidden>
+    <form method="post" action="#" data-preview>
+      <input type="hidden" name="csrf" value="preview">
+      
+        
+<section class="panel">
+  <div class="panel-head"><h2>Configuration</h2></div>
+  <div class="panel-body">
+    <div class="grid-2">
+      
+      
+        
+        
+<div class="field">
+  <label for="f-placement_mode">Placement</label>
+
+  
+    <select id="f-placement_mode" name="placement_mode">
+      
+      <option value="master" selected>master</option>
+      
+      <option value="any" >any</option>
+      
+    </select>
+
+  
+
+  <p class="hint">This has a VOLUME, and a volume lives on one machine. `master` keeps it on the node that will not be deleted. `any` lets Swarm place it anywhere — including a worker the autoscaler deletes later, taking the data with it.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-placement_extra">Extra constraints</label>
+
+  
+    <input id="f-placement_extra" name="placement_extra"
+           type="text"
+           
+           
+           
+           
+           placeholder="node.labels.disk == ssd"
+           value="">
+  
+
+  <p class="hint">Comma separated, added to whatever the mode implies.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-version">Version</label>
+
+  
+    <select id="f-version" name="version">
+      
+      <option value="7.0" selected>7.0</option>
+      
+      <option value="6.0" >6.0</option>
+      
+      <option value="5.0" >5.0</option>
+      
+    </select>
+
+  
+
+  <p class="hint">Changing this restarts the server. The volume survives, but Mongo only upgrades one major version at a time — go 5 to 6 to 7, never 5 to 7.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-username">Root username</label>
+
+  
+    <input id="f-username" name="username"
+           type="text"
+           
+           
+           
+           required
+           
+           value="root">
+  
+
+  <p class="hint">The initial administrative user. It is created on the FIRST start only, from the empty volume; changing it later does nothing until the data directory is empty again.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-cache_mb">WiredTiger cache (MB)</label>
+
+  
+    <input id="f-cache_mb" name="cache_mb"
+           type="number"
+           
+           min="64"
+           max="131072"
+           required
+           
+           value="256">
+  
+
+  <p class="hint">Mongo&#39;s own data cache. Left unset it is sized from the HOST&#39;s RAM and ignores this container&#39;s limit entirely, which is how a small Mongo gets OOM-killed on a large machine.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-external_port">Published port</label>
+
+  
+    <input id="f-external_port" name="external_port"
+           type="number"
+           
+           min="1024"
+           max="65535"
+           
+           
+           value="">
+  
+
+  <p class="hint">Optional. Publishes Mongo on the master at this port for an external client. The firewall still denies it until you open it on the component&#39;s page.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-exporter">Metrics exporter</label>
+
+  
+    
+    <input type="hidden" name="__bool__" value="exporter">
+    <label class="check">
+      <input type="checkbox" id="f-exporter" name="exporter" value="true"
+             checked>
+      <span>Runs mongodb_exporter alongside it so Grafana has connections, operation counters and replication lag.</span>
+    </label>
+
+  
+
+  
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-cpu_reservation">CPU reserved</label>
+
+  
+    <input id="f-cpu_reservation" name="cpu_reservation"
+           type="number"
+           step="0.05"
+           min="0.01"
+           max="32"
+           required
+           
+           value="0.3">
+  
+
+  
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-memory_reservation_mb">Memory reserved (MB)</label>
+
+  
+    <input id="f-memory_reservation_mb" name="memory_reservation_mb"
+           type="number"
+           
+           min="64"
+           max="131072"
+           required
+           
+           value="768">
+  
+
+  <p class="hint">Must exceed the WiredTiger cache with room for connections, indexes being built and the server itself.</p>
+</div>
+      
+
+      
+      
+    </div>
+  </div>
+  
+  
+  <div class="panel-note">
+    Saving redeploys this component. The live image, replica count, placement
+    and resource sizing are read back first and preserved, so changing a
+    setting here will not roll back your last deploy or undo the autoscaler.
+  </div>
+  
+</section>
+
+
+
+      
+
+      
+      
+      
+
+      <div class="sticky-save">
+        <button class="btn btn-primary" type="submit">Save and deploy</button>
+        <a class="btn" href="#view-component-documents">Cancel</a>
+      </div>
+    </form>
+
+    <section class="panel danger-zone">
+      <div class="panel-head"><h2>Delete</h2></div>
+      <div class="panel-body stack">
+        <p class="hint">
+          Removes the stack and this component's files. Other components, the
+          infrastructure and the tunnel are untouched.
+          
+          The volume <code>documents-data</code> is <strong>kept</strong> —
+          a mistyped delete should cost you a redeploy, not your data.
+          
+        </p>
+        <form method="post" action="#" class="inline"
+              data-preview>
+          <input type="hidden" name="csrf" value="preview">
+          <input type="text" name="confirm" placeholder="type documents to confirm"
+                 aria-label="Type the component name to confirm" autocomplete="off">
+          <button class="btn btn-danger" type="submit">Delete documents</button>
+        </form>
+      </div>
+    </section>
+  </div>
+  
+
+  <!-- logs ------------------------------------------------------------------>
+  
+  <div data-panel="logs" hidden>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Logs</h2>
+        <span class="spacer"></span>
+        <span class="muted mono">documents_mongo</span>
+      </div>
+      <div class="panel-body">
+        <pre class="logs">2026-08-12T14:02:11.881Z INFO  [main] com.acme.aichat.Application - Ktor started on 0.0.0.0:8080
+2026-08-12T14:02:11.902Z INFO  [main] com.acme.aichat.Redis - connected to cache_redis:6379
+2026-08-12T14:04:38.117Z INFO  [eventLoop-3] com.acme.aichat.Chat - completion in 812ms (model=gpt-4o-mini)
+2026-08-12T14:05:02.559Z WARN  [eventLoop-1] com.acme.aichat.RateLimit - throttled tenant=acme-9931
+2026-08-12T14:06:44.230Z INFO  [eventLoop-7] com.acme.aichat.Chat - completion in 1.4s (model=gpt-4o)
+2026-08-12T14:07:19.004Z ERROR [eventLoop-2] com.acme.aichat.Upload - stream closed before EOF
+2026-08-12T14:09:55.771Z INFO  [eventLoop-5] com.acme.aichat.Health - ok
+</pre>
+        <p class="hint">
+          The last 200 lines, straight from the daemon. Everything is also in Loki —
+          use Grafana for search, filters and anything older than this.
+        </p>
+      </div>
+    </section>
+  </div>
+  
+
+</div>
+        
+      </section>
+      
       <section data-view="component-sessions" hidden>
         
           
@@ -4750,6 +5559,8 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/cache/status \
     <div class="eyebrow"><a href="#view-components">Components</a></div>
     <h1>sessions</h1>
     <p class="hint">A password-protected Redis, with its own volume.</p>
+    
+    
     
     
     <p class="head-image">
@@ -4816,7 +5627,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/cache/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-22T07:17:17Z" data-localtime>2026-08-22T07:17:17Z</time>
+          <time datetime="2026-08-25T03:09:11Z" data-localtime>2026-08-25T03:09:11Z</time>
           
         </div>
       </div>
@@ -4840,75 +5651,46 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/cache/status \
     </section>
     
 
-    <div class="split">
-      <section class="panel">
-        <div class="panel-head"><h2>Services</h2></div>
-        <div class="panel-body">
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>Service</th><th>Image</th><th>Running</th><th>State</th></tr></thead>
-              <tbody>
-                
-                <tr>
-                  <td class="mono">sessions_redis</td>
-                  <td class="mono small">redis:7.2-alpine</td>
-                  <td class="num">1/1</td>
-                  <td><span class="pill ok">healthy</span></td>
-                </tr>
-                
-              </tbody>
-            </table>
-          </div>
+    <section class="panel">
+      <div class="panel-head"><h2>Services</h2></div>
+      <div class="panel-body">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Service</th><th>Image</th><th>Running</th><th>State</th></tr></thead>
+            <tbody>
+              
+              <tr>
+                <td class="mono">sessions_redis</td>
+                <td class="mono small">redis:7.2-alpine</td>
+                <td class="num">1/1</td>
+                <td><span class="pill ok">healthy</span></td>
+              </tr>
+              
+            </tbody>
+          </table>
         </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head"><h2>Placement</h2></div>
-        <div class="panel-body stack">
-          
-            <div class="mono">node.role == manager</div>
-          
-
-          
-          
-          
-          <form method="post" action="#" class="inline-form"
-                data-preview>
-            <input type="hidden" name="csrf" value="preview">
-            <label class="sr-only" for="pm-sessions">Placement mode</label>
-            <select id="pm-sessions" name="placement_mode">
-              
-              <option value="master"
-                      selected>
-                master
-              </option>
-              
-              <option value="any"
-                      >
-                any
-              </option>
-              
-            </select>
-            <input type="text" name="placement_extra" class="mono"
-                   value=""
-                   placeholder="extra constraints, comma separated">
-            <button class="btn btn-sm" type="submit">Apply</button>
-          </form>
-          
-          
-          <p class="hint">
-            Pinned to the manager because it has a volume. The autoscaler never moves
-            it, which is what stops a stateful service being deleted with a worker.
-          </p>
-          
-        </div>
-      </section>
-    </div>
+      </div>
+    </section>
 
     <section class="panel">
       <div class="panel-head"><h2>Actions</h2></div>
       <div class="panel-body">
         <div class="btn-row">
+          
+          
+          
+          
+          <form method="post" action="#"
+                data-preview
+                data-confirm="Stop sessions? Its services leave the cluster; its files, environment, credentials and volumes stay, and Deploy brings it back.">
+            <input type="hidden" name="csrf" value="preview">
+            <input type="hidden" name="action" value="stop">
+            <button class="btn btn-danger"
+                    type="submit">Stop</button>
+          </form>
+          
+          
+          
           
           
           <form method="post" action="#"
@@ -4935,6 +5717,17 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/cache/status \
           
           <form method="post" action="#"
                 data-preview
+                data-confirm="Drop EVERY key in sessions? Persistence is on, so the append-only file is rewritten empty too and nothing comes back on a restart. There is no undo and no backup.">
+            <input type="hidden" name="csrf" value="preview">
+            <input type="hidden" name="action" value="purge">
+            <button class="btn btn-danger"
+                    type="submit">Purge data</button>
+          </form>
+          
+          
+          
+          <form method="post" action="#"
+                data-preview
                 data-confirm="Generate a new password and restart the server with it? Anything still using the old one will stop being able to authenticate.">
             <input type="hidden" name="csrf" value="preview">
             <input type="hidden" name="action" value="rotate">
@@ -4945,9 +5738,14 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/cache/status \
           
         </div>
         <p class="hint">
+          
           Redeploy re-applies this component's stack. It reads the live image and
           replica count back first, so it will not undo the autoscaler or roll back
           whatever CI last shipped. Nothing outside this component is touched.
+          Stop removes its services from the cluster and keeps everything else —
+          the spec, the environment, the credentials and the volumes are files, not
+          Swarm state.
+          
         </p>
       </div>
     </section>
@@ -4970,9 +5768,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/cache/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis://default:3c00274ef1777b63ec03441184e5ad7720265ddd43edf1e8@sessions_redis:6379</code>
+              <code>redis://default:17392bbde14da88ae1d76261e6baa8bfdd69e8d859e88594@sessions_redis:6379</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis://default:3c00274ef1777b63ec03441184e5ad7720265ddd43edf1e8@sessions_redis:6379">Copy</button>
+                      data-copy-text="redis://default:17392bbde14da88ae1d76261e6baa8bfdd69e8d859e88594@sessions_redis:6379">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -4983,7 +5781,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/cache/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="3c00274ef1777b63ec03441184e5ad7720265ddd43edf1e8">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="17392bbde14da88ae1d76261e6baa8bfdd69e8d859e88594">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -5067,192 +5865,25 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/cache/status \
 
   <!-- deployments ----------------------------------------------------------->
   
-  <div data-panel="deployments" hidden>
-    
-
-
-<section class="panel">
-  <div class="panel-head">
-    <h2>Currently running</h2>
-    <span class="spacer"></span>
-    <span class="pill ok">
-      converged
-      
-    </span>
-  </div>
-  <div class="rows">
-    <div class="deploy-row ok">
-      <span class="stripe"></span>
-      <span class="src">swarm</span>
-      <span>
-        
-        <span class="row-title mono" title="ghcr.io/acme/aichat-api:sha-4c9920a">
-          aichat-api:sha-4c9920a
-        </span>
-        <span class="row-sub">
-          completed · 6m ago · update completed
-          
-        </span>
-      </span>
-    </div>
-  </div>
-</section>
-
-
-<section class="panel">
-  <div class="panel-head">
-    <h2>CI webhook</h2>
-    <span class="spacer"></span>
-    <span class="pill mute plain">POST</span>
-  </div>
-  <div class="panel-body stack">
-    <div>
-      <div class="eyebrow">Endpoint</div>
-      <div class="conn">
-        <code>https://admin-aichat.acme.dev/hooks/deploy/sessions</code>
-        <button class="btn btn-sm" type="button" data-copy data-copy-text="https://admin-aichat.acme.dev/hooks/deploy/sessions">Copy</button>
-      </div>
-    </div>
-    <div>
-      <div class="eyebrow">Deploy token — send as <code>X-Deploy-Token</code></div>
-      <div class="conn">
-        <code data-secret-text="preview-token-not-real-000000" class="masked">••••••••••••••••••••</code>
-        <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
-        <button class="btn btn-sm" type="button" data-copy data-copy-text="preview-token-not-real-000000">Copy</button>
-      </div>
-    </div>
-    <div>
-      <div class="eyebrow">Call it from your pipeline</div>
-      <div class="conn">
-        <code style="white-space:pre">curl -fsS -X POST https://admin-aichat.acme.dev/hooks/deploy/sessions \
-  -H &#39;X-Deploy-Token: preview-token-not-real-000000&#39; \
-  -H &#39;Content-Type: application/json&#39; \
-  -d &#39;{&#34;image&#34;: &#34;ghcr.io/you/app:sha-&#39;&#34;$GITHUB_SHA&#34;&#39;&#34;}&#39;
-
-# then poll until it is no longer &#39;pending&#39;
-curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
-  -H &#39;X-Deploy-Token: preview-token-not-real-000000&#39;</code>
-        <button class="btn btn-sm" type="button" data-copy data-copy-text="curl -fsS -X POST https://admin-aichat.acme.dev/hooks/deploy/sessions \
-  -H &#39;X-Deploy-Token: preview-token-not-real-000000&#39; \
-  -H &#39;Content-Type: application/json&#39; \
-  -d &#39;{&#34;image&#34;: &#34;ghcr.io/you/app:sha-&#39;&#34;$GITHUB_SHA&#34;&#39;&#34;}&#39;
-
-# then poll until it is no longer &#39;pending&#39;
-curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
-  -H &#39;X-Deploy-Token: preview-token-not-real-000000&#39;">Copy</button>
-      </div>
-    </div>
-    <form method="post" action="#" data-preview
-          data-confirm="Issue a new deploy token? The current one stops working immediately.">
-      <input type="hidden" name="csrf" value="preview">
-      <button class="btn btn-danger btn-sm" type="submit">Regenerate token</button>
-    </form>
-  </div>
-  <div class="panel-note">
-    One token per component, so a leaked staging token cannot reach production.
-    The update is graceful because of the service's own policy, not this endpoint:
-    <code>start-first</code> brings the new task to healthy before stopping the old one,
-    <code>monitor</code> gives it time to boot before Swarm judges it, and a failure rolls
-    back automatically. The call waits for that and returns <code>502</code> if Swarm
-    rolled the deploy back, so a bad image fails your pipeline instead of quietly
-    reverting. <strong>:latest is rejected</strong> — Swarm compares the reference
-    string, so an unchanged tag is a silent no-op.
-    If the panel is behind Cloudflare Access, exempt this path or give CI a service token.
-  </div>
-</section>
-
-<section class="panel">
-  <div class="panel-head">
-    <h2>Registry credentials</h2>
-    <span class="spacer"></span>
-    <span class="eyebrow">2 logged in</span>
-  </div>
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>Registry</th><th>Username</th></tr></thead>
-      <tbody>
-        
-        <tr><td class="mono">ghcr.io</td><td class="mono">acme-bot</td></tr>
-        
-        <tr><td class="mono">registry.gitlab.com</td><td class="mono">deploy-token-91</td></tr>
-        
-      </tbody>
-    </table>
-  </div>
-  <form method="post" action="#" data-preview>
-    <input type="hidden" name="csrf" value="preview">
-    <input type="hidden" name="component" value="sessions">
-    <div class="setting-row">
-      <label for="reg-host">Registry</label>
-      <input id="reg-host" type="text" name="registry" value="ghcr.io" placeholder="ghcr.io">
-      <p class="why">Any registry: <code>ghcr.io</code>, <code>registry.gitlab.com</code>,
-         <code>docker.io</code>, or your own.</p>
-    </div>
-    <div class="setting-row">
-      <label for="reg-user">Username</label>
-      <input id="reg-user" type="text" name="username" placeholder="github-username">
-    </div>
-    <div class="setting-row">
-      <label for="reg-pass">Password or token</label>
-      <input id="reg-pass" type="password" name="password" placeholder="PAT with read:packages">
-      <p class="why">Sent on stdin to <code>docker login</code>, never on the command line.</p>
-    </div>
-    <div class="panel-body tight-top">
-      <button class="btn btn-primary" type="submit">Save credentials</button>
-    </div>
-  </form>
-  <div class="panel-note">
-    Stored in the docker config the panel shares with the host, which is what
-    <code>--with-registry-auth</code> ships to workers with the service spec. That is why
-    a worker created an hour from now can still pull your private image — it never talks
-    to the registry with its own credentials.
-  </div>
-</section>
-
-<section class="panel">
-  <div class="panel-head"><h2>Deploy an image now</h2></div>
-  <form method="post" action="#" data-preview>
-    <input type="hidden" name="csrf" value="preview">
-    <input type="hidden" name="action" value="deploy-image">
-    <div class="setting-row">
-      <label for="img-now">Image reference</label>
-      <input id="img-now" type="text" name="image"
-             value="redis:7.2-alpine">
-      <p class="why">The same path CI takes. Must be an immutable tag.</p>
-    </div>
-    <div class="panel-body tight-top">
-      <button class="btn btn-primary" type="submit">Deploy</button>
-    </div>
-  </form>
-</section>
-
-<section class="panel">
-  <div class="panel-head">
-    <h2>History</h2>
-    <span class="spacer"></span>
-    <span class="eyebrow">0 recorded</span>
-  </div>
-  <div class="rows">
-    
-    <div class="empty">Nothing deployed through the panel or the webhook yet.</div>
-    
-  </div>
-</section>
-  </div>
-  
 
   <!-- settings -------------------------------------------------------------->
+  <!-- map --------------------------------------------------------------->
+  
+
   
   <div data-panel="settings" hidden>
     <form method="post" action="#" data-preview>
       <input type="hidden" name="csrf" value="preview">
-      <section class="panel">
-        <div class="panel-head"><h2>Configuration</h2></div>
-        <div class="panel-body">
-          <div class="grid-2">
-            
-              
-              
+      
+        
+<section class="panel">
+  <div class="panel-head"><h2>Configuration</h2></div>
+  <div class="panel-body">
+    <div class="grid-2">
+      
+      
+        
+        
 <div class="field">
   <label for="f-placement_mode">Placement</label>
 
@@ -5269,9 +5900,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">This has a VOLUME, and a volume lives on one machine. `master` keeps it on the node that will not be deleted. `any` lets Swarm place it anywhere — including a worker the autoscaler deletes later, taking the data with it. Only useful if you have moved the data yourself.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-placement_extra">Extra constraints</label>
 
@@ -5288,9 +5919,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">Comma separated, added to whatever the mode implies.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-version">Version</label>
 
@@ -5309,9 +5940,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">Changing this restarts the server. The volume survives.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-maxmemory_mb">Max memory (MB)</label>
 
@@ -5328,9 +5959,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">Redis evicts above this. Keep it below the memory limit or the container is OOM-killed before Redis ever starts evicting.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-maxmemory_policy">Eviction policy</label>
 
@@ -5353,9 +5984,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">`noeviction` turns a full cache into write errors — correct for a queue, wrong for a cache.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-appendonly">Persist to disk (AOF)</label>
 
@@ -5372,9 +6003,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-external_port">Published port</label>
 
@@ -5391,9 +6022,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">Optional. Publishes Redis on the master at this port for an external client. The firewall still denies it until you open it on the component&#39;s page.</p>
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-exporter">Metrics exporter</label>
 
@@ -5410,9 +6041,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-cpu_reservation">CPU reserved</label>
 
@@ -5429,9 +6060,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   
 </div>
-            
-              
-              
+      
+        
+        
 <div class="field">
   <label for="f-memory_reservation_mb">Memory reserved (MB)</label>
 
@@ -5448,37 +6079,29 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">Must exceed max memory with room for Redis itself and its AOF buffer, or eviction never gets the chance to run.</p>
 </div>
-            
-          </div>
-        </div>
-        <div class="panel-note">
-          Saving redeploys this component. The live image, replica count, placement
-          and resource sizing are read back first and preserved, so changing a
-          setting here will not roll back your last deploy or undo the autoscaler.
-        </div>
-      </section>
-
-      
       
 
       
-      <section class="panel">
-        <div class="panel-head"><h2>Managed for you</h2></div>
-        <div class="panel-body">
-          <div class="rows">
-            
-            
-          </div>
-        </div>
-        <div class="panel-note">
-          <b>ci</b> — set by whatever last deployed you.
-          <b>autoscaler</b> — measured from what this component actually uses and
-          re-sized as that changes; a reservation set from real usage is what lets
-          the master carry the load on its own and the worker fleet drop to zero.
-          <b>convention</b> — a fixed default; override it with a deploy label if
-          your app really differs.
-        </div>
-      </section>
+      
+    </div>
+  </div>
+  
+  
+  <div class="panel-note">
+    Saving redeploys this component. The live image, replica count, placement
+    and resource sizing are read back first and preserved, so changing a
+    setting here will not roll back your last deploy or undo the autoscaler.
+  </div>
+  
+</section>
+
+
+
+      
+
+      
+      
+      
 
       <div class="sticky-save">
         <button class="btn btn-primary" type="submit">Save and deploy</button>
@@ -5579,13 +6202,16 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
     </div>
   </section>
 
-  <section class="panel">
-    <div class="panel-head"><h2>Configuration</h2></div>
-    <div class="panel-body">
-      <div class="grid-2">
+  
+    
+<section class="panel">
+  <div class="panel-head"><h2>Configuration</h2></div>
+  <div class="panel-body">
+    <div class="grid-2">
+      
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-image">Image</label>
 
@@ -5602,9 +6228,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">Pin a tag or digest. `latest` is refused: the next deploy would be a different build wearing the same name.</p>
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-port">Port</label>
 
@@ -5621,9 +6247,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">The port your app listens on inside the container.</p>
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-health_path">Health path</label>
 
@@ -5640,9 +6266,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">Checked with wget every 10s. Blank disables the healthcheck — then a broken deploy rolls forward instead of rolling back.</p>
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-metrics_path">Metrics path</label>
 
@@ -5659,9 +6285,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">Prometheus endpoint. Blank stops it being scraped, which also removes the latency signal the autoscaler prefers.</p>
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-start_period">Startup grace</label>
 
@@ -5678,9 +6304,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">Seconds before a failing healthcheck counts. A JVM needs 60.</p>
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-replicas">Replicas</label>
 
@@ -5697,9 +6323,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">The count deployed now. Once autoscaling is on, the autoscaler owns this number and a deploy preserves whatever is live.</p>
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-cpu_reservation">CPU reserved</label>
 
@@ -5716,9 +6342,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">What Swarm subtracts when placing a task, and the unit the autoscaler sizes nodes in. Not a limit — set it to what one replica actually needs at rest.</p>
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-memory_reservation_mb">Memory reserved (MB)</label>
 
@@ -5735,9 +6361,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-cpu_limit">CPU limit</label>
 
@@ -5754,9 +6380,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">The ceiling one replica may use. Also the denominator of the CPU-per-replica scaling signal, read live from this service.</p>
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-memory_limit_mb">Memory limit (MB)</label>
 
@@ -5773,9 +6399,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">Exceed it and the container is OOM-killed, so leave headroom.</p>
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-placement_mode">Placement</label>
 
@@ -5796,9 +6422,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">auto lets the autoscaler move this between the master and the worker pool as the fleet grows and shrinks. Anything else pins it and the autoscaler stops moving it — useful for something that must stay put, and a good way to strand yourself if you pin to workers and the pool empties.</p>
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-placement_extra">Extra constraints</label>
 
@@ -5815,9 +6441,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">Comma separated, added to whatever the mode above implies. Swarm syntax, e.g. node.labels.zone == eu.</p>
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-stop_grace">Shutdown grace</label>
 
@@ -5834,28 +6460,46 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">Seconds to finish in-flight requests on SIGTERM. Pair it with a shutdown hook in your app; the Docker default of 10 cuts them.</p>
 </div>
-        
-          
-          
-<div class="field">
-  <label for="f-autoscale">Autoscale</label>
+      
 
+      
+      
+    </div>
+  </div>
   
+  
+  <div class="panel-note">
+    Reservations are not optional. Swarm subtracts them when it places a task, and
+    they are the only thing the autoscaler measures node capacity with — a component
+    with none looks free and gets packed on top of the metrics database.
+  </div>
+  
+</section>
+
+
+
+
+<section class="panel" data-toggle-section>
+  <div class="panel-head">
+    <h2>Autoscale</h2>
     
-    <input type="hidden" name="__bool__" value="autoscale">
-    <label class="check">
-      <input type="checkbox" id="f-autoscale" name="autoscale" value="true"
+    
+    <label class="switch" title="Let the autoscaler own the replica count">
+      <input type="hidden" name="__bool__" value="autoscale">
+      <input type="checkbox" name="autoscale" value="true"
+             data-toggle-master
              >
-      <span>Let the autoscaler own the replica count, using the policy below.</span>
+      <span class="switch-track" aria-hidden="true"></span>
+      <span class="switch-label">on</span>
     </label>
-
-  
-
-  
-</div>
+    
+    <span class="spacer"></span>
+  </div>
+  <div class="panel-body" data-toggle-body>
+    <div class="grid-2">
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-min_replicas">Minimum replicas</label>
 
@@ -5872,9 +6516,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">Two is the usual floor: with one, a crash is an outage and a rolling update has nowhere to shift traffic.</p>
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-max_replicas">Maximum replicas</label>
 
@@ -5891,9 +6535,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">A budget cap. The ReplicaCeiling alert compares against it.</p>
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-slo_p95_ms">p95 SLO (ms)</label>
 
@@ -5910,9 +6554,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">THE number. Scale-up and scale-down thresholds are fractions of it.</p>
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-up_p95_ratio">Scale up at</label>
 
@@ -5929,9 +6573,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">Fraction of the SLO that triggers growth — act before users feel it.</p>
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-down_p95_ratio">Scale down below</label>
 
@@ -5948,9 +6592,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-up_cpu_pct">Scale up above CPU %</label>
 
@@ -5967,9 +6611,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">CPU of ONE replica against its own limit. This is the secondary signal, and at low traffic it is the only one: p95 over an empty histogram returns nothing at all.</p>
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-down_cpu_pct">Scale down below CPU %</label>
 
@@ -5986,9 +6630,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-sustain_up_seconds">Sustain up (s)</label>
 
@@ -6005,9 +6649,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">How long a signal must stay high. Up fast, down slow — never make these two symmetric.</p>
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-sustain_down_seconds">Sustain down (s)</label>
 
@@ -6024,9 +6668,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-up_factor">Growth step</label>
 
@@ -6043,9 +6687,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">+50% of current, minimum +1. One at a time cannot track a spike.</p>
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-cooldown_seconds">Replica cooldown (s)</label>
 
@@ -6062,9 +6706,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-priority">Priority</label>
 
@@ -6081,19 +6725,17 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">Lower wins when several components compete for the same node capacity. Leave it alone unless one app genuinely matters more.</p>
 </div>
-        
+      
+    </div>
+  </div>
+  <div class="panel-note">
+    With this off the replica count is yours and nothing below applies. The
+    autoscaler still measures this component and still right-sizes its
+    reservations — it just stops changing how many of it there are.
+  </div>
+</section>
 
-        
-        
-      </div>
-    </div>
-    
-    <div class="panel-note">
-      Reservations are not optional. Swarm subtracts them when it places a task, and
-      they are the only thing the autoscaler measures node capacity with — a component
-      with none looks free and gets packed on top of the metrics database.
-    </div>
-  </section>
+  
 
   <div class="sticky-save">
     <button class="btn btn-primary" type="submit">Create</button>
@@ -6117,6 +6759,14 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
     <p class="hint">A password-protected Redis, with its own volume.</p>
   </div>
   
+  
+  <div class="seg" role="group" aria-label="Database type">
+    
+    <a href="#view-new-redis" aria-current="true">Redis</a>
+    
+    <a href="#view-new-mongo" >MongoDB</a>
+    
+  </div>
   
 </div>
 
@@ -6144,13 +6794,16 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
     </div>
   </section>
 
-  <section class="panel">
-    <div class="panel-head"><h2>Configuration</h2></div>
-    <div class="panel-body">
-      <div class="grid-2">
+  
+    
+<section class="panel">
+  <div class="panel-head"><h2>Configuration</h2></div>
+  <div class="panel-body">
+    <div class="grid-2">
+      
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-placement_mode">Placement</label>
 
@@ -6167,9 +6820,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">This has a VOLUME, and a volume lives on one machine. `master` keeps it on the node that will not be deleted. `any` lets Swarm place it anywhere — including a worker the autoscaler deletes later, taking the data with it. Only useful if you have moved the data yourself.</p>
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-placement_extra">Extra constraints</label>
 
@@ -6186,9 +6839,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">Comma separated, added to whatever the mode implies.</p>
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-version">Version</label>
 
@@ -6207,9 +6860,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">Changing this restarts the server. The volume survives.</p>
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-maxmemory_mb">Max memory (MB)</label>
 
@@ -6226,9 +6879,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">Redis evicts above this. Keep it below the memory limit or the container is OOM-killed before Redis ever starts evicting.</p>
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-maxmemory_policy">Eviction policy</label>
 
@@ -6251,9 +6904,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">`noeviction` turns a full cache into write errors — correct for a queue, wrong for a cache.</p>
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-appendonly">Persist to disk (AOF)</label>
 
@@ -6270,9 +6923,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-external_port">Published port</label>
 
@@ -6289,9 +6942,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">Optional. Publishes Redis on the master at this port for an external client. The firewall still denies it until you open it on the component&#39;s page.</p>
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-exporter">Metrics exporter</label>
 
@@ -6308,9 +6961,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-cpu_reservation">CPU reserved</label>
 
@@ -6327,9 +6980,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   
 </div>
+      
         
-          
-          
+        
 <div class="field">
   <label for="f-memory_reservation_mb">Memory reserved (MB)</label>
 
@@ -6346,33 +6999,310 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 
   <p class="hint">Must exceed max memory with room for Redis itself and its AOF buffer, or eviction never gets the chance to run.</p>
 </div>
-        
+      
 
+      
+      
+      <div class="field">
+        <label for="s-REDIS_PASSWORD">Password</label>
+        <input id="s-REDIS_PASSWORD" type="text" name="REDIS_PASSWORD"
+               autocomplete="off" spellcheck="false"
+               placeholder="leave blank to generate one"
+               value="">
+        <p class="hint">Leave blank to generate a strong one. Set it yourself if you are moving an existing database and its clients already know the password.</p>
+      </div>
+      
+    </div>
+  </div>
+  
+  <div class="panel-note">
+    Leave a credential blank and one is generated for you. Set it yourself if you
+    are moving an existing database whose clients already know the password.
+  </div>
+  
+  
+  <div class="panel-note">
+    Reservations are not optional. Swarm subtracts them when it places a task, and
+    they are the only thing the autoscaler measures node capacity with — a component
+    with none looks free and gets packed on top of the metrics database.
+  </div>
+  
+</section>
+
+
+
+  
+
+  <div class="sticky-save">
+    <button class="btn btn-primary" type="submit">Create</button>
+    <label class="check">
+      <input type="checkbox" name="deploy_now" value="1" checked>
+      <span>Deploy it straight away</span>
+    </label>
+    <a class="btn" href="#view-components">Cancel</a>
+  </div>
+</form>
+        
+      </section>
+      
+      <section data-view="new-mongo" hidden>
         
         
-        <div class="field">
-          <label for="s-REDIS_PASSWORD">Password</label>
-          <input id="s-REDIS_PASSWORD" type="text" name="REDIS_PASSWORD"
-                 autocomplete="off" spellcheck="false"
-                 placeholder="leave blank to generate one"
-                 value="">
-          <p class="hint">Leave blank to generate a strong one. Set it yourself if you are moving an existing database and its clients already know the password.</p>
-        </div>
-        
+          <div class="page-head">
+  <div>
+    <div class="eyebrow"><a href="#view-components">Components</a></div>
+    <h1>New database</h1>
+    <p class="hint">An authenticated MongoDB, with its own volume.</p>
+  </div>
+  
+  
+  <div class="seg" role="group" aria-label="Database type">
+    
+    <a href="#view-new-redis" >Redis</a>
+    
+    <a href="#view-new-mongo" aria-current="true">MongoDB</a>
+    
+  </div>
+  
+</div>
+
+
+
+<form method="post" action="#" data-preview>
+  <input type="hidden" name="csrf" value="preview">
+  <input type="hidden" name="type" value="mongo">
+
+  <section class="panel">
+    <div class="panel-head"><h2>Identity</h2></div>
+    <div class="panel-body">
+      <div class="field">
+        <label for="f-name">Name</label>
+        <input id="f-name" name="name" type="text" required autofocus
+               pattern="[a-z][a-z0-9-]{1,31}" value=""
+               placeholder="cache">
+        <p class="hint">
+          Lowercase letters, digits and dashes. This becomes the stack name, the
+          service name (<code>&lt;name&gt;_mongo</code>) and the DNS name other
+          components reach it by, so it is not renameable afterwards — create a new
+          one and delete this if you change your mind.
+        </p>
       </div>
     </div>
-    
-    <div class="panel-note">
-      Leave a credential blank and one is generated for you. Set it yourself if you
-      are moving an existing database whose clients already know the password.
-    </div>
-    
-    <div class="panel-note">
-      Reservations are not optional. Swarm subtracts them when it places a task, and
-      they are the only thing the autoscaler measures node capacity with — a component
-      with none looks free and gets packed on top of the metrics database.
-    </div>
   </section>
+
+  
+    
+<section class="panel">
+  <div class="panel-head"><h2>Configuration</h2></div>
+  <div class="panel-body">
+    <div class="grid-2">
+      
+      
+        
+        
+<div class="field">
+  <label for="f-placement_mode">Placement</label>
+
+  
+    <select id="f-placement_mode" name="placement_mode">
+      
+      <option value="master" selected>master</option>
+      
+      <option value="any" >any</option>
+      
+    </select>
+
+  
+
+  <p class="hint">This has a VOLUME, and a volume lives on one machine. `master` keeps it on the node that will not be deleted. `any` lets Swarm place it anywhere — including a worker the autoscaler deletes later, taking the data with it.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-placement_extra">Extra constraints</label>
+
+  
+    <input id="f-placement_extra" name="placement_extra"
+           type="text"
+           
+           
+           
+           
+           placeholder="node.labels.disk == ssd"
+           value="">
+  
+
+  <p class="hint">Comma separated, added to whatever the mode implies.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-version">Version</label>
+
+  
+    <select id="f-version" name="version">
+      
+      <option value="7.0" selected>7.0</option>
+      
+      <option value="6.0" >6.0</option>
+      
+      <option value="5.0" >5.0</option>
+      
+    </select>
+
+  
+
+  <p class="hint">Changing this restarts the server. The volume survives, but Mongo only upgrades one major version at a time — go 5 to 6 to 7, never 5 to 7.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-username">Root username</label>
+
+  
+    <input id="f-username" name="username"
+           type="text"
+           
+           
+           
+           required
+           
+           value="root">
+  
+
+  <p class="hint">The initial administrative user. It is created on the FIRST start only, from the empty volume; changing it later does nothing until the data directory is empty again.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-cache_mb">WiredTiger cache (MB)</label>
+
+  
+    <input id="f-cache_mb" name="cache_mb"
+           type="number"
+           
+           min="64"
+           max="131072"
+           required
+           
+           value="256">
+  
+
+  <p class="hint">Mongo&#39;s own data cache. Left unset it is sized from the HOST&#39;s RAM and ignores this container&#39;s limit entirely, which is how a small Mongo gets OOM-killed on a large machine.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-external_port">Published port</label>
+
+  
+    <input id="f-external_port" name="external_port"
+           type="number"
+           
+           min="1024"
+           max="65535"
+           
+           
+           value="">
+  
+
+  <p class="hint">Optional. Publishes Mongo on the master at this port for an external client. The firewall still denies it until you open it on the component&#39;s page.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-exporter">Metrics exporter</label>
+
+  
+    
+    <input type="hidden" name="__bool__" value="exporter">
+    <label class="check">
+      <input type="checkbox" id="f-exporter" name="exporter" value="true"
+             checked>
+      <span>Runs mongodb_exporter alongside it so Grafana has connections, operation counters and replication lag.</span>
+    </label>
+
+  
+
+  
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-cpu_reservation">CPU reserved</label>
+
+  
+    <input id="f-cpu_reservation" name="cpu_reservation"
+           type="number"
+           step="0.05"
+           min="0.01"
+           max="32"
+           required
+           
+           value="0.3">
+  
+
+  
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-memory_reservation_mb">Memory reserved (MB)</label>
+
+  
+    <input id="f-memory_reservation_mb" name="memory_reservation_mb"
+           type="number"
+           
+           min="64"
+           max="131072"
+           required
+           
+           value="768">
+  
+
+  <p class="hint">Must exceed the WiredTiger cache with room for connections, indexes being built and the server itself.</p>
+</div>
+      
+
+      
+      
+      <div class="field">
+        <label for="s-MONGO_PASSWORD">Password</label>
+        <input id="s-MONGO_PASSWORD" type="text" name="MONGO_PASSWORD"
+               autocomplete="off" spellcheck="false"
+               placeholder="leave blank to generate one"
+               value="">
+        <p class="hint">Leave blank to generate a strong one. Set it yourself if you are moving an existing database and its clients already know the password.</p>
+      </div>
+      
+    </div>
+  </div>
+  
+  <div class="panel-note">
+    Leave a credential blank and one is generated for you. Set it yourself if you
+    are moving an existing database whose clients already know the password.
+  </div>
+  
+  
+  <div class="panel-note">
+    Reservations are not optional. Swarm subtracts them when it places a task, and
+    they are the only thing the autoscaler measures node capacity with — a component
+    with none looks free and gets packed on top of the metrics database.
+  </div>
+  
+</section>
+
+
+
+  
 
   <div class="sticky-save">
     <button class="btn btn-primary" type="submit">Create</button>
@@ -6449,7 +7379,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
       <div class="tree-kids">
         
         <div class="tree-branch">
-          <div class="tnode tnode-host has-gauges is-manager">
+          
+          <a class="tnode tnode-host is-link has-gauges is-manager"
+             href="#view-node-k39dl2mzq018">
             <span class="tnode-head">
               <span class="pill accent">manager</span>
               <span class="pill ok">ready</span>
@@ -6457,7 +7389,10 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
             </span>
             <span class="tnode-title" title="aichat-master">aichat-master</span>
             <span class="tnode-sub mono">10.0.0.2 · 4 vCPU · 7.6 GB</span>
-            <span class="tnode-sub muted">14 tasks · engine 27.3.1</span>
+            <span class="tnode-sub muted">15 tasks · engine 27.3.1</span>
+            
+            <span class="tnode-sub mono">disk=ssd</span>
+            
             <span class="tnode-meters">
               <span title="node CPU utilisation">used cpu <b>78%</b></span>
               <span title="node memory utilisation">used mem <b>61%</b></span>
@@ -6468,11 +7403,13 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
                   data-tip="CPU reserved: 62.0% — 1.2 of 4 vCPU promised to tasks on this node"></span>
             <span class="gauge gauge-mem" style="--v:48.0"
                   data-tip="Memory reserved: 48.0% — 1400 MB of 7.6 GB promised to tasks on this node"></span>
-          </div>
+          </a>
         </div>
         
         <div class="tree-branch">
-          <div class="tnode tnode-host has-gauges ">
+          
+          <a class="tnode tnode-host is-link has-gauges "
+             href="#view-node-w1af02c9be47">
             <span class="tnode-head">
               <span class="pill ok">worker</span>
               <span class="pill ok">ready</span>
@@ -6481,6 +7418,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
             <span class="tnode-title" title="aichat-worker-1754812203">aichat-worker-1754812203</span>
             <span class="tnode-sub mono">10.0.0.5 · 3 vCPU · 3.8 GB</span>
             <span class="tnode-sub muted">6 tasks · engine 27.3.1</span>
+            
+            <span class="tnode-sub mono">managedby=autoscaler</span>
+            
             <span class="tnode-meters">
               <span title="node CPU utilisation">used cpu <b>64%</b></span>
               <span title="node memory utilisation">used mem <b>47%</b></span>
@@ -6491,11 +7431,13 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
                   data-tip="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks on this node"></span>
             <span class="gauge gauge-mem" style="--v:48.0"
                   data-tip="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks on this node"></span>
-          </div>
+          </a>
         </div>
         
         <div class="tree-branch">
-          <div class="tnode tnode-host has-gauges ">
+          
+          <a class="tnode tnode-host is-link has-gauges "
+             href="#view-node-w2bc71d0aa93">
             <span class="tnode-head">
               <span class="pill ok">worker</span>
               <span class="pill ok">ready</span>
@@ -6504,6 +7446,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
             <span class="tnode-title" title="aichat-worker-1754819114">aichat-worker-1754819114</span>
             <span class="tnode-sub mono">10.0.0.6 · 3 vCPU · 3.8 GB</span>
             <span class="tnode-sub muted">6 tasks · engine 27.3.1</span>
+            
+            <span class="tnode-sub mono">zone=eu · managedby=autoscaler</span>
+            
             <span class="tnode-meters">
               <span title="node CPU utilisation">used cpu <b>71%</b></span>
               <span title="node memory utilisation">used mem <b>52%</b></span>
@@ -6514,11 +7459,13 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
                   data-tip="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks on this node"></span>
             <span class="gauge gauge-mem" style="--v:48.0"
                   data-tip="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks on this node"></span>
-          </div>
+          </a>
         </div>
         
         <div class="tree-branch">
-          <div class="tnode tnode-host has-gauges ">
+          
+          <a class="tnode tnode-host is-link has-gauges "
+             href="#view-node-w3de92f1cc05">
             <span class="tnode-head">
               <span class="pill warn">worker</span>
               <span class="pill warn">ready</span>
@@ -6527,6 +7474,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
             <span class="tnode-title" title="aichat-worker-1754823887">aichat-worker-1754823887</span>
             <span class="tnode-sub mono">10.0.0.7 · 3 vCPU · 3.8 GB</span>
             <span class="tnode-sub muted">3 tasks · engine 27.3.1</span>
+            
+            <span class="tnode-sub mono">managedby=autoscaler</span>
+            
             <span class="tnode-meters">
               <span title="node CPU utilisation">used cpu <b>12%</b></span>
               <span title="node memory utilisation">used mem <b>19%</b></span>
@@ -6537,7 +7487,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
                   data-tip="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks on this node"></span>
             <span class="gauge gauge-mem" style="--v:48.0"
                   data-tip="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks on this node"></span>
-          </div>
+          </a>
         </div>
         
       </div>
@@ -6550,6 +7500,1026 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
     to release its edge connections.
   </div>
 </section></section>
+
+      
+      
+      <section data-view="node-k39dl2mzq018" hidden>
+
+
+
+
+<div class="page-head">
+  <div>
+    <div class="eyebrow">
+      
+      <a href="#view-cluster">&larr; Cluster</a>
+    </div>
+    <h1>aichat-master</h1>
+    <p class="hint mono">k39dl2mzq018aa</p>
+  </div>
+  <div class="head-side">
+    <div class="head-pills">
+      <span class="pill accent">manager</span>
+      <span class="pill ok">ready</span>
+      <span class="pill ok">active</span>
+      <span class="pill accent plain">leader</span>
+      
+    </div>
+  </div>
+</div>
+
+<div class="tiles">
+  <div class="tile">
+    <span class="k">Tasks</span>
+    <span class="v">15</span>
+    <span class="m">running here right now</span>
+  </div>
+  <div class="tile">
+    <span class="k">CPU reserved</span>
+    <span class="v">62<small>%</small></span>
+    <span class="m">1.2 of 4 vCPU promised</span>
+  </div>
+  <div class="tile">
+    <span class="k">Memory reserved</span>
+    <span class="v">48<small>%</small></span>
+    <span class="m">1400 MB of 7.6 GB promised</span>
+  </div>
+  <div class="tile">
+    <span class="k">In use</span>
+    <span class="v">78<small>%</small></span>
+    <span class="m">cpu · mem 61%</span>
+  </div>
+</div>
+
+<p class="panel-intro">
+  Reserved and in-use are different numbers and the first is the one that decides
+  placement. A node routinely reads 4% busy while being 100% reserved, and nothing
+  further can be scheduled on it however idle it looks.
+</p>
+
+<div class="split">
+  <section class="panel">
+    <div class="panel-head"><h2>Machine</h2></div>
+    <div class="panel-body">
+      <div class="table-wrap">
+        <table>
+          <tbody>
+            <tr><td>Address</td><td class="mono">10.0.0.2</td></tr>
+            <tr><td>Role</td><td>manager · reachable</td></tr>
+            <tr><td>Capacity</td><td class="mono">4 vCPU · 7.6 GB</td></tr>
+            <tr><td>Platform</td><td class="mono">linux/x86_64</td></tr>
+            <tr><td>Docker engine</td><td class="mono">27.3.1</td></tr>
+            <tr><td>Joined</td><td class="mono small">
+              <time datetime="2025-06-01T09:14:02" data-localtime>2025-06-01T09:14:02</time>
+            </td></tr>
+            <tr><td>Last change</td><td class="mono small">
+              <time datetime="2025-08-09T11:02:44" data-localtime>2025-08-09T11:02:44</time>
+            </td></tr>
+            <tr><td>Node ID</td><td class="mono small">k39dl2mzq018aa</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Availability</h2></div>
+    <div class="panel-body stack">
+      
+      <form method="post" action="#" class="inline-form"
+            data-preview
+            data-confirm="Change what this node is allowed to run? Draining it moves every task off.">
+        <input type="hidden" name="csrf" value="preview">
+        <input type="hidden" name="node_action" value="availability">
+        <label class="sr-only" for="availability-k39dl2mzq018">Availability</label>
+        <fieldset class="bare " >
+          <select id="availability-k39dl2mzq018" name="availability">
+            
+            <option value="active" selected>active</option>
+            
+            <option value="pause" >pause</option>
+            
+            <option value="drain" >drain</option>
+            
+          </select>
+          <button class="btn btn-sm" type="submit">Apply</button>
+        </fieldset>
+      </form>
+      
+      <p class="hint">
+        <code>active</code> schedules normally. <code>pause</code> keeps what is running
+        and accepts nothing new. <code>drain</code> moves every task off and keeps it off —
+        which on the master means the whole control plane's workload relocates, and at
+        <code>MIN_WORKERS=0</code> there is nowhere for it to go.
+      </p>
+      <p class="hint">
+        The autoscaler drains a worker itself when it is deleting it. Draining one here
+        does not delete the server, and it does not stop the autoscaler counting the node
+        as fleet capacity it may still be sizing against.
+      </p>
+    </div>
+  </section>
+</div>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Labels</h2>
+    <span class="spacer"></span>
+    <button class="btn btn-sm" type="button" data-add-var>Add label</button>
+  </div>
+  <form method="post" action="#" data-preview>
+    <input type="hidden" name="csrf" value="preview">
+    <input type="hidden" name="node_action" value="labels">
+    <div class="panel-body">
+      <div class="kv-grid" data-kv>
+        <div class="eyebrow">Name</div><div class="eyebrow">Value</div><div></div>
+        
+        <input class="k-in" type="text" name="key" value="disk" aria-label="Label name">
+        <input type="text" name="value" value="ssd" aria-label="Value for disk">
+        <button class="btn btn-sm btn-danger" type="button" data-remove-var
+                aria-label="Remove disk">Remove</button>
+        
+      </div>
+      
+      <p class="hint">
+        These are what a component's placement constraints match on:
+        <code>disk = ssd</code> here makes <code>node.labels.disk == ssd</code> in a
+        component's extra constraints select this machine. Saving sends the whole set —
+        a row you remove is removed from the node.
+      </p>
+      <p class="hint">
+        Nothing re-places a running task when a label changes. A constraint is evaluated
+        when a task is scheduled, so a service that no longer matches keeps running here
+        until something restarts it.
+      </p>
+    </div>
+    <div class="panel-note">
+      <button class="btn btn-primary btn-sm" type="submit">Save labels</button>
+    </div>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Tasks here</h2>
+    <span class="spacer"></span>
+    <span class="pill mute plain mono">15</span>
+  </div>
+  <div class="panel-body">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Service</th><th>Image</th><th>Task</th><th>State</th><th>Reserves</th></tr></thead>
+        <tbody>
+          
+          <tr>
+            <td class="mono">cache_redis</td>
+            <td class="mono small" title="redis:7.4-alpine">7.4-alpine</td>
+            <td class="mono small">cache0kd93jf</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">10.5% cpu · 16.8% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">documents_mongo</td>
+            <td class="mono small" title="mongo:7.0">7.0</td>
+            <td class="mono small">docume0kd93j</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">1.5% cpu · 2.5% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">sessions_redis</td>
+            <td class="mono small" title="redis:7.2-alpine">7.2-alpine</td>
+            <td class="mono small">sessio0kd93j</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">1.5% cpu · 2.5% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">ingress_cloudflared</td>
+            <td class="mono small" title="cloudflare/cloudflared:2024.8.3">2024.8.3</td>
+            <td class="mono small">cloudf0kd93j</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">1.5% cpu · 2.5% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">monitoring_alertmanager</td>
+            <td class="mono small" title="alertmanager:v1.0.0">v1.0.0</td>
+            <td class="mono small">alertm0kd93j</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">1.5% cpu · 2.5% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">monitoring_cadvisor</td>
+            <td class="mono small" title="cadvisor:v1.0.0">v1.0.0</td>
+            <td class="mono small">cadvis0kd93j</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">1.5% cpu · 2.5% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">monitoring_grafana</td>
+            <td class="mono small" title="grafana:v1.0.0">v1.0.0</td>
+            <td class="mono small">grafan0kd93j</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">2.5% cpu · 3.4% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">monitoring_loki</td>
+            <td class="mono small" title="loki:v1.0.0">v1.0.0</td>
+            <td class="mono small">loki0kd93jf0</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">5.0% cpu · 8.4% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">monitoring_node-exporter</td>
+            <td class="mono small" title="node-exporter:v1.0.0">v1.0.0</td>
+            <td class="mono small">node-e0kd93j</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">1.5% cpu · 2.5% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">monitoring_redis-exporter</td>
+            <td class="mono small" title="redis-exporter:v1.0.0">v1.0.0</td>
+            <td class="mono small">redis-0kd93j</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">1.5% cpu · 2.5% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">monitoring_victoriametrics</td>
+            <td class="mono small" title="victoriametrics:v1.0.0">v1.0.0</td>
+            <td class="mono small">victor0kd93j</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">7.5% cpu · 10.1% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">monitoring_vmagent</td>
+            <td class="mono small" title="vmagent:v1.0.0">v1.0.0</td>
+            <td class="mono small">vmagen0kd93j</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">1.5% cpu · 2.5% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">monitoring_vmalert</td>
+            <td class="mono small" title="vmalert:v1.0.0">v1.0.0</td>
+            <td class="mono small">vmaler0kd93j</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">1.5% cpu · 2.5% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">monitoring_autoscaler</td>
+            <td class="mono small" title="autoscaler:v1.0.0">v1.0.0</td>
+            <td class="mono small">autosc0kd93j</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">1.5% cpu · 2.5% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">admin_ui</td>
+            <td class="mono small" title="aichat-admin:local">local</td>
+            <td class="mono small">ui0kd93jf01</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">1.5% cpu · 2.5% mem</td>
+          </tr>
+          
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="panel-note">
+    Percentages are of THIS machine, and they are reservations rather than usage — the
+    same pair the rings on the fleet view draw.
+  </div>
+</section>
+
+</section>
+      
+      <section data-view="node-w1af02c9be47" hidden>
+
+
+
+
+<div class="page-head">
+  <div>
+    <div class="eyebrow">
+      
+      <a href="#view-cluster">&larr; Cluster</a>
+    </div>
+    <h1>aichat-worker-1754812203</h1>
+    <p class="hint mono">w1af02c9be47aa</p>
+  </div>
+  <div class="head-side">
+    <div class="head-pills">
+      <span class="pill ok">worker</span>
+      <span class="pill ok">ready</span>
+      <span class="pill ok">active</span>
+      
+      <span class="pill mute plain mono" title="Managed by autoscaler">autoscaler</span>
+    </div>
+  </div>
+</div>
+
+<div class="tiles">
+  <div class="tile">
+    <span class="k">Tasks</span>
+    <span class="v">6</span>
+    <span class="m">running here right now</span>
+  </div>
+  <div class="tile">
+    <span class="k">CPU reserved</span>
+    <span class="v">62<small>%</small></span>
+    <span class="m">1.2 of 3 vCPU promised</span>
+  </div>
+  <div class="tile">
+    <span class="k">Memory reserved</span>
+    <span class="v">48<small>%</small></span>
+    <span class="m">1400 MB of 3.8 GB promised</span>
+  </div>
+  <div class="tile">
+    <span class="k">In use</span>
+    <span class="v">64<small>%</small></span>
+    <span class="m">cpu · mem 47%</span>
+  </div>
+</div>
+
+<p class="panel-intro">
+  Reserved and in-use are different numbers and the first is the one that decides
+  placement. A node routinely reads 4% busy while being 100% reserved, and nothing
+  further can be scheduled on it however idle it looks.
+</p>
+
+<div class="split">
+  <section class="panel">
+    <div class="panel-head"><h2>Machine</h2></div>
+    <div class="panel-body">
+      <div class="table-wrap">
+        <table>
+          <tbody>
+            <tr><td>Address</td><td class="mono">10.0.0.5</td></tr>
+            <tr><td>Role</td><td>worker</td></tr>
+            <tr><td>Capacity</td><td class="mono">3 vCPU · 3.8 GB</td></tr>
+            <tr><td>Platform</td><td class="mono">linux/x86_64</td></tr>
+            <tr><td>Docker engine</td><td class="mono">27.3.1</td></tr>
+            <tr><td>Joined</td><td class="mono small">
+              <time datetime="2025-08-10T07:10:03" data-localtime>2025-08-10T07:10:03</time>
+            </td></tr>
+            <tr><td>Last change</td><td class="mono small">
+              <time datetime="2025-08-10T07:11:19" data-localtime>2025-08-10T07:11:19</time>
+            </td></tr>
+            <tr><td>Node ID</td><td class="mono small">w1af02c9be47aa</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Availability</h2></div>
+    <div class="panel-body stack">
+      
+      <form method="post" action="#" class="inline-form"
+            data-preview
+            data-confirm="Change what this node is allowed to run? Draining it moves every task off.">
+        <input type="hidden" name="csrf" value="preview">
+        <input type="hidden" name="node_action" value="availability">
+        <label class="sr-only" for="availability-w1af02c9be47">Availability</label>
+        <fieldset class="bare is-locked" disabled>
+          <select id="availability-w1af02c9be47" name="availability">
+            
+            <option value="active" selected>active</option>
+            
+            <option value="pause" >pause</option>
+            
+            <option value="drain" >drain</option>
+            
+          </select>
+          <button class="btn btn-sm" type="submit">Apply</button>
+        </fieldset>
+      </form>
+      
+      <p class="hint note-locked">
+        <span class="ico ico-warn" aria-hidden="true">!</span>
+        <span>
+          <strong>autoscaler</strong> is in control of this node — it carries
+          <code>managedby&nbsp;=&nbsp;autoscaler</code>, so it was created by
+          autoscaler and only autoscaler drains and deletes it. Availability is
+          read and rewritten every loop, so a change made here would not survive.
+          To take it out of service, lower the fleet size or stop the manager.
+        </span>
+      </p>
+      
+      <p class="hint">
+        <code>active</code> schedules normally. <code>pause</code> keeps what is running
+        and accepts nothing new. <code>drain</code> moves every task off and keeps it off —
+        which on the master means the whole control plane's workload relocates, and at
+        <code>MIN_WORKERS=0</code> there is nowhere for it to go.
+      </p>
+      <p class="hint">
+        The autoscaler drains a worker itself when it is deleting it. Draining one here
+        does not delete the server, and it does not stop the autoscaler counting the node
+        as fleet capacity it may still be sizing against.
+      </p>
+    </div>
+  </section>
+</div>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Labels</h2>
+    <span class="spacer"></span>
+    <button class="btn btn-sm" type="button" data-add-var>Add label</button>
+  </div>
+  <form method="post" action="#" data-preview>
+    <input type="hidden" name="csrf" value="preview">
+    <input type="hidden" name="node_action" value="labels">
+    <div class="panel-body">
+      <div class="kv-grid" data-kv>
+        <div class="eyebrow">Name</div><div class="eyebrow">Value</div><div></div>
+        
+      </div>
+      
+      
+      <p class="hint note-locked">
+        <span class="ico ico-lock" aria-hidden="true">&#128274;</span>
+        <span>
+          <code>managedby = autoscaler</code> is set by autoscaler itself and is
+          not editable here. It is what decides which nodes autoscaler may drain
+          and delete, so it is a permission rather than a note. Saving below keeps
+          it exactly as it is.
+        </span>
+      </p>
+      
+      <p class="hint">
+        These are what a component's placement constraints match on:
+        <code>disk = ssd</code> here makes <code>node.labels.disk == ssd</code> in a
+        component's extra constraints select this machine. Saving sends the whole set —
+        a row you remove is removed from the node.
+      </p>
+      <p class="hint">
+        Nothing re-places a running task when a label changes. A constraint is evaluated
+        when a task is scheduled, so a service that no longer matches keeps running here
+        until something restarts it.
+      </p>
+    </div>
+    <div class="panel-note">
+      <button class="btn btn-primary btn-sm" type="submit">Save labels</button>
+    </div>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Tasks here</h2>
+    <span class="spacer"></span>
+    <span class="pill mute plain mono">6</span>
+  </div>
+  <div class="panel-body">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Service</th><th>Image</th><th>Task</th><th>State</th><th>Reserves</th></tr></thead>
+        <tbody>
+          
+          <tr>
+            <td class="mono">api_app</td>
+            <td class="mono small" title="ghcr.io/acme/aichat-api:sha-c40e8b7">sha-c40e8b7</td>
+            <td class="mono small">api0kd93jf01</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">18.0% cpu · 12.0% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">api_app</td>
+            <td class="mono small" title="ghcr.io/acme/aichat-api:sha-9f3ac21">sha-9f3ac21</td>
+            <td class="mono small">api1kd93jf01</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">18.0% cpu · 12.0% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">api_app</td>
+            <td class="mono small" title="ghcr.io/acme/aichat-api:sha-9f3ac21">sha-9f3ac21</td>
+            <td class="mono small">api2kd93jf01</td>
+            <td><span class="pill warn">starting</span></td>
+            <td class="mono small num">18.0% cpu · 12.0% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">ingress_cloudflared</td>
+            <td class="mono small" title="cloudflare/cloudflared:2024.8.3">2024.8.3</td>
+            <td class="mono small">cloudf0kd93j</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">1.5% cpu · 2.5% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">monitoring_cadvisor</td>
+            <td class="mono small" title="cadvisor:v1.0.0">v1.0.0</td>
+            <td class="mono small">cadvis0kd93j</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">1.5% cpu · 2.5% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">monitoring_node-exporter</td>
+            <td class="mono small" title="node-exporter:v1.0.0">v1.0.0</td>
+            <td class="mono small">node-e0kd93j</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">1.5% cpu · 2.5% mem</td>
+          </tr>
+          
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="panel-note">
+    Percentages are of THIS machine, and they are reservations rather than usage — the
+    same pair the rings on the fleet view draw.
+  </div>
+</section>
+
+</section>
+      
+      <section data-view="node-w2bc71d0aa93" hidden>
+
+
+
+
+<div class="page-head">
+  <div>
+    <div class="eyebrow">
+      
+      <a href="#view-cluster">&larr; Cluster</a>
+    </div>
+    <h1>aichat-worker-1754819114</h1>
+    <p class="hint mono">w2bc71d0aa93aa</p>
+  </div>
+  <div class="head-side">
+    <div class="head-pills">
+      <span class="pill ok">worker</span>
+      <span class="pill ok">ready</span>
+      <span class="pill ok">active</span>
+      
+      <span class="pill mute plain mono" title="Managed by autoscaler">autoscaler</span>
+    </div>
+  </div>
+</div>
+
+<div class="tiles">
+  <div class="tile">
+    <span class="k">Tasks</span>
+    <span class="v">6</span>
+    <span class="m">running here right now</span>
+  </div>
+  <div class="tile">
+    <span class="k">CPU reserved</span>
+    <span class="v">62<small>%</small></span>
+    <span class="m">1.2 of 3 vCPU promised</span>
+  </div>
+  <div class="tile">
+    <span class="k">Memory reserved</span>
+    <span class="v">48<small>%</small></span>
+    <span class="m">1400 MB of 3.8 GB promised</span>
+  </div>
+  <div class="tile">
+    <span class="k">In use</span>
+    <span class="v">71<small>%</small></span>
+    <span class="m">cpu · mem 52%</span>
+  </div>
+</div>
+
+<p class="panel-intro">
+  Reserved and in-use are different numbers and the first is the one that decides
+  placement. A node routinely reads 4% busy while being 100% reserved, and nothing
+  further can be scheduled on it however idle it looks.
+</p>
+
+<div class="split">
+  <section class="panel">
+    <div class="panel-head"><h2>Machine</h2></div>
+    <div class="panel-body">
+      <div class="table-wrap">
+        <table>
+          <tbody>
+            <tr><td>Address</td><td class="mono">10.0.0.6</td></tr>
+            <tr><td>Role</td><td>worker</td></tr>
+            <tr><td>Capacity</td><td class="mono">3 vCPU · 3.8 GB</td></tr>
+            <tr><td>Platform</td><td class="mono">linux/x86_64</td></tr>
+            <tr><td>Docker engine</td><td class="mono">27.3.1</td></tr>
+            <tr><td>Joined</td><td class="mono small">
+              <time datetime="2025-08-10T09:05:14" data-localtime>2025-08-10T09:05:14</time>
+            </td></tr>
+            <tr><td>Last change</td><td class="mono small">
+              <time datetime="2025-08-10T09:06:31" data-localtime>2025-08-10T09:06:31</time>
+            </td></tr>
+            <tr><td>Node ID</td><td class="mono small">w2bc71d0aa93aa</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Availability</h2></div>
+    <div class="panel-body stack">
+      
+      <form method="post" action="#" class="inline-form"
+            data-preview
+            data-confirm="Change what this node is allowed to run? Draining it moves every task off.">
+        <input type="hidden" name="csrf" value="preview">
+        <input type="hidden" name="node_action" value="availability">
+        <label class="sr-only" for="availability-w2bc71d0aa93">Availability</label>
+        <fieldset class="bare is-locked" disabled>
+          <select id="availability-w2bc71d0aa93" name="availability">
+            
+            <option value="active" selected>active</option>
+            
+            <option value="pause" >pause</option>
+            
+            <option value="drain" >drain</option>
+            
+          </select>
+          <button class="btn btn-sm" type="submit">Apply</button>
+        </fieldset>
+      </form>
+      
+      <p class="hint note-locked">
+        <span class="ico ico-warn" aria-hidden="true">!</span>
+        <span>
+          <strong>autoscaler</strong> is in control of this node — it carries
+          <code>managedby&nbsp;=&nbsp;autoscaler</code>, so it was created by
+          autoscaler and only autoscaler drains and deletes it. Availability is
+          read and rewritten every loop, so a change made here would not survive.
+          To take it out of service, lower the fleet size or stop the manager.
+        </span>
+      </p>
+      
+      <p class="hint">
+        <code>active</code> schedules normally. <code>pause</code> keeps what is running
+        and accepts nothing new. <code>drain</code> moves every task off and keeps it off —
+        which on the master means the whole control plane's workload relocates, and at
+        <code>MIN_WORKERS=0</code> there is nowhere for it to go.
+      </p>
+      <p class="hint">
+        The autoscaler drains a worker itself when it is deleting it. Draining one here
+        does not delete the server, and it does not stop the autoscaler counting the node
+        as fleet capacity it may still be sizing against.
+      </p>
+    </div>
+  </section>
+</div>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Labels</h2>
+    <span class="spacer"></span>
+    <button class="btn btn-sm" type="button" data-add-var>Add label</button>
+  </div>
+  <form method="post" action="#" data-preview>
+    <input type="hidden" name="csrf" value="preview">
+    <input type="hidden" name="node_action" value="labels">
+    <div class="panel-body">
+      <div class="kv-grid" data-kv>
+        <div class="eyebrow">Name</div><div class="eyebrow">Value</div><div></div>
+        
+        <input class="k-in" type="text" name="key" value="zone" aria-label="Label name">
+        <input type="text" name="value" value="eu" aria-label="Value for zone">
+        <button class="btn btn-sm btn-danger" type="button" data-remove-var
+                aria-label="Remove zone">Remove</button>
+        
+      </div>
+      
+      
+      <p class="hint note-locked">
+        <span class="ico ico-lock" aria-hidden="true">&#128274;</span>
+        <span>
+          <code>managedby = autoscaler</code> is set by autoscaler itself and is
+          not editable here. It is what decides which nodes autoscaler may drain
+          and delete, so it is a permission rather than a note. Saving below keeps
+          it exactly as it is.
+        </span>
+      </p>
+      
+      <p class="hint">
+        These are what a component's placement constraints match on:
+        <code>disk = ssd</code> here makes <code>node.labels.disk == ssd</code> in a
+        component's extra constraints select this machine. Saving sends the whole set —
+        a row you remove is removed from the node.
+      </p>
+      <p class="hint">
+        Nothing re-places a running task when a label changes. A constraint is evaluated
+        when a task is scheduled, so a service that no longer matches keeps running here
+        until something restarts it.
+      </p>
+    </div>
+    <div class="panel-note">
+      <button class="btn btn-primary btn-sm" type="submit">Save labels</button>
+    </div>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Tasks here</h2>
+    <span class="spacer"></span>
+    <span class="pill mute plain mono">6</span>
+  </div>
+  <div class="panel-body">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Service</th><th>Image</th><th>Task</th><th>State</th><th>Reserves</th></tr></thead>
+        <tbody>
+          
+          <tr>
+            <td class="mono">api_app</td>
+            <td class="mono small" title="ghcr.io/acme/aichat-api:sha-c40e8b7">sha-c40e8b7</td>
+            <td class="mono small">api0kd93jf01</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">18.0% cpu · 12.0% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">api_app</td>
+            <td class="mono small" title="ghcr.io/acme/aichat-api:sha-9f3ac21">sha-9f3ac21</td>
+            <td class="mono small">api1kd93jf01</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">18.0% cpu · 12.0% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">api-staging_app</td>
+            <td class="mono small" title="ghcr.io/acme/aichat-api:sha-c40e8b7">sha-c40e8b7</td>
+            <td class="mono small">api-st0kd93j</td>
+            <td><span class="pill bad">failed</span></td>
+            <td class="mono small num">1.5% cpu · 2.5% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">ingress_cloudflared</td>
+            <td class="mono small" title="cloudflare/cloudflared:2024.8.3">2024.8.3</td>
+            <td class="mono small">cloudf0kd93j</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">1.5% cpu · 2.5% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">monitoring_cadvisor</td>
+            <td class="mono small" title="cadvisor:v1.0.0">v1.0.0</td>
+            <td class="mono small">cadvis0kd93j</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">1.5% cpu · 2.5% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">monitoring_node-exporter</td>
+            <td class="mono small" title="node-exporter:v1.0.0">v1.0.0</td>
+            <td class="mono small">node-e0kd93j</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">1.5% cpu · 2.5% mem</td>
+          </tr>
+          
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="panel-note">
+    Percentages are of THIS machine, and they are reservations rather than usage — the
+    same pair the rings on the fleet view draw.
+  </div>
+</section>
+
+</section>
+      
+      <section data-view="node-w3de92f1cc05" hidden>
+
+
+
+
+<div class="page-head">
+  <div>
+    <div class="eyebrow">
+      
+      <a href="#view-cluster">&larr; Cluster</a>
+    </div>
+    <h1>aichat-worker-1754823887</h1>
+    <p class="hint mono">w3de92f1cc05aa</p>
+  </div>
+  <div class="head-side">
+    <div class="head-pills">
+      <span class="pill warn">worker</span>
+      <span class="pill warn">ready</span>
+      <span class="pill warn">drain</span>
+      
+      <span class="pill mute plain mono" title="Managed by autoscaler">autoscaler</span>
+    </div>
+  </div>
+</div>
+
+<div class="tiles">
+  <div class="tile">
+    <span class="k">Tasks</span>
+    <span class="v">3</span>
+    <span class="m">running here right now</span>
+  </div>
+  <div class="tile">
+    <span class="k">CPU reserved</span>
+    <span class="v">62<small>%</small></span>
+    <span class="m">1.2 of 3 vCPU promised</span>
+  </div>
+  <div class="tile">
+    <span class="k">Memory reserved</span>
+    <span class="v">48<small>%</small></span>
+    <span class="m">1400 MB of 3.8 GB promised</span>
+  </div>
+  <div class="tile">
+    <span class="k">In use</span>
+    <span class="v">12<small>%</small></span>
+    <span class="m">cpu · mem 19%</span>
+  </div>
+</div>
+
+<p class="panel-intro">
+  Reserved and in-use are different numbers and the first is the one that decides
+  placement. A node routinely reads 4% busy while being 100% reserved, and nothing
+  further can be scheduled on it however idle it looks.
+</p>
+
+<div class="split">
+  <section class="panel">
+    <div class="panel-head"><h2>Machine</h2></div>
+    <div class="panel-body">
+      <div class="table-wrap">
+        <table>
+          <tbody>
+            <tr><td>Address</td><td class="mono">10.0.0.7</td></tr>
+            <tr><td>Role</td><td>worker</td></tr>
+            <tr><td>Capacity</td><td class="mono">3 vCPU · 3.8 GB</td></tr>
+            <tr><td>Platform</td><td class="mono">linux/x86_64</td></tr>
+            <tr><td>Docker engine</td><td class="mono">27.3.1</td></tr>
+            <tr><td>Joined</td><td class="mono small">
+              <time datetime="2025-08-10T10:24:47" data-localtime>2025-08-10T10:24:47</time>
+            </td></tr>
+            <tr><td>Last change</td><td class="mono small">
+              <time datetime="2025-08-10T12:41:02" data-localtime>2025-08-10T12:41:02</time>
+            </td></tr>
+            <tr><td>Node ID</td><td class="mono small">w3de92f1cc05aa</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Availability</h2></div>
+    <div class="panel-body stack">
+      
+      <form method="post" action="#" class="inline-form"
+            data-preview
+            data-confirm="Change what this node is allowed to run? Draining it moves every task off.">
+        <input type="hidden" name="csrf" value="preview">
+        <input type="hidden" name="node_action" value="availability">
+        <label class="sr-only" for="availability-w3de92f1cc05">Availability</label>
+        <fieldset class="bare is-locked" disabled>
+          <select id="availability-w3de92f1cc05" name="availability">
+            
+            <option value="active" >active</option>
+            
+            <option value="pause" >pause</option>
+            
+            <option value="drain" selected>drain</option>
+            
+          </select>
+          <button class="btn btn-sm" type="submit">Apply</button>
+        </fieldset>
+      </form>
+      
+      <p class="hint note-locked">
+        <span class="ico ico-warn" aria-hidden="true">!</span>
+        <span>
+          <strong>autoscaler</strong> is in control of this node — it carries
+          <code>managedby&nbsp;=&nbsp;autoscaler</code>, so it was created by
+          autoscaler and only autoscaler drains and deletes it. Availability is
+          read and rewritten every loop, so a change made here would not survive.
+          To take it out of service, lower the fleet size or stop the manager.
+        </span>
+      </p>
+      
+      <p class="hint">
+        <code>active</code> schedules normally. <code>pause</code> keeps what is running
+        and accepts nothing new. <code>drain</code> moves every task off and keeps it off —
+        which on the master means the whole control plane's workload relocates, and at
+        <code>MIN_WORKERS=0</code> there is nowhere for it to go.
+      </p>
+      <p class="hint">
+        The autoscaler drains a worker itself when it is deleting it. Draining one here
+        does not delete the server, and it does not stop the autoscaler counting the node
+        as fleet capacity it may still be sizing against.
+      </p>
+    </div>
+  </section>
+</div>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Labels</h2>
+    <span class="spacer"></span>
+    <button class="btn btn-sm" type="button" data-add-var>Add label</button>
+  </div>
+  <form method="post" action="#" data-preview>
+    <input type="hidden" name="csrf" value="preview">
+    <input type="hidden" name="node_action" value="labels">
+    <div class="panel-body">
+      <div class="kv-grid" data-kv>
+        <div class="eyebrow">Name</div><div class="eyebrow">Value</div><div></div>
+        
+      </div>
+      
+      
+      <p class="hint note-locked">
+        <span class="ico ico-lock" aria-hidden="true">&#128274;</span>
+        <span>
+          <code>managedby = autoscaler</code> is set by autoscaler itself and is
+          not editable here. It is what decides which nodes autoscaler may drain
+          and delete, so it is a permission rather than a note. Saving below keeps
+          it exactly as it is.
+        </span>
+      </p>
+      
+      <p class="hint">
+        These are what a component's placement constraints match on:
+        <code>disk = ssd</code> here makes <code>node.labels.disk == ssd</code> in a
+        component's extra constraints select this machine. Saving sends the whole set —
+        a row you remove is removed from the node.
+      </p>
+      <p class="hint">
+        Nothing re-places a running task when a label changes. A constraint is evaluated
+        when a task is scheduled, so a service that no longer matches keeps running here
+        until something restarts it.
+      </p>
+    </div>
+    <div class="panel-note">
+      <button class="btn btn-primary btn-sm" type="submit">Save labels</button>
+    </div>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Tasks here</h2>
+    <span class="spacer"></span>
+    <span class="pill mute plain mono">3</span>
+  </div>
+  <div class="panel-body">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Service</th><th>Image</th><th>Task</th><th>State</th><th>Reserves</th></tr></thead>
+        <tbody>
+          
+          <tr>
+            <td class="mono">api_app</td>
+            <td class="mono small" title="ghcr.io/acme/aichat-api:sha-c40e8b7">sha-c40e8b7</td>
+            <td class="mono small">api0kd93jf01</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">18.0% cpu · 12.0% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">monitoring_cadvisor</td>
+            <td class="mono small" title="cadvisor:v1.0.0">v1.0.0</td>
+            <td class="mono small">cadvis0kd93j</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">1.5% cpu · 2.5% mem</td>
+          </tr>
+          
+          <tr>
+            <td class="mono">monitoring_node-exporter</td>
+            <td class="mono small" title="node-exporter:v1.0.0">v1.0.0</td>
+            <td class="mono small">node-e0kd93j</td>
+            <td><span class="pill ok">running</span></td>
+            <td class="mono small num">1.5% cpu · 2.5% mem</td>
+          </tr>
+          
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="panel-note">
+    Percentages are of THIS machine, and they are reservations rather than usage — the
+    same pair the rings on the fleet view draw.
+  </div>
+</section>
+
+</section>
+      
+
       <section data-view="autoscaler" hidden><div class="page-head">
   <div>
     <h1>Autoscaler</h1>
@@ -7779,15 +9749,129 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
   });
 
   // --- destructive actions --------------------------------------------------
-  // A form carrying data-confirm asks before it submits. Deliberately native
-  // confirm(): the panel has no modal, and a hand-rolled one that fails open on
-  // a JS error would be worse than the browser's.
+  // A form carrying data-confirm asks before it submits.
+  //
+  // This used to be native confirm(), on the reasoning that a hand-rolled modal
+  // failing open on a JS error is worse than the browser's. That reasoning is
+  // kept, not dropped: `ask()` returns false if it cannot build or open the
+  // dialog, and the caller then falls back to window.confirm() — the submit is
+  // blocked either way, and there is no path where a delete goes through
+  // unasked.
+  //
+  // <dialog>.showModal() is what makes it worth doing at all: focus trapping,
+  // Escape-to-cancel and inertness of the page behind come from the platform
+  // rather than from three more listeners here.
+  var confirmBox = null;
+
+  function buildConfirmBox() {
+    var d = document.createElement("dialog");
+    d.className = "modal";
+    d.innerHTML =
+      '<form method="dialog" class="modal-card">' +
+        '<div class="modal-ico" data-ico></div>' +
+        '<div class="modal-text">' +
+          '<h2 data-title></h2>' +
+          '<p data-body></p>' +
+        '</div>' +
+        '<div class="modal-actions">' +
+          '<button class="btn" value="cancel" type="submit">Cancel</button>' +
+          '<button class="btn" value="ok" type="submit" data-ok></button>' +
+        '</div>' +
+      '</form>';
+    document.body.appendChild(d);
+    return d;
+  }
+
+  // Two rounded glyphs, both drawn into a circle by the stylesheet: a warning
+  // for anything that changes state, a bin for anything that destroys it.
+  var ICONS = {
+    warn: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.6 1.8 20.4h20.4L12 3.6Z" ' +
+          'fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>' +
+          '<path d="M12 10v4.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>' +
+          '<circle cx="12" cy="17.4" r="1.05" fill="currentColor"/></svg>',
+    danger: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M10 7V5.2h4V7m-7.4 0 .9 12.2' +
+            'a1.6 1.6 0 0 0 1.6 1.5h5.8a1.6 1.6 0 0 0 1.6-1.5L17.4 7" fill="none" ' +
+            'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>' +
+            '<path d="M10.4 11v6M13.6 11v6" stroke="currentColor" stroke-width="1.8" ' +
+            'stroke-linecap="round"/></svg>'
+  };
+
+  // "Stop api? Its files are kept." -> title "Stop api?", body the rest. The
+  // confirm strings are already written as a question followed by the
+  // consequence, so this needs no second attribute on every form.
+  function splitPrompt(text) {
+    var m = /^(.+?[?.!])\s+(.*)$/.exec(text.trim());
+    return m ? [m[1], m[2]] : [text.trim(), ""];
+  }
+
+  function ask(form, message, onOk) {
+    try {
+      if (typeof HTMLDialogElement !== "function" ||
+          typeof document.createElement("dialog").showModal !== "function") {
+        return false;
+      }
+      confirmBox = confirmBox || buildConfirmBox();
+      var danger = !!form.querySelector("button.btn-danger, .btn-danger");
+      var parts = splitPrompt(message);
+      var ok = confirmBox.querySelector("[data-ok]");
+
+      confirmBox.querySelector("[data-ico]").innerHTML = danger ? ICONS.danger : ICONS.warn;
+      confirmBox.querySelector("[data-ico]").className = "modal-ico " + (danger ? "is-danger" : "is-warn");
+      confirmBox.querySelector("[data-title]").textContent = parts[0];
+      var body = confirmBox.querySelector("[data-body]");
+      body.textContent = parts[1];
+      body.hidden = !parts[1];
+      ok.textContent = danger ? "Yes, continue" : "Confirm";
+      ok.className = "btn " + (danger ? "btn-danger" : "btn-primary");
+
+      confirmBox.onclose = function () {
+        var chose = confirmBox.returnValue === "ok";
+        confirmBox.returnValue = "";
+        if (chose) { onOk(); }
+      };
+      confirmBox.showModal();
+      // Cancel takes focus, not the destructive button: Enter on a dialog you
+      // did not read should do nothing.
+      confirmBox.querySelector("button[value=cancel]").focus();
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   document.addEventListener("submit", function (ev) {
     var form = ev.target.closest("form[data-confirm]");
     if (!form) { return; }
-    if (!window.confirm(form.getAttribute("data-confirm"))) {
-      ev.preventDefault();
-      ev.stopImmediatePropagation();
+
+    // Second pass, after the dialog said yes. Let it through untouched so the
+    // other submit listeners (the preview notice) still see it.
+    if (form.getAttribute("data-confirmed") === "1") {
+      form.removeAttribute("data-confirmed");
+      return;
+    }
+
+    var message = form.getAttribute("data-confirm");
+    var submitter = ev.submitter || null;
+
+    // requestSubmit() re-fires the submit event, which form.submit() does not —
+    // without it the preview notice would never run on a confirmed form.
+    if (typeof form.requestSubmit !== "function") {
+      if (!window.confirm(message)) {
+        ev.preventDefault();
+        ev.stopImmediatePropagation();
+      }
+      return;
+    }
+
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+
+    var go = function () {
+      form.setAttribute("data-confirmed", "1");
+      form.requestSubmit(submitter);
+    };
+    if (!ask(form, message, go)) {
+      if (window.confirm(message)) { go(); }
     }
   }, true);
 
@@ -8081,7 +10165,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/sessions/status \
 /* Preview-only: hash routing between views. All widget behaviour comes from the
    shared app.js above, so what you click here is the same code the panel runs. */
 (function () {
-  var LABEL = {"alerts": "Alerts", "autoscaler": "Autoscaler", "cluster": "Cluster", "component-api": "api", "component-api-staging": "api-staging", "component-cache": "cache", "component-sessions": "sessions", "components": "Components", "login": "Sign in", "new-app": "New application", "new-redis": "New redis", "overview": "Overview", "settings": "Settings"};
+  var LABEL = {"alerts": "Alerts", "autoscaler": "Autoscaler", "cluster": "Cluster", "component-api": "api", "component-api-staging": "api-staging", "component-cache": "cache", "component-documents": "documents", "component-sessions": "sessions", "components": "Components", "login": "Sign in", "new-app": "New application", "new-mongo": "New mongodb", "new-redis": "New redis", "node-k39dl2mzq018": "aichat-master", "node-w1af02c9be47": "aichat-worker-1754812203", "node-w2bc71d0aa93": "aichat-worker-1754819114", "node-w3de92f1cc05": "aichat-worker-1754823887", "overview": "Overview", "settings": "Settings"};
   var CLUSTER = "aichat";
 
   function show(name) {

@@ -50,6 +50,11 @@ class ComponentTest(unittest.TestCase):
         self.assertEqual(problems, [], f"unexpected problems: {problems}")
         return component
 
+    def make_mongo(self, name="docs", **spec):
+        component, problems = self.components.create("mongo", name, spec)
+        self.assertEqual(problems, [], f"unexpected problems: {problems}")
+        return component
+
     # --- names ------------------------------------------------------------
 
     def test_name_rules(self):
@@ -307,6 +312,128 @@ class ComponentTest(unittest.TestCase):
         rendered = yaml.safe_load(self.components.load("api").stack_yaml())
         self.assertEqual(rendered["services"]["app"]["environment"]["MOTD"],
                          'a: b #c "d" $e')
+
+    # --- actions ------------------------------------------------------------
+
+    def test_stop_and_deploy_are_never_offered_at_the_same_time(self):
+        """
+        `when` is what makes them a pair. Show both and one of the two is a
+        button that cannot do anything, which is how a Deploy on a running stack
+        becomes a Redeploy nobody meant to press.
+        """
+        for component in (self.make_app(), self.make_redis(), self.make_mongo()):
+            actions = component.actions()
+            self.assertEqual(actions["stop"]["when"], "running")
+            self.assertEqual(actions["start"]["when"], "stopped")
+            running = [v for v in actions.values() if v["when"] != "stopped"]
+            stopped = [v for v in actions.values() if v["when"] != "running"]
+            self.assertNotIn(actions["start"], running)
+            self.assertNotIn(actions["stop"], stopped)
+            # Whatever a type adds, the panel can style it without knowing the
+            # verb: every action carries its own weight.
+            for verb, act in actions.items():
+                self.assertIn(act["tone"], ("", "primary", "danger"), verb)
+
+    def test_stop_keeps_the_component_on_disk(self):
+        """Stop is `stack rm`; the files are the component, not the stack."""
+        component = self.make_redis()
+        calls = []
+        self.components.base.run = lambda argv, **kw: (calls.append(argv), (True, ""))[1]
+        ok, out = component.stop()
+        self.assertTrue(ok)
+        self.assertEqual(calls[0][:3], ["docker", "stack", "rm"])
+        self.assertTrue(self.components.exists("cache"))
+        self.assertIn("volumes are kept", out)
+
+    def test_purge_refuses_when_the_container_is_not_on_this_node(self):
+        """
+        The panel holds the master's socket and nothing else. Saying so beats
+        `docker exec` failing with "no such container" against an empty id.
+        """
+        component = self.make_redis()
+        component._local_container = lambda: ""
+        ok, out = component.purge()
+        self.assertFalse(ok)
+        self.assertIn("on this node", out)
+
+    def test_purge_rewrites_the_aof_only_when_persistence_is_on(self):
+        component = self.make_redis(appendonly="true")
+        component._local_container = lambda: "abc123"
+        sent = []
+        component._redis_cli = lambda cid, *args: (sent.append(args), (True, ""))[1]
+        self.assertTrue(component.purge()[0])
+        self.assertEqual(sent, [("FLUSHALL",), ("BGREWRITEAOF",)])
+
+        cache = self.make_redis("nopersist", appendonly="false")
+        cache._local_container = lambda: "abc123"
+        sent = []
+        cache._redis_cli = lambda cid, *args: (sent.append(args), (True, ""))[1]
+        self.assertTrue(cache.purge()[0])
+        self.assertEqual(sent, [("FLUSHALL",)])
+
+    def test_a_failed_aof_rewrite_is_not_reported_as_success(self):
+        """FLUSHALL alone leaves a file that puts every key back on restart."""
+        component = self.make_redis()
+        component._local_container = lambda: "abc123"
+        component._redis_cli = lambda cid, *args: (True, "") if args == ("FLUSHALL",) else (False, "boom")
+        ok, out = component.purge()
+        self.assertFalse(ok)
+        self.assertIn("BGREWRITEAOF", out)
+
+    # --- mongo --------------------------------------------------------------
+
+    def test_mongo_is_manager_pinned_and_not_app_workload(self):
+        """It has a volume, so the autoscaler must never move it to a worker."""
+        deploy = self.make_mongo().render()["services"]["mongo"]["deploy"]
+        self.assertEqual(deploy["placement"]["constraints"], ["node.role == manager"])
+        self.assertNotIn("infra.workload", deploy["labels"])
+
+    def test_mongo_pins_the_wiredtiger_cache(self):
+        """
+        Unset, WiredTiger sizes itself from the HOST's memory and ignores the
+        container limit entirely — which is an OOM kill, not a slow query.
+        """
+        command = self.make_mongo(cache_mb=512).render()["services"]["mongo"]["command"]
+        self.assertIn("--wiredTigerCacheSizeGB", command)
+        self.assertEqual(command[command.index("--wiredTigerCacheSizeGB") + 1], "0.5")
+
+    def test_mongo_cache_must_leave_headroom(self):
+        _, problems = self.components.create(
+            "mongo", "tight", {"cache_mb": 768, "memory_reservation_mb": 768})
+        self.assertTrue(any("below the memory reservation" in p for p in problems))
+
+    def test_mongo_password_is_generated_and_kept_out_of_the_spec(self):
+        component = self.make_mongo()
+        component.render()
+        self.assertTrue(component.password())
+        spec = self.components.store.read_spec("docs")
+        self.assertNotIn("MONGO_PASSWORD", str(spec))
+
+    def test_the_mongo_connection_url_escapes_the_password(self):
+        component = self.make_mongo()
+        component.apply_secrets({"MONGO_PASSWORD": "p@ss/word:1"})
+        url = component.connection_url()
+        self.assertIn("p%40ss%2Fword%3A1", url)
+        self.assertIn("authSource=admin", url)
+
+    def test_mongo_exporter_is_optional_and_scraped(self):
+        rendered = self.make_mongo("m1").render()
+        labels = rendered["services"]["mongo-exporter"]["deploy"]["labels"]
+        self.assertEqual(labels["prometheus.port"], "9216")
+        without = self.make_mongo("m2", exporter="false").render()
+        self.assertNotIn("mongo-exporter", without["services"])
+
+    def test_mongo_rotation_changes_the_server_not_just_the_file(self):
+        """
+        MONGO_INITDB_ROOT_PASSWORD is read on first start only. A rotation that
+        merely rewrites it and redeploys reports success while every client keeps
+        working on the old password.
+        """
+        component = self.make_mongo()
+        component._local_container = lambda: ""
+        ok, out = component.rotate_password()
+        self.assertFalse(ok)
+        self.assertIn("first start only", out)
 
     def test_load_survives_one_broken_component(self):
         self.make_app("good")

@@ -73,7 +73,8 @@ These constraints span multiple files. Breaking one fails silently rather than l
 
 **One component, one stack, one directory, one writer.** A component owns
 `/opt/infra/components/<name>/` (`component.json`, `env`, `secret.env`, `stack.yml`) and the Swarm
-stack `<name>`, whose services are `<name>_app`, `<name>_redis`, `<name>_redis-exporter`. Nothing is
+stack `<name>`, whose services are `<name>_<type>` plus that type's sidecars (`<name>_app`,
+`<name>_redis` + `<name>_redis-exporter`, `<name>_mongo` + `<name>_mongo-exporter`). Nothing is
 shared between components, which is the whole point: the previous design had one
 `config/app-<env>.env` written by both the application's environment editor and the database's
 credentials form, so a page rendered before someone else's save wrote their change back out. Two
@@ -85,7 +86,9 @@ deploy labels. There is no `APP_SERVICE`. Anything without the label is overhead
 never scaled, its reservations simply subtracted from whatever node it sits on. The opt-in is
 deliberately one-directional — a forgotten label leaves an app on the master, correctly accounted
 and visible; a label on a stateful service moves a volume onto a worker that later gets deleted.
-**Redis therefore carries no `infra.workload` label** and keeps `node.role == manager`.
+**A database therefore carries no `infra.workload` label** and keeps `node.role == manager`; both
+Redis and MongoDB set `KEEPS_VOLUME`, which is what makes the delete form say the volume survives
+without naming a type.
 
 **The renderer never invents placement, replicas or the image.** `Component.render()` reads the live
 image (CI owns it), the live replica count (the autoscaler owns it) and the live `node.role`
@@ -119,6 +122,12 @@ all three were wrong, and all three were guesses about hardware the autoscaler c
 `bootstrap.sh` with `docker network create`, `monitoring` by `stacks/monitoring.yml`. No component
 may own a network another component needs — when `edge` belonged to the app stack, removing that
 stack took the tunnel's route to everything with it.
+
+**Charts key on a component's CATEGORY, never on its TYPE.** `_CATEGORY_BANDS` in `swarm.py` maps
+`Application`/`Data` to a colour band and `short_service()` folds `<stack>_<type>` to `<stack>` from
+`components.TYPES`. Both used to be literal tuples listing `app` and `redis` — a second registry, so
+a type added to `TYPES` and not to them went grey on every chart and lost its short name.
+`test_every_component_type_gets_a_colour_band_and_a_short_name` is that assertion.
 
 **Service discovery for metrics is label-driven, never enumerated.** `config/vmagent.yml.tpl` keeps
 any Swarm task carrying `prometheus.scrape/port/path` deploy labels, and `node-exporter`/`cadvisor`
@@ -216,6 +225,21 @@ Removal is LIFO: newest node first, least likely to hold warm state, and Hetzner
 `reap_orphans()` deletes servers matching it that never joined the swarm. Anything else in the same
 Hetzner project is protected only by that label.
 
+**It drains and deletes only the nodes it owns, and ownership is a swarm label.** `adopt_workers()`
+stamps `managedby=autoscaler` on every worker whose server carries that selector, so the label is
+*derived* from the blast radius rather than configured next to it. `pick_removal_candidate()` only
+considers owned nodes, `remove_worker()` repeats the check before it drains, and `reap_orphans()`
+only removes swarm entries it owns. A worker someone joined by hand is therefore capacity the packer
+may use and machinery it will never touch — which is what it always should have been; before the
+label, nothing but "nobody has joined one yet" protected it. Adoption happens in `reap_orphans()`,
+first thing in the loop, so the only unstamped window is a node that joins and dies within one
+loop — and the cost of that is a leaked swarm entry, never a deleted node.
+
+**The value is an owner NAME, not a flag.** A node stamped `managedby=dbmanager` later is refused by
+exactly the same equality check with nothing in `autoscaler.py` to change, and the panel reserves the
+whole key rather than blacklisting one value. That is the entire extension point — resist adding a
+registry of owners until a second one actually exists.
+
 ## Deploy paths
 
 There are exactly two, and they must not be confused:
@@ -234,13 +258,75 @@ and read every credential in the cluster, so changes to it are security changes:
 
 - Every mutating route is POST + CSRF-checked, **including `/logout`**.
 - Credentials arrive as docker secrets, never from the image or compose file. Login comparison is
-  constant-time with a per-process PBKDF2 salt, and six failures lock the source address out.
+  constant-time with a per-process PBKDF2 salt. **Every third failure from an address locks it out,
+  and each lock is twice as long as the last** (60s, 2m, 4m … capped at 24h, forgotten after a day
+  without a failure). A fixed window could be ground against forever at N tries per window; the
+  doubling is what makes guessing stop paying. A much looser global cap still exists, because
+  per-IP counting is evaded by anyone who can vary `CF-Connecting-IP`.
 - Gunicorn runs **one worker on purpose** — the lockout counter lives in memory, so a second worker
   would hand an attacker a second lockout budget.
 - **The routes are generic.** `/components/<name>` renders whatever tabs the component declares,
   `/components/<name>/action` dispatches whatever verbs it offers, and both forms are built from
   `fields()`. Adding a type is a class plus one line in `TYPES` — if you find yourself adding
-  `if component.TYPE == ...` to a route or template, the abstraction is in the wrong place.
+  `if component.TYPE == ...` to a route or template, the abstraction is in the wrong place. The
+  Credentials tab keys on `SECRETS` being non-empty and its contents come from
+  `Component.credentials()`; the delete form keys on `KEEPS_VOLUME`. Both were `TYPE == "redis"`
+  until a second database made them wrong.
+- **An action carries its own weight and its own precondition.** `actions()` returns
+  `action(run, label, confirm, tone, when)` per verb. `tone` is why the template no longer decides
+  redness by matching verb names, and `when` (`"running"` / `"stopped"` / `None`) is how Stop and
+  Deploy are a mutually exclusive pair rather than a toggle that has to guess which half it is.
+- **Stop is `docker stack rm`, never `--replicas 0`.** A service scaled to zero is still discovered
+  by the autoscaler, which reads its own floor off the policy labels and restores every replica
+  within a loop. Removing the services removes them from discovery; the spec, environment,
+  credentials and volumes are files and are all still there, so Deploy brings it back unchanged.
+- **A node's page is where availability and labels are set.** `node.labels.<k> == <v>` in a
+  component's extra constraints matches nothing until something sets that label on a node, and until
+  `/cluster/nodes/<id>` existed there was no way to. `update_node()` reads the whole NodeSpec,
+  changes one field and writes it back — Docker replaces rather than merges, so a partial payload
+  drops every label or demotes the manager. Removing a node is refused while it is `ready`: the
+  server behind a worker belongs to the autoscaler's reaper. The page links back to whichever screen
+  linked to it — Overview's fleet map passes `origin`, the Cluster tab is the default — because
+  landing on the wrong one of the two happens on every single visit otherwise.
+- **`managedby` is a permission, and the panel treats the whole key as reserved.** Setting it by hand
+  on a node the autoscaler did not create hands that node to the reaper; dropping it from one that it
+  did leaks a server nothing will ever remove. So the label form does not render the row,
+  `validate_labels()` refuses the key, and — because `update_node()` REPLACES the label map —
+  `shape.merge_labels()` puts the live value back into whatever the form posted. All three, not one:
+  hiding the row alone would delete the label on every save.
+- **Availability is editable only while nobody else owns the node.** The autoscaler drains a worker
+  as the first step of deleting it and re-reads availability every loop, so a value set here on one
+  of its nodes is reverted underneath you. The control is faded and `disabled` with the reason next
+  to it — a control that silently loses is worse than no control.
+- **The header shows the newest image asked for above the one running.** `running` is read off the
+  service, so it is a success by construction — a failed or in-flight deploy leaves the previous
+  image up and the header looked healthy. The second line is the newest history entry whatever
+  became of it, and the Map tab colours each replica by the tag it is running, so a rolling update
+  is two colours and a stuck one is two colours that stay.
+- **The theme is applied before the first paint, from `<head>`.** `app.js` loads at the end of
+  `<body>`, so a saved light theme used to be applied only after the dark markup had been drawn —
+  one white flash per navigation, on every tab. The inline script in `base.html` and `login.html`
+  sets `data-theme` on `<html>`, which carries a full token set of its own; the body class `app.js`
+  adds afterwards resolves to the same values. Moving that script back down reintroduces the flash.
+- **The infrastructure version lives in the rail, under the theme button.** It qualifies every page,
+  not the Cluster tab, so it comes from the `infra` context global rather than one route's argument.
+  It is `_rail_version.html`, included by `base.html` **and** `preview.html`. The preview builds its
+  own rail rather than extending base, so anything written only into base ships in the live panel and
+  is silently missing from the artefact people actually review — which is exactly what happened to
+  this block. Any new rail furniture goes in a partial for the same reason.
+- **The create form and the Settings tab are the same partial.** `_spec_form.html` renders
+  Configuration and the autoscale policy from `fields()` against a `spec` mapping; the two used to
+  carry their own copies and drifted immediately. The one difference that is real: `managed` fields
+  are shown on create and hidden afterwards, because before anything has run there is no live value
+  to preserve and no image to deploy, while after it there is something overwriting them every few
+  minutes. That is the `creating` flag, and it is the only branch the partial has.
+- **"Managed for you" is not rendered when it is empty.** Both databases declare no managed fields,
+  so both had a titled empty box on their Settings tab.
+- **The confirm dialog fails closed.** `data-confirm` opens a `<dialog>` — rounded warning or bin
+  glyph, Cancel focused, Escape and focus-trapping from the platform. If it cannot be built or
+  opened, `ask()` returns false and the caller falls back to `window.confirm()`; there is no path
+  where a delete submits unasked. It re-submits with `requestSubmit()` rather than `submit()`, so the
+  other submit listeners — the preview notice — still fire on a confirmed form.
 - `admin/components/` is **stdlib + PyYAML only**, so `bin/component` can import it on the host
   where Flask and docker-py are not installed. Live status lives in `swarm.py`, which is panel-only.
 - `admin/shape.py` holds anything derived from a service dict, because `swarm.py` and `fixtures.py`
@@ -307,3 +393,11 @@ webhook, admin login). A component's own credentials are not docker secrets: a R
 in that component's `secret.env`, and rotating it is a button that regenerates the value and
 redeploys one stack. Nothing else holds a copy, so nothing else breaks — which is what made the
 button possible.
+
+MongoDB is the exception that proves the shape. `MONGO_INITDB_ROOT_PASSWORD` is read on the FIRST
+start only, off an empty data directory, so rewriting `secret.env` and redeploying changes nothing
+for an existing volume. `MongoComponent.rotate_password()` therefore runs `db.changeUserPassword` in
+the live server first and only then saves and redeploys — a straight copy of the Redis button would
+report success while every client kept working on the old password. Its sibling trap is the
+WiredTiger cache: unset, it sizes itself from the HOST's memory and ignores the container limit, so
+`--wiredTigerCacheSizeGB` is rendered explicitly and validated below the memory reservation.

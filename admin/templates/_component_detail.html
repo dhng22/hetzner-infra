@@ -8,6 +8,28 @@
     <div class="eyebrow"><a href="{{ section_href({'key': 'components'}) }}">Components</a></div>
     <h1>{{ component.name }}</h1>
     <p class="hint">{{ component.BLURB }}</p>
+    {# The newest image ANYBODY asked for, above the one that is running.
+       "running" is read off the service, so it is always a success by
+       construction — a deploy that failed or is still rolling leaves the
+       previous image up, and the header looked perfectly healthy. Equal means
+       the latest request is live; different means it is in flight or it was
+       rolled back, which is the thing worth seeing without opening a tab. #}
+    {% if newest and newest.image %}
+    <p class="head-image">
+      <span class="muted">newest</span>
+      <code class="mono" title="{{ newest.image }}">{{ newest.image_short }}</code>
+      {% if view.primary and view.primary.image == newest.image %}
+        <span class="pill ok plain">live</span>
+      {% elif newest.status == 'failed' %}
+        <span class="pill bad plain">not live — last deploy failed</span>
+      {% elif newest.status == 'superseded' %}
+        <span class="pill mute plain">overtaken by a later deploy</span>
+      {% else %}
+        <span class="pill warn plain">not live yet — {{ newest.status or 'pending' }}</span>
+      {% endif %}
+      <span class="muted">via {{ newest.source }}</span>
+    </p>
+    {% endif %}
     {# What is actually RUNNING, read off the service — not what the spec says
        should be. For an app those differ every time CI ships. #}
     {% if view.primary and view.primary.exists and view.primary.image %}
@@ -89,101 +111,63 @@
     </section>
     {% endif %}
 
-    <div class="split">
-      <section class="panel">
-        <div class="panel-head"><h2>Services</h2></div>
-        <div class="panel-body">
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>Service</th><th>Image</th><th>Running</th><th>State</th></tr></thead>
-              <tbody>
-                {% for svc in view.services %}
-                <tr>
-                  <td class="mono">{{ svc.name }}</td>
-                  <td class="mono small">{{ svc.image_short if svc.exists else '—' }}</td>
-                  <td class="num">{{ svc.running }}/{{ svc.desired }}</td>
-                  <td><span class="pill {{ svc.tone }}">{{ svc.state }}</span></td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head"><h2>Placement</h2></div>
-        <div class="panel-body stack">
-          {% if view.primary and view.primary.placement %}
-            <div class="mono">{{ view.primary.placement|join(', ') }}</div>
-          {% else %}
-            <div class="muted">No constraint — eligible for any node.</div>
-          {% endif %}
-
-          {% set pm = fields|selectattr('name', 'equalto', 'placement_mode')|first %}
-          {% if pm %}
-          {# Editable here as well as in Settings: this is the card you are
-             looking at when you want it changed. It posts to the same endpoint,
-             and the spec is merged, so sending these two fields alone leaves
-             everything else exactly as it was. #}
-          <form method="post" action="{{ spec_href(component.name) }}" class="inline-form"
-                {% if preview %}data-preview{% endif %}>
-            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-            <label class="sr-only" for="pm-{{ component.name }}">Placement mode</label>
-            <select id="pm-{{ component.name }}" name="placement_mode">
-              {% for choice in pm.choices %}
-              <option value="{{ choice }}"
-                      {% if (component.spec.get('placement_mode') or 'auto') == choice %}selected{% endif %}>
-                {{ choice }}
-              </option>
+    <section class="panel">
+      <div class="panel-head"><h2>Services</h2></div>
+      <div class="panel-body">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Service</th><th>Image</th><th>Running</th><th>State</th></tr></thead>
+            <tbody>
+              {% for svc in view.services %}
+              <tr>
+                <td class="mono">{{ svc.name }}</td>
+                <td class="mono small">{{ svc.image_short if svc.exists else '—' }}</td>
+                <td class="num">{{ svc.running }}/{{ svc.desired }}</td>
+                <td><span class="pill {{ svc.tone }}">{{ svc.state }}</span></td>
+              </tr>
               {% endfor %}
-            </select>
-            <input type="text" name="placement_extra" class="mono"
-                   value="{{ component.spec.get('placement_extra') or '' }}"
-                   placeholder="extra constraints, comma separated">
-            <button class="btn btn-sm" type="submit">Apply</button>
-          </form>
-          {% endif %}
-          {% if component.TYPE == 'app' %}
-          <p class="hint">
-            On <code>auto</code> the autoscaler owns this: it adds
-            <code>node.role == worker</code> once workers exist and removes it when the
-            pool empties, so the master serves at the free floor and never during a
-            scale-out, and deploys re-state whatever is live rather than applying a
-            stored copy. Choose anything else and it stops moving this component at
-            all — including away from a worker that is about to be deleted.
-          </p>
-          {% else %}
-          <p class="hint">
-            Pinned to the manager because it has a volume. The autoscaler never moves
-            it, which is what stops a stateful service being deleted with a worker.
-          </p>
-          {% endif %}
+            </tbody>
+          </table>
         </div>
-      </section>
-    </div>
+      </div>
+    </section>
 
     <section class="panel">
       <div class="panel-head"><h2>Actions</h2></div>
       <div class="panel-body">
         <div class="btn-row">
-          {% for verb, spec in component.actions().items() %}
-          {% if spec[0] is not none %}
+          {# Weight and confirmation come from the action, not from matching its
+             verb here: a type that adds a destructive button should not have to
+             edit this markup to make it red. `when` is the live state a button
+             applies to, which is how Stop and Deploy are one pair rather than a
+             toggle that has to guess which half it is. #}
+          {% set is_running = view.primary and view.primary.exists %}
+          {% for verb, act in component.actions().items() %}
+          {% if act.run is not none and (not act.when or (act.when == 'running') == is_running) %}
           <form method="post" action="{{ action_href(component.name) }}"
                 {% if preview %}data-preview{% endif %}
-                {% if spec[2] %}data-confirm="{{ spec[2] }}"{% endif %}>
+                {% if act.confirm %}data-confirm="{{ act.confirm }}"{% endif %}>
             <input type="hidden" name="csrf" value="{{ csrf_token() }}">
             <input type="hidden" name="action" value="{{ verb }}">
-            <button class="btn {{ 'btn-primary' if verb == 'redeploy' }}{{ 'btn-danger' if verb in ('rollback', 'rotate') }}"
-                    type="submit">{{ spec[1] }}</button>
+            <button class="btn {{ 'btn-' ~ act.tone if act.tone }}"
+                    type="submit">{{ act.label }}</button>
           </form>
           {% endif %}
           {% endfor %}
         </div>
         <p class="hint">
+          {% if is_running %}
           Redeploy re-applies this component's stack. It reads the live image and
           replica count back first, so it will not undo the autoscaler or roll back
           whatever CI last shipped. Nothing outside this component is touched.
+          Stop removes its services from the cluster and keeps everything else —
+          the spec, the environment, the credentials and the volumes are files, not
+          Swarm state.
+          {% else %}
+          Nothing of this component is running. Its files are still here, so Deploy
+          brings it back exactly as it was; delete it from Settings if you want it
+          gone for good.
+          {% endif %}
         </p>
       </div>
     </section>
@@ -409,75 +393,34 @@
   {% endif %}
 
   <!-- settings -------------------------------------------------------------->
+  <!-- map --------------------------------------------------------------->
+  {% if map is defined %}
+  <div data-panel="map" {% if tab != 'map' %}hidden{% endif %}>
+    {% include "_map.html" %}
+  </div>
+  {% endif %}
+
   {% if tabs|selectattr(0, 'equalto', 'settings')|list %}
   <div data-panel="settings" {% if tab != 'settings' %}hidden{% endif %}>
     <form method="post" action="{{ spec_href(component.name) }}" {% if preview %}data-preview{% endif %}>
       <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-      <section class="panel">
-        <div class="panel-head"><h2>Configuration</h2></div>
-        <div class="panel-body">
-          <div class="grid-2">
-            {% for f in fields if not f.managed and not f.group %}
-              {% set value = component.spec.get(f.name) %}
-              {% include "_field.html" %}
-            {% endfor %}
-          </div>
-        </div>
-        <div class="panel-note">
-          Saving redeploys this component. The live image, replica count, placement
-          and resource sizing are read back first and preserved, so changing a
-          setting here will not roll back your last deploy or undo the autoscaler.
-        </div>
-      </section>
-
-      {% set policy = fields|selectattr('group', 'equalto', 'autoscale')|list %}
-      {% if policy %}
-      {% set toggle = policy|selectattr('name', 'equalto', 'autoscale')|first %}
-      <section class="panel" data-toggle-section>
-        <div class="panel-head">
-          <h2>Autoscale</h2>
-          {% if toggle %}
-          {# The switch that owns the section, in its title rather than as the
-             first of thirteen inputs — it decides whether the other twelve mean
-             anything at all. #}
-          <label class="switch" title="Let the autoscaler own the replica count">
-            <input type="hidden" name="__bool__" value="{{ toggle.name }}">
-            <input type="checkbox" name="{{ toggle.name }}" value="true"
-                   data-toggle-master
-                   {% if component.spec.get(toggle.name) %}checked{% endif %}>
-            <span class="switch-track" aria-hidden="true"></span>
-            <span class="switch-label">on</span>
-          </label>
-          {% endif %}
-          <span class="spacer"></span>
-        </div>
-        <div class="panel-body" data-toggle-body>
-          <div class="grid-2">
-            {% for f in policy if f.name != 'autoscale' %}
-              {% set value = component.spec.get(f.name) %}
-              {% include "_field.html" %}
-            {% endfor %}
-          </div>
-        </div>
-        <div class="panel-note">
-          With this off the replica count is yours and nothing below applies. The
-          autoscaler still measures this component and still right-sizes its
-          reservations — it just stops changing how many of it there are.
-        </div>
-      </section>
-      {% endif %}
+      {% with spec = component.spec, fields = fields %}
+        {% include "_spec_form.html" %}
+      {% endwith %}
 
       {# Values this component HAS but nobody types. They are still in the spec —
          the renderer needs a reservation before anything has been measured — but
          offering a form field for a number the autoscaler overwrites every few
          minutes would just lose your input silently. Shown, not editable. #}
+      {% set managed = fields|selectattr('managed')|rejectattr('name', 'equalto', 'image')|list %}
+      {% if managed %}
       <section class="panel">
         <div class="panel-head"><h2>Managed for you</h2></div>
         <div class="panel-body">
           <div class="rows">
             {# The image is omitted: it is shown in the page header, where you
                look for "what is running", rather than repeated here. #}
-            {% for f in fields if f.managed and f.name != 'image' %}
+            {% for f in managed %}
             <div class="deploy-row mute">
               <span class="stripe"></span>
               <span class="src">{{ f.managed }}</span>
@@ -500,6 +443,7 @@
           your app really differs.
         </div>
       </section>
+      {% endif %}
 
       <div class="sticky-save">
         <button class="btn btn-primary" type="submit">Save and deploy</button>
@@ -513,7 +457,7 @@
         <p class="hint">
           Removes the stack and this component's files. Other components, the
           infrastructure and the tunnel are untouched.
-          {% if component.TYPE == 'redis' %}
+          {% if component.KEEPS_VOLUME %}
           The volume <code>{{ component.name }}-data</code> is <strong>kept</strong> —
           a mistyped delete should cost you a redeploy, not your data.
           {% endif %}

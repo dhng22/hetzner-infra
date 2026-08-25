@@ -28,6 +28,7 @@ class RedisComponent(Component):
     BLURB = "A password-protected Redis, with its own volume."
     CATEGORY = "Data"
     GROUP = "Database"
+    KEEPS_VOLUME = True
 
     @classmethod
     def fields(cls):
@@ -109,6 +110,60 @@ class RedisComponent(Component):
             return False, f"Password rotated, but the redeploy failed: {out}"
         return True, "Password rotated and the server restarted with it."
 
+    def _local_container(self):
+        """
+        The container id of this Redis on the node the panel runs on, or ''.
+
+        The panel holds the master's docker socket and nothing else, so it can
+        only exec into a container placed here. That is the normal case — a
+        component with a volume defaults to `node.role == manager` — but
+        `placement_mode: any` can put it elsewhere, and saying so beats a
+        confusing "no such container".
+        """
+        out = base.docker_out([
+            "ps", "--filter", f"label=com.docker.swarm.service.name={self.service}",
+            "--filter", "status=running", "--format", "{{.ID}}"])
+        lines = [line.strip() for line in out.splitlines() if line.strip()]
+        return lines[0] if lines else ""
+
+    def _redis_cli(self, container, *args):
+        # The password is read from the container's own environment rather than
+        # passed in argv, so it never appears in the process table of the master
+        # or in any error this returns.
+        return base.run(["docker", "exec", container, "sh", "-c",
+                         'exec redis-cli --no-auth-warning -a "$REDIS_PASSWORD" '
+                         + " ".join(base.quote(a) for a in args)], timeout=120)
+
+    def purge(self):
+        """
+        Drop every key — and, with AOF on, the file that would put them back.
+
+        FLUSHALL only empties the dataset in memory. The append-only file on
+        disk still holds every command that built it, so the next restart
+        replays the whole thing and the "purged" cache comes back in full.
+        BGREWRITEAOF is what rewrites that file from the live (now empty)
+        dataset, which is the only reason this is two calls and not one.
+        """
+        container = self._local_container()
+        if not container:
+            return False, (f"No running {self.service} container on this node. The "
+                           f"panel can only reach containers on the master, and this "
+                           f"component's placement allows it elsewhere — flush it "
+                           f"from the node it is actually on.")
+        ok, out = self._redis_cli(container, "FLUSHALL")
+        if not ok:
+            return False, f"FLUSHALL failed: {out}"
+        if not self.spec.get("appendonly"):
+            return True, f"Every key in {self.name} was dropped."
+        ok, out = self._redis_cli(container, "BGREWRITEAOF")
+        if not ok:
+            return False, (f"Every key was dropped, but rewriting the append-only "
+                           f"file failed: {out}. The data is gone from memory and "
+                           f"would come back on the next restart — run BGREWRITEAOF "
+                           f"against this server by hand.")
+        return True, (f"Every key in {self.name} was dropped and the append-only file "
+                      f"was rewritten empty, so nothing returns on a restart.")
+
     def connection_url(self, host=None, port=None):
         # The password is percent-encoded because it goes into a URL and a user
         # may well choose one containing `@`, `:` or `/`. Without this,
@@ -116,6 +171,18 @@ class RedisComponent(Component):
         # client's error message blames DNS.
         return (f"redis://default:{quote(self.password(), safe='')}@"
                 f"{host or self.service}:{port or 6379}")
+
+    def credentials(self, master_ip=""):
+        port = self.spec.get("external_port")
+        return {
+            "password": self.password(),
+            "internal_host": self.service,
+            "internal_port": "6379",
+            "internal_url": self.connection_url(),
+            "external_port": port,
+            "external_host": master_ip,
+            "external_url": self.connection_url(master_ip, port) if port else "",
+        }
 
     # --- validation ---------------------------------------------------------
 
@@ -247,20 +314,6 @@ class RedisComponent(Component):
             "volumes": {volume: {}},
         }
 
-    def remove(self):
-        """
-        Removing a Redis leaves its volume behind, on purpose.
-
-        `docker stack rm` does not delete volumes and neither do we. A mistyped
-        delete should cost you a redeploy, not your data. The volume is named
-        `<component>-data`; remove it by hand once you are sure.
-        """
-        ok, out = super().remove()
-        if ok:
-            out = (f"{out}\nThe volume {self.name}-data was kept. Delete it with "
-                   f"`docker volume rm {self.name}-data` once you are sure.")
-        return ok, out
-
     # --- panel surface ------------------------------------------------------
 
     def tabs(self):
@@ -270,11 +323,19 @@ class RedisComponent(Component):
     def actions(self):
         actions = super().actions()
         actions.pop("rollback", None)   # a database is not a thing to roll back casually
-        actions["rotate"] = (
+        actions["purge"] = base.action(
+            self.purge, "Purge data",
+            f"Drop EVERY key in {self.name}? "
+            + ("Persistence is on, so the append-only file is rewritten empty too "
+               "and nothing comes back on a restart. "
+               if self.spec.get("appendonly") else "")
+            + "There is no undo and no backup.",
+            tone="danger", when="running")
+        actions["rotate"] = base.action(
             self.rotate_password, "Rotate password",
             "Generate a new password and restart the server with it? Anything "
             "still using the old one will stop being able to authenticate.",
-        )
+            tone="danger", when="running")
         return actions
 
     def access(self):

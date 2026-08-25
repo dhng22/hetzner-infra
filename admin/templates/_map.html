@@ -1,0 +1,88 @@
+{#
+  One component's replicas across the fleet, coloured by the image tag each one
+  is running.
+
+  The same tree as the Overview map, deliberately: it is the same fleet and the
+  same blocks, so the two read as one picture. What changes is what a block
+  MEANS. On the Overview a block is "some task", named after its service; here
+  every block is a replica of this component and named after its tag, because
+  when every block says the same thing the only interesting question is which
+  ones do not.
+
+  That makes a rolling update something you look at rather than compute: two
+  colours while it rolls, one when it is done, and two that stay two when it is
+  stuck — which is the state the Deployments tab can only tell you about after
+  the fact.
+#}
+<section class="panel">
+  <div class="panel-head">
+    <h2>Rollout map</h2>
+    <span class="spacer"></span>
+    <span class="pill mute plain mono">{{ map.total }} replica{{ '' if map.total == 1 else 's' }}</span>
+  </div>
+
+  <p class="panel-intro">
+    Every node, and every replica of <strong>{{ component.name }}</strong> on it. The label
+    on a block is the image tag that replica is running, not the service name — one colour
+    means the fleet agrees, two means an update is in flight or a rollback left it split.
+  </p>
+
+  <div class="legend">
+    {% for t in map.tags %}
+      <span class="legend-item"><i class="sw sw-{{ t.key }}"></i>{{ t.tag }} · {{ t.count }}</span>
+    {% else %}
+      <span class="legend-item">nothing of this component is running</span>
+    {% endfor %}
+  </div>
+
+  <div class="tree-scroll">
+    <div class="tree">
+      <div class="tree-top">
+        <div class="tnode tnode-root">
+          <span class="tnode-title">{{ component.name }}</span>
+          <span class="tnode-sub">
+            <b>{{ map.tags|length }}</b> tag{{ '' if map.tags|length == 1 else 's' }}
+            · <b>{{ map.total }}</b> replica{{ '' if map.total == 1 else 's' }}
+          </span>
+        </div>
+      </div>
+
+      <div class="tree-kids">
+        {% for n in map.nodes %}
+          <div class="tree-branch">
+            <a class="tnode tnode-host is-link {{ 'is-manager' if n.role == 'manager' }}"
+               href="{{ node_href(n.id) }}">
+              <span class="tnode-head">
+                <span class="pill {{ 'accent' if n.role == 'manager' else n.tone }}">{{ n.role }}</span>
+                {% if n.availability != 'active' %}<span class="pill warn">{{ n.availability }}</span>{% endif %}
+              </span>
+              <span class="tnode-title" title="{{ n.hostname }}">{{ n.hostname }}</span>
+              <span class="tnode-sub">
+                <b>{{ n.tasks_total }}</b> here · {{ n.cpus }} vCPU · {{ n.memory_gb }} GB
+              </span>
+            </a>
+
+            <div class="slots">
+              {% for t in n.tasks %}
+                <span class="slot slot-{{ t.key }}" tabindex="0"
+                      style="--cpu:{{ t.cpu_share }};--mem:{{ t.mem_share }}"
+                      data-tip="{{ t.image }}&#10;task {{ t.id }} on {{ n.hostname }}&#10;state: {{ t.state }}">
+                  <i class="dot dot-{{ t.tone }}" aria-hidden="true"></i>{{ t.name }}
+                </span>
+              {% else %}
+                <span class="slot is-empty">none here</span>
+              {% endfor %}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="panel-note">
+    Replicas are counted from RUNNING tasks. A rollout that is stuck shows the old tag
+    holding steady while the new one never grows — Swarm rolls a failing update back, so
+    the end state of a bad deploy is one colour again, and the Deployments tab is where
+    the verdict is written down.
+  </div>
+</section>

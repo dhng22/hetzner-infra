@@ -5,6 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ cluster_name }} control · preview</title>
 <style>{{ inline_css|safe }}</style>
+<script>
+(function () {
+  try {
+    var t = localStorage.getItem("panel-theme");
+    if (t === "light" || t === "dark") {
+      document.documentElement.setAttribute("data-theme", t);
+    }
+  } catch (e) { /* private mode */ }
+})();
+</script>
 </head>
 <body>
 <div class="shell">
@@ -31,6 +41,7 @@
 
     <div class="rail-foot">
       <button class="btn btn-sm" type="button" data-theme-toggle style="width:100%">Switch theme</button>
+      {% include "_rail_version.html" %}
     </div>
   </nav>
 
@@ -53,7 +64,7 @@
                 fields = d.fields, env_pairs = d.env_pairs, logs = d.logs,
                 creds = d.creds, firewall = d.firewall, webhook = d.webhook,
                 deployments = d.deployments, rollout = d.rollout,
-                registries = d.registries %}
+                registries = d.registries, map = d.map, newest = d.newest %}
           {% include "_component_detail.html" %}
         {% endwith %}
       </section>
@@ -71,6 +82,13 @@
       {% endfor %}
 
       <section data-view="cluster" hidden>{% include "_cluster.html" %}</section>
+
+      {# One view per node, so the preview drives the real node page rather than
+         leaving the fleet's links pointing at nothing. #}
+      {% for n in node_views %}
+      <section data-view="node-{{ n.id }}" hidden>{% include "_node.html" %}</section>
+      {% endfor %}
+
       <section data-view="autoscaler" hidden>{% include "_autoscaler.html" %}</section>
       <section data-view="alerts" hidden>{% include "_alerts.html" %}</section>
       <section data-view="settings" hidden>{% include "_settings.html" %}</section>

@@ -187,6 +187,20 @@ def docker_out(argv):
     return out if ok else ""
 
 
+def action(run, label, confirm=None, tone="", when=None):
+    """
+    One button on a component's page.
+
+    `tone` is the button's weight and `when` is the live state it applies to —
+    "running" for anything that needs the stack up, "stopped" for the one that
+    brings it back, None for always. Both live here rather than in the template
+    because the template used to decide them by matching verb names, which is
+    the same `if TYPE == ...` in a different costume: a type adding a verb had
+    to edit the markup to make its button red.
+    """
+    return {"run": run, "label": label, "confirm": confirm, "tone": tone, "when": when}
+
+
 class Component:
     """Subclasses set TYPE/LABEL/BLURB and implement fields() and render()."""
 
@@ -198,6 +212,13 @@ class Component:
     #: group — a second database type is a new class and nothing else, and the
     #: create page grows a picker on its own.
     GROUP = "Application"
+    #: True when this type owns a volume named `<component>-data`.
+    #:
+    #: `docker stack rm` does not delete volumes and neither do we — a mistyped
+    #: delete should cost you a redeploy, not your data. It is a flag rather than
+    #: two identical `remove()` overrides and an `if TYPE == 'redis'` in the
+    #: delete form, which is what it was until a second database made both wrong.
+    KEEPS_VOLUME = False
 
     def __init__(self, name, data=None):
         self.name = store.check_name(name)
@@ -485,6 +506,24 @@ class Component:
                     "--resolve-image", "changed", "--prune",
                     "-c", path, self.stack])
 
+    def stop(self):
+        """
+        Take the stack down without forgetting it.
+
+        `docker stack rm`, not `--replicas 0`: a service scaled to zero is still
+        discovered by the autoscaler, which reads its own floor off the policy
+        labels and puts every replica straight back — a stop button that undoes
+        itself sixty seconds later is worse than none. Removing the services
+        removes them from discovery, and nothing that makes this component what
+        it is lives in Swarm: the spec, the environment, the credentials and the
+        volumes are all on disk and all still there.
+        """
+        ok, out = run(["docker", "stack", "rm", self.stack], timeout=120)
+        if not ok and "not found" not in out.lower():
+            return False, out
+        return True, (f"{self.name} is stopped. Its files, environment, credentials "
+                      f"and volumes are kept — press Deploy to bring it back.")
+
     def remove(self):
         ok, out = run(["docker", "stack", "rm", self.stack], timeout=120)
         # `stack rm` on something that was never deployed is not an error worth
@@ -492,7 +531,11 @@ class Component:
         if not ok and "not found" not in out.lower():
             return False, out
         store.delete_dir(self.name)
-        return True, out or f"removed {self.name}"
+        out = out or f"removed {self.name}"
+        if self.KEEPS_VOLUME:
+            out += (f"\nThe volume {self.name}-data was kept. Delete it with "
+                    f"`docker volume rm {self.name}-data` once you are sure.")
+        return True, out
 
     def restart(self):
         return run(["docker", "service", "update", "--force", "--detach=false",
@@ -510,13 +553,39 @@ class Component:
         return [("overview", "Overview"), ("logs", "Logs")]
 
     def actions(self):
-        """verb -> (callable, button label, confirm text or None)."""
+        """
+        verb -> action(), in the order the panel renders them.
+
+        Stop and Deploy are one pair of mutually exclusive buttons rather than a
+        toggle, because a toggle has to guess which state it is in before it can
+        label itself; `when` lets the panel show whichever one applies to what
+        is actually running.
+        """
         return {
-            "redeploy": (self.deploy, "Redeploy", None),
-            "restart": (self.restart, "Rolling restart", None),
-            "rollback": (self.rollback, "Roll back",
-                         "Return this service to its previous spec?"),
+            "stop": action(self.stop, "Stop",
+                           f"Stop {self.name}? Its services leave the cluster; its "
+                           f"files, environment, credentials and volumes stay, and "
+                           f"Deploy brings it back.",
+                           tone="danger", when="running"),
+            "start": action(self.deploy, "Deploy", tone="primary", when="stopped"),
+            "redeploy": action(self.deploy, "Redeploy", tone="primary", when="running"),
+            "restart": action(self.restart, "Rolling restart", when="running"),
+            "rollback": action(self.rollback, "Roll back",
+                               "Return this service to its previous spec?",
+                               tone="danger", when="running"),
         }
+
+    def credentials(self, master_ip=""):
+        """
+        What the Credentials tab shows, or None when the type has none.
+
+        Assembled here, once, rather than half in a route and half in Jinja —
+        which is how the internal and the external connection URL came to be
+        built by two different pieces of code that could disagree. The panel
+        renders this tab for any type whose `SECRETS` is non-empty, so a second
+        database is a class and not a route change.
+        """
+        return None
 
     def access(self):
         """

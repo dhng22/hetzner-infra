@@ -7,6 +7,17 @@
 <title>Sign in · {{ cluster_name }}</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='fonts.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+{# Same pre-paint theme application as base.html — this page does not extend it. #}
+<script>
+(function () {
+  try {
+    var t = localStorage.getItem("panel-theme");
+    if (t === "light" || t === "dark") {
+      document.documentElement.setAttribute("data-theme", t);
+    }
+  } catch (e) { /* private mode */ }
+})();
+</script>
 </head>
 <body>
 <div class="login-wrap">

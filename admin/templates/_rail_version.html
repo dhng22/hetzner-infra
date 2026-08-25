@@ -1,0 +1,43 @@
+{# What this master is RUNNING, and whether the thing that keeps it current is
+   still alive. The commit alone cannot tell you the second one: a cluster that
+   is up to date and a cluster whose updater died last week show the same SHA.
+   It sits under the theme button rather than on the Cluster tab because it
+   qualifies every page — Cluster is about the machines.
+
+   Included by base.html AND preview.html. The preview builds its own rail
+   rather than extending base, so a block written only into base silently never
+   reaches the artefact people actually review. #}
+<div class="rail-version">
+  {% if not infra.configured %}
+    <div class="rail-version-row">
+      <span class="k">Running</span>
+      <span class="v">not self-updating</span>
+    </div>
+  {% else %}
+    <div class="rail-version-row">
+      <span class="k">Running</span>
+      <span class="v mono" title="{{ infra.commit }}">{{ infra.short or '—' }}</span>
+    </div>
+    <div class="rail-version-row">
+      <span class="k">Last updated</span>
+      <span class="v">
+        {% if infra.updated_at %}
+        <time datetime="{{ infra.updated_at }}" data-localtime>{{ infra.updated_at }}</time>
+        {% else %}never{% endif %}
+      </span>
+    </div>
+    <div class="rail-version-row">
+      <span class="k">Last checked</span>
+      <span class="v">
+        {% if infra.checked_at %}
+        <time datetime="{{ infra.checked_at }}" data-localtime>{{ infra.checked_at }}</time>
+        {% else %}never{% endif %}
+      </span>
+    </div>
+    {% if infra.status == 'error' %}
+      <div class="rail-version-row"><span class="pill bad">update failing</span></div>
+    {% elif infra.behind %}
+      <div class="rail-version-row"><span class="pill warn">update pending</span></div>
+    {% endif %}
+  {% endif %}
+</div>

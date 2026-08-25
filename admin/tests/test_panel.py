@@ -38,9 +38,11 @@ class PanelTest(unittest.TestCase):
         sys.modules["swarm"] = fixtures      # stand in for the docker socket
         import app as panel
         import components
+        import shape
 
         cls.panel = panel
         cls.components = components
+        cls.shape = shape
         # Nothing is really deployed; record what would have been.
         cls.deploys = []
         components.base.Component.deploy = lambda self: (
@@ -88,7 +90,8 @@ class PanelTest(unittest.TestCase):
 
     def test_every_page_requires_a_session(self):
         for path in ("/", "/components", "/cluster", "/autoscaler", "/alerts",
-                     "/settings", "/api/topology", "/components/new"):
+                     "/settings", "/api/topology", "/components/new",
+                     "/cluster/nodes/k39dl2mzq018"):
             r = self.client.get(path)
             self.assertEqual(r.status_code, 302, path)
             self.assertIn("/login", r.headers["Location"], path)
@@ -98,7 +101,8 @@ class PanelTest(unittest.TestCase):
 
     def test_writes_require_csrf(self):
         self.login()
-        for path in ("/components", "/settings", "/registry", "/cluster/stack"):
+        for path in ("/components", "/settings", "/registry", "/cluster/stack",
+                     "/cluster/nodes/k39dl2mzq018"):
             r = self.client.post(path, data={"name": "x"})
             self.assertEqual(r.status_code, 400, path)
 
@@ -324,6 +328,212 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(r.status_code, 404)
 
     # --- infrastructure -----------------------------------------------------
+
+    # --- nodes --------------------------------------------------------------
+
+    NODE = "k39dl2mzq018"
+
+    def test_a_node_page_shows_what_is_on_it(self):
+        self.login()
+        body = self.client.get(f"/cluster/nodes/{self.NODE}").get_data(as_text=True)
+        self.assertIn("aichat-master", body)
+        self.assertIn("Labels", body)
+        self.assertIn("Availability", body)
+        # The tasks placed here, with the tag each one runs.
+        self.assertIn("cache_redis", body)
+        self.assertIn("7.4-alpine", body)
+
+    def test_an_unknown_node_is_404_not_500(self):
+        self.login()
+        self.assertEqual(self.client.get("/cluster/nodes/nope").status_code, 404)
+        self.assertEqual(self.client.post("/cluster/nodes/nope",
+                                          data={"csrf": "x"}).status_code, 400)
+
+    def test_a_node_refuses_an_availability_it_does_not_have(self):
+        csrf = self.login()
+        r = self.client.post(f"/cluster/nodes/{self.NODE}",
+                             data={"csrf": csrf, "node_action": "availability",
+                                   "availability": "delete"})
+        self.assertEqual(r.status_code, 400)
+
+    def test_a_label_that_cannot_be_a_constraint_is_refused(self):
+        """
+        Docker would take `my disk`; no placement constraint can ever match it,
+        so it is a label you can set and never use.
+        """
+        csrf = self.login()
+        r = self.client.post(f"/cluster/nodes/{self.NODE}",
+                             data={"csrf": csrf, "node_action": "labels",
+                                   "key": "my disk", "value": "ssd"},
+                             follow_redirects=True)
+        self.assertIn("not a usable label name", r.get_data(as_text=True))
+
+    def test_the_owner_label_cannot_be_set_from_the_form(self):
+        """
+        `managedby` is a permission, not a note: putting it on a node the
+        autoscaler did not create hands that node to the reaper. The form never
+        offers it and the route refuses it if it arrives anyway.
+        """
+        csrf = self.login()
+        r = self.client.post(f"/cluster/nodes/{self.NODE}",
+                             data={"csrf": csrf, "node_action": "labels",
+                                   "key": "managedby", "value": "autoscaler"},
+                             follow_redirects=True)
+        self.assertIn("is set by that manager", r.get_data(as_text=True))
+
+    def test_saving_labels_cannot_drop_the_owner(self):
+        """
+        The label map is REPLACED, not merged. A form that simply omits the
+        reserved key would therefore delete it on every save — and a worker with
+        no owner is a server nothing will ever remove.
+        """
+        merged = self.shape.merge_labels({"managedby": "autoscaler", "zone": "eu"},
+                                    [{"key": "zone", "value": "us"}])
+        self.assertEqual(merged, {"zone": "us", "managedby": "autoscaler"})
+
+    def test_a_submitted_owner_never_reaches_the_node(self):
+        merged = self.shape.merge_labels({}, [{"key": "managedby", "value": "autoscaler"}])
+        self.assertEqual(merged, {})
+
+    def test_availability_is_locked_on_a_node_someone_else_owns(self):
+        """
+        The autoscaler rewrites availability every loop on its own nodes, so an
+        editable control there is one that silently loses. Faded and disabled.
+        """
+        self.login()
+        worker = "w1af02c9be47"          # carries managedby=autoscaler
+        body = self.client.get(f"/cluster/nodes/{worker}").get_data(as_text=True)
+        self.assertIn("is-locked", body)
+        self.assertIn("in control of this node", body)
+        # ...and not on the master, which nothing manages.
+        master = self.client.get(f"/cluster/nodes/{self.NODE}").get_data(as_text=True)
+        self.assertNotIn("is-locked", master)
+
+    def test_the_node_page_goes_back_where_you_came_from(self):
+        self.login()
+        from_overview = self.client.get(
+            f"/cluster/nodes/{self.NODE}?from=overview").get_data(as_text=True)
+        self.assertIn("&larr; Overview", from_overview)
+        default = self.client.get(f"/cluster/nodes/{self.NODE}").get_data(as_text=True)
+        self.assertIn("&larr; Cluster", default)
+        # An origin nobody offers falls back rather than rendering it.
+        junk = self.client.get(
+            f"/cluster/nodes/{self.NODE}?from=evil").get_data(as_text=True)
+        self.assertIn("&larr; Cluster", junk)
+
+    def test_the_create_form_shows_what_settings_shows(self):
+        """
+        Both are built from the same partial now. The pair drifted the moment
+        either changed: create offered every autoscale field with no switch above
+        it, and Settings had grown a grouping create never got.
+        """
+        self.login()
+        create = self.client.get("/components/new?type=app").get_data(as_text=True)
+        settings = self.client.get("/components/api?tab=settings").get_data(as_text=True)
+        for field in ("f-slo_p95_ms", "f-up_p95_ratio", "f-priority", "f-placement_mode"):
+            self.assertIn(field, create)
+            self.assertIn(field, settings)
+        # The autoscale switch owns the section on both, rather than being the
+        # first of thirteen inputs on one of them.
+        self.assertIn("data-toggle-master", create)
+        self.assertIn("data-toggle-master", settings)
+
+    def test_the_create_form_still_asks_for_the_managed_seeds(self):
+        """
+        Settings hides `managed` fields — CI and the autoscaler own them. At
+        create time nothing has run, so there is no live value to preserve and
+        the image has to be typed.
+        """
+        self.login()
+        create = self.client.get("/components/new?type=app").get_data(as_text=True)
+        self.assertIn('name="image"', create)
+        settings = self.client.get("/components/api?tab=settings").get_data(as_text=True)
+        self.assertNotIn('name="image"', settings)
+
+    def test_the_map_tab_colours_replicas_by_tag(self):
+        """
+        The rollout view: two tags on one component is an update in flight, and
+        that is the whole thing the tab exists to show.
+        """
+        self.login()
+        body = self.client.get("/components/api?tab=map").get_data(as_text=True)
+        self.assertIn('data-panel="map"', body)
+
+    # --- the header's two images ---------------------------------------------
+
+    def test_the_header_shows_the_newest_image_asked_for(self):
+        """
+        `running` is read off the service, so it is a success by construction —
+        a failed deploy leaves the previous image up and the header looked fine.
+        """
+        self.login()
+        if not self.components.exists("api"):
+            self.create_app("api")
+        newest = self.panel._newest_deploy("api")
+        self.assertEqual(newest["image_short"], "aichat-api:sha-9f3ac21")
+        body = self.client.get("/components/api").get_data(as_text=True)
+        self.assertIn("newest", body)
+        self.assertIn("aichat-api:sha-9f3ac21", body)
+
+    def test_a_component_with_no_history_shows_only_what_is_running(self):
+        """No request has ever been recorded, so there is no second line to draw."""
+        self.create_app("nohistory")
+        self.assertIsNone(self.panel._newest_deploy("nohistory"))
+
+    def test_every_component_type_gets_a_colour_band_and_a_short_name(self):
+        """
+        The chart keys on a component's CATEGORY, which every type declares.
+        Keyed on TYPE it was a second registry: a type added to `TYPES` and not
+        to that table went silently grey on every chart and lost its short name,
+        which is exactly what a new database type did.
+        """
+        import importlib.util
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "swarm.py")
+        spec = importlib.util.spec_from_file_location("swarm_real", path)
+        real = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(real)
+        for type_name, cls in self.components.TYPES.items():
+            self.assertIn(cls.CATEGORY, real._CATEGORY_BANDS, type_name)
+            self.assertEqual(real.short_service(f"demo_{type_name}"), "demo", type_name)
+
+    # --- lockout --------------------------------------------------------------
+
+    def test_three_failures_lock_the_address_out_and_the_wait_doubles(self):
+        auth = self.panel.auth
+        auth._attempts.clear()
+        auth._global.update(fails=0, until=0.0)
+        try:
+            for _ in range(3):
+                self.assertFalse(auth.verify("admin", "wrong", "1.2.3.4"))
+            first = auth.retry_after("1.2.3.4")
+            self.assertTrue(0 < first <= auth.LOCKOUT_BASE_SECONDS)
+            # The lock is real: the right password does not get in during it.
+            self.assertFalse(auth.verify("admin", "dev", "1.2.3.4"))
+
+            auth._attempts["1.2.3.4"]["until"] = 0        # serve the sentence
+            for _ in range(3):
+                auth.verify("admin", "wrong", "1.2.3.4")
+            self.assertGreater(auth.retry_after("1.2.3.4"), first)
+        finally:
+            auth._attempts.clear()
+            auth._global.update(fails=0, until=0.0)
+
+    def test_a_success_clears_the_ladder(self):
+        auth = self.panel.auth
+        auth._attempts.clear()
+        try:
+            auth.verify("admin", "wrong", "5.6.7.8")
+            auth.verify("admin", "wrong", "5.6.7.8")
+            self.assertTrue(auth.verify("admin", "dev", "5.6.7.8"))
+            self.assertEqual(auth.retry_after("5.6.7.8"), 0)
+            self.assertNotIn("5.6.7.8", auth._attempts)
+        finally:
+            auth._attempts.clear()
+
+    def test_the_lockout_is_capped(self):
+        auth = self.panel.auth
+        self.assertEqual(auth._lockout_seconds(3 * 40), auth.LOCKOUT_MAX_SECONDS)
 
     def test_only_the_three_stacks_may_be_redeployed(self):
         csrf = self.login()

@@ -46,41 +46,10 @@
     </div>
   </section>
 
-  <section class="panel">
-    <div class="panel-head"><h2>Configuration</h2></div>
-    <div class="panel-body">
-      <div class="grid-2">
-        {% for f in cls.fields() %}
-          {% set value = values.get(f.name, f.default) if values else f.default %}
-          {% include "_field.html" %}
-        {% endfor %}
-
-        {# Credentials are not spec fields: a Field's value is written to
-           component.json, and a password must never be in there. #}
-        {% for secret in cls.SECRETS %}
-        <div class="field">
-          <label for="s-{{ secret.key }}">{{ secret.label }}</label>
-          <input id="s-{{ secret.key }}" type="text" name="{{ secret.key }}"
-                 autocomplete="off" spellcheck="false"
-                 placeholder="leave blank to generate one"
-                 value="{{ values.get(secret.key, '') if values else '' }}">
-          <p class="hint">{{ secret.help }}</p>
-        </div>
-        {% endfor %}
-      </div>
-    </div>
-    {% if cls.SECRETS %}
-    <div class="panel-note">
-      Leave a credential blank and one is generated for you. Set it yourself if you
-      are moving an existing database whose clients already know the password.
-    </div>
-    {% endif %}
-    <div class="panel-note">
-      Reservations are not optional. Swarm subtracts them when it places a task, and
-      they are the only thing the autoscaler measures node capacity with — a component
-      with none looks free and gets packed on top of the metrics database.
-    </div>
-  </section>
+  {% with spec = values or {}, fields = cls.fields(),
+          secret_inputs = cls.SECRETS, creating = true %}
+    {% include "_spec_form.html" %}
+  {% endwith %}
 
   <div class="sticky-save">
     <button class="btn btn-primary" type="submit">Create</button>

@@ -7,6 +7,22 @@
 <title>{% block title %}{{ cluster_name }} control{% endblock %}</title>
 {% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='fonts.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">{% endblock %}
+{# Before the first paint, not after it. app.js runs at the end of <body>, so a
+   saved light theme was applied only once the dark markup had already been
+   drawn — one white flash per navigation, on every tab you clicked. The root
+   attribute carries a complete token set of its own, so setting it here is
+   enough on its own; the body class app.js adds afterwards resolves to the same
+   values and changes nothing visible. #}
+<script>
+(function () {
+  try {
+    var t = localStorage.getItem("panel-theme");
+    if (t === "light" || t === "dark") {
+      document.documentElement.setAttribute("data-theme", t);
+    }
+  } catch (e) { /* private mode */ }
+})();
+</script>
 </head>
 <body>
 {% block shell %}
@@ -33,6 +49,8 @@
       <button class="btn btn-sm" type="button" data-theme-toggle style="width:100%">
         Switch theme
       </button>
+
+      {% include "_rail_version.html" %}
     </div>
   </nav>
 

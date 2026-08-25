@@ -337,9 +337,15 @@ class FleetTest(unittest.TestCase):
 
 class RemovalTest(unittest.TestCase):
     class Node:
-        def __init__(self, node_id, created, hostname="w"):
+        # `owner` defaults to the autoscaler because every node the fleet sizing
+        # reasons about is one it created. A node with a different owner, or
+        # none, is someone else's machine — see the ownership tests below.
+        def __init__(self, node_id, created, hostname="w", owner=A.OWNER_AUTOSCALER):
             self.id = node_id
-            self.attrs = {"CreatedAt": created, "Description": {"Hostname": hostname}}
+            labels = {A.NODE_OWNER_LABEL: owner} if owner else {}
+            self.attrs = {"CreatedAt": created,
+                          "Description": {"Hostname": hostname},
+                          "Spec": {"Labels": labels}}
 
     def test_newest_first_when_both_are_safe(self):
         nodes = [self.Node("old", "2026-01-01T00:00:00Z"),
@@ -348,6 +354,29 @@ class RemovalTest(unittest.TestCase):
         items = [A.Item("a", res(0.5, 384), True)]
         pick = A.pick_removal_candidate(nodes, free, items, None, {}, set())
         self.assertEqual(pick.id, "new")
+
+    def test_a_node_the_autoscaler_does_not_own_is_never_removed(self):
+        """
+        A worker someone joined by hand is capacity this loop may use and must
+        never delete. Ownership is the swarm label the autoscaler stamps on the
+        servers matching its own Hetzner selector; without it the only thing
+        protecting a foreign node was that nobody had joined one yet.
+        """
+        nodes = [self.Node("mine", "2026-01-01T00:00:00Z"),
+                 self.Node("theirs", "2026-06-01T00:00:00Z", owner="")]
+        free = {"mine": res(2.8, 3872), "theirs": res(2.8, 3872)}
+        items = [A.Item("a", res(0.5, 384), True)]
+        pick = A.pick_removal_candidate(nodes, free, items, None, {}, set())
+        # Newest-first would have chosen "theirs".
+        self.assertEqual(pick.id, "mine")
+
+    def test_a_node_owned_by_another_manager_is_never_removed(self):
+        """The owner is a NAME, so a future `managedby=dbmanager` node is
+        refused here with no change to this code."""
+        nodes = [self.Node("db", "2026-06-01T00:00:00Z", owner="dbmanager")]
+        free = {"db": res(2.8, 3872)}
+        items = [A.Item("a", res(0.5, 384), True)]
+        self.assertIsNone(A.pick_removal_candidate(nodes, free, items, None, {}, set()))
 
     def test_a_node_whose_removal_strands_replicas_is_kept(self):
         nodes = [self.Node("only", "2026-01-01T00:00:00Z")]

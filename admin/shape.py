@@ -12,6 +12,138 @@ Anything that is pure derivation from a service dict belongs here, taking the
 stays split.
 """
 
+import re
+
+
+#: Which of the map's categorical hues an image tag gets on a component's Map
+#: tab. The same five the cluster map already uses, in the same order — they are
+#: validated against both surfaces and for colour-vision deficiency, and a
+#: second palette invented for one tab would not be.
+TAG_KEYS = ("prod", "staging", "data", "observe", "platform")
+
+#: A Swarm node label. Docker accepts more than this, but a key with a space or
+#: a comma in it cannot be written as a placement constraint, so it would be a
+#: label you can set and never use.
+_LABEL_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$")
+
+
+def short_image(image):
+    """`ghcr.io/you/app:sha-abc@sha256:...` -> `app:sha-abc`."""
+    if not image:
+        return "—"
+    return image.split("@")[0].rsplit("/", 1)[-1]
+
+
+def image_tag(image):
+    """
+    `ghcr.io/you/app:sha-abc@sha256:...` -> `sha-abc`.
+
+    The tag alone, because on the Map tab every block belongs to the same
+    component and the repository half is the same on all of them — the four
+    characters that differ are the whole signal.
+    """
+    if not image:
+        return "—"
+    tail = image.split("@")[0].rsplit("/", 1)[-1]
+    return tail.rsplit(":", 1)[1] if ":" in tail else "latest"
+
+
+def component_map(topo, services):
+    """
+    A topology narrowed to one component and coloured by image tag.
+
+    Same nodes and the same blocks as the Overview map, except every block is a
+    replica of THIS component and what it says is the tag that replica runs.
+    During a rolling update both tags sit on the fleet at once, so "is the new
+    build everywhere yet" stops being a percentage in a log line: two colours
+    while it rolls, one when it is done, and two that stay two when it is stuck.
+
+    Tags are ranked by replica count, so the incumbent keeps its colour while a
+    new one arrives beside it — a palette that reshuffled every tick would make
+    two consecutive glances incomparable.
+    """
+    wanted = set(services)
+    counts = {}
+    for entry in topo["nodes"]:
+        for task in entry["tasks"]:
+            if task["service"] in wanted:
+                counts[task["tag"]] = counts.get(task["tag"], 0) + 1
+    order = sorted(counts, key=lambda tag: (-counts[tag], tag))
+    key_of = {tag: TAG_KEYS[i % len(TAG_KEYS)] for i, tag in enumerate(order)}
+    nodes = []
+    for entry in topo["nodes"]:
+        tasks = [dict(t, key=key_of.get(t["tag"], "platform"), name=t["tag"])
+                 for t in entry["tasks"] if t["service"] in wanted]
+        nodes.append({**entry, "tasks": tasks, "tasks_total": len(tasks)})
+    return {
+        "nodes": nodes,
+        "tags": [{"tag": tag, "key": key_of[tag], "count": counts[tag]} for tag in order],
+        "total": sum(counts.values()),
+    }
+
+
+def find_node(topo, node_id):
+    """One node out of a topology, by short or full id. None when absent."""
+    for entry in topo["nodes"]:
+        if node_id in (entry["id"], entry["full_id"]):
+            return entry
+    return None
+
+
+#: The one node label a user may not write.
+#:
+#: The autoscaler stamps `managedby=autoscaler` on the workers it created, and
+#: drains, deletes and reaps ONLY those. That makes this key a permission rather
+#: than a note: setting it by hand on a node someone else owns hands that node to
+#: the reaper, and dropping it from one of ours leaks a server nothing will ever
+#: remove. So the form does not offer it, `validate_labels` refuses it, and
+#: `merge_labels` carries the live value through whatever was submitted.
+#:
+#: The value is an owner NAME, not a flag, so a node stamped `managedby=dbmanager`
+#: later is protected by exactly this rule with nothing here to change.
+OWNER_LABEL = "managedby"
+
+
+def node_owner(labels):
+    """Who manages this node, or "" when nobody does."""
+    return (labels or {}).get(OWNER_LABEL, "")
+
+
+def merge_labels(current, pairs):
+    """
+    The label set to write: everything submitted, plus the reserved owner label
+    exactly as it already is.
+
+    `update_node` REPLACES the label map, so a form that simply does not render
+    the reserved key would delete it on every save.
+    """
+    out = {p["key"]: p["value"] for p in pairs if p["key"] != OWNER_LABEL}
+    owner = node_owner(current)
+    if owner:
+        out[OWNER_LABEL] = owner
+    return out
+
+
+def validate_labels(pairs):
+    """Problems with a set of {key, value} node labels. Empty list when fine."""
+    problems, seen = [], set()
+    for pair in pairs:
+        key, value = pair["key"], pair["value"]
+        if key == OWNER_LABEL:
+            problems.append(f"{key!r} says which manager owns this node and is set "
+                            f"by that manager, not here.")
+        elif not _LABEL_KEY.match(key):
+            problems.append(f"{key!r} is not a usable label name — letters, digits, "
+                            f"dot, dash and underscore only, starting with a letter "
+                            f"or digit.")
+        elif key in seen:
+            problems.append(f"{key!r} is listed twice.")
+        seen.add(key)
+        if len(value) > 255 or any(c in value for c in "\n\r\t"):
+            problems.append(f"The value of {key!r} must be one line of at most 255 "
+                            f"characters.")
+    return problems
+
 
 #: How bad a tone is. Used to detect a component whose overall colour is worse
 #: than its primary service's label admits.

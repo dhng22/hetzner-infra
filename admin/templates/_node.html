@@ -1,0 +1,246 @@
+{#
+  One machine: everything Swarm knows about it, and everything you may do to it.
+
+  The Cluster tab is a fleet at a glance and deliberately shows four facts per
+  node. This is the other end of that: the identity, the capacity, what is
+  actually placed here, and the two things that are settable — availability and
+  labels. Labels matter more than they look: a component's placement constraint
+  `node.labels.disk == ssd` matches nothing at all until something sets `disk`
+  on a node, and before this page there was no way to do that from the panel.
+#}
+{# Who manages this machine's lifecycle. Empty means nobody: a node joined by
+   hand, whose availability is yours to set. See shape.OWNER_LABEL. #}
+{% set owner = n.labels.get('managedby') %}
+{% set back = back_section|default('cluster') %}
+
+<div class="page-head">
+  <div>
+    <div class="eyebrow">
+      {# Back to where you actually came from. Both the fleet view on Overview
+         and the Cluster tab link here, and landing on the wrong one of the two
+         after a save is a small thing that happens on every single visit. #}
+      <a href="{{ section_href({'key': back}) }}">&larr; {{ 'Overview' if back == 'overview' else 'Cluster' }}</a>
+    </div>
+    <h1>{{ n.hostname }}</h1>
+    <p class="hint mono">{{ n.full_id }}</p>
+  </div>
+  <div class="head-side">
+    <div class="head-pills">
+      <span class="pill {{ 'accent' if n.role == 'manager' else n.tone }}">{{ n.role }}</span>
+      <span class="pill {{ n.tone }}">{{ n.state }}</span>
+      <span class="pill {{ 'ok' if n.availability == 'active' else 'warn' }}">{{ n.availability }}</span>
+      {% if n.leader %}<span class="pill accent plain">leader</span>{% endif %}
+      {% if owner %}<span class="pill mute plain mono" title="Managed by {{ owner }}">{{ owner }}</span>{% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="tiles">
+  <div class="tile">
+    <span class="k">Tasks</span>
+    <span class="v">{{ n.tasks_total }}</span>
+    <span class="m">running here right now</span>
+  </div>
+  <div class="tile">
+    <span class="k">CPU reserved</span>
+    <span class="v">{{ n.cpu_reserved_pct|round|int }}<small>%</small></span>
+    <span class="m">{{ n.cpu_reserved }} of {{ n.cpus }} vCPU promised</span>
+  </div>
+  <div class="tile">
+    <span class="k">Memory reserved</span>
+    <span class="v">{{ n.mem_reserved_pct|round|int }}<small>%</small></span>
+    <span class="m">{{ n.mem_reserved_mb }} MB of {{ n.memory_gb }} GB promised</span>
+  </div>
+  <div class="tile">
+    <span class="k">In use</span>
+    <span class="v">{% if n.cpu_pct is not none %}{{ n.cpu_pct|round|int }}<small>%</small>{% else %}—{% endif %}</span>
+    <span class="m">cpu · mem {% if n.mem_pct is not none %}{{ n.mem_pct|round|int }}%{% else %}—{% endif %}</span>
+  </div>
+</div>
+
+<p class="panel-intro">
+  Reserved and in-use are different numbers and the first is the one that decides
+  placement. A node routinely reads 4% busy while being 100% reserved, and nothing
+  further can be scheduled on it however idle it looks.
+</p>
+
+<div class="split">
+  <section class="panel">
+    <div class="panel-head"><h2>Machine</h2></div>
+    <div class="panel-body">
+      <div class="table-wrap">
+        <table>
+          <tbody>
+            <tr><td>Address</td><td class="mono">{{ n.addr }}</td></tr>
+            <tr><td>Role</td><td>{{ n.role }}{% if n.reachability %} · {{ n.reachability }}{% endif %}</td></tr>
+            <tr><td>Capacity</td><td class="mono">{{ n.cpus }} vCPU · {{ n.memory_gb }} GB</td></tr>
+            <tr><td>Platform</td><td class="mono">{{ n.os }}/{{ n.arch }}</td></tr>
+            <tr><td>Docker engine</td><td class="mono">{{ n.engine }}</td></tr>
+            <tr><td>Joined</td><td class="mono small">
+              {% if n.created_at %}<time datetime="{{ n.created_at }}" data-localtime>{{ n.created_at }}</time>{% else %}—{% endif %}
+            </td></tr>
+            <tr><td>Last change</td><td class="mono small">
+              {% if n.updated_at %}<time datetime="{{ n.updated_at }}" data-localtime>{{ n.updated_at }}</time>{% else %}—{% endif %}
+            </td></tr>
+            <tr><td>Node ID</td><td class="mono small">{{ n.full_id }}</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Availability</h2></div>
+    <div class="panel-body stack">
+      {# Editable only while nobody else is driving this node. The autoscaler
+         drains a worker as the first step of deleting it and re-reads
+         availability every loop; a value you set here on one of ITS nodes is
+         either reverted underneath you or, worse, still standing when it decides
+         to buy capacity and finds this node refusing tasks. Faded and inert is
+         honest about that — a control that silently loses is worse than none. #}
+      <form method="post" action="{{ node_action_href(n.id) }}" class="inline-form"
+            {% if preview %}data-preview{% endif %}
+            data-confirm="Change what this node is allowed to run? Draining it moves every task off.">
+        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="node_action" value="availability">
+        <label class="sr-only" for="availability-{{ n.id }}">Availability</label>
+        <fieldset class="bare {% if owner %}is-locked{% endif %}" {% if owner %}disabled{% endif %}>
+          <select id="availability-{{ n.id }}" name="availability">
+            {% for choice in ('active', 'pause', 'drain') %}
+            <option value="{{ choice }}" {% if n.availability == choice %}selected{% endif %}>{{ choice }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn btn-sm" type="submit">Apply</button>
+        </fieldset>
+      </form>
+      {% if owner %}
+      <p class="hint note-locked">
+        <span class="ico ico-warn" aria-hidden="true">!</span>
+        <span>
+          <strong>{{ owner }}</strong> is in control of this node — it carries
+          <code>managedby&nbsp;=&nbsp;{{ owner }}</code>, so it was created by
+          {{ owner }} and only {{ owner }} drains and deletes it. Availability is
+          read and rewritten every loop, so a change made here would not survive.
+          To take it out of service, lower the fleet size or stop the manager.
+        </span>
+      </p>
+      {% endif %}
+      <p class="hint">
+        <code>active</code> schedules normally. <code>pause</code> keeps what is running
+        and accepts nothing new. <code>drain</code> moves every task off and keeps it off —
+        which on the master means the whole control plane's workload relocates, and at
+        <code>MIN_WORKERS=0</code> there is nowhere for it to go.
+      </p>
+      <p class="hint">
+        The autoscaler drains a worker itself when it is deleting it. Draining one here
+        does not delete the server, and it does not stop the autoscaler counting the node
+        as fleet capacity it may still be sizing against.
+      </p>
+    </div>
+  </section>
+</div>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Labels</h2>
+    <span class="spacer"></span>
+    <button class="btn btn-sm" type="button" data-add-var>Add label</button>
+  </div>
+  <form method="post" action="{{ node_action_href(n.id) }}" {% if preview %}data-preview{% endif %}>
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <input type="hidden" name="node_action" value="labels">
+    <div class="panel-body">
+      <div class="kv-grid" data-kv>
+        <div class="eyebrow">Name</div><div class="eyebrow">Value</div><div></div>
+        {% for k, v in n.labels.items() if k != 'managedby' %}
+        <input class="k-in" type="text" name="key" value="{{ k }}" aria-label="Label name">
+        <input type="text" name="value" value="{{ v }}" aria-label="Value for {{ k }}">
+        <button class="btn btn-sm btn-danger" type="button" data-remove-var
+                aria-label="Remove {{ k }}">Remove</button>
+        {% endfor %}
+      </div>
+      {% if owner %}
+      {# Shown, never offered. Adding it by hand to a node the autoscaler did not
+         create hands that node to the reaper; removing it from one it did leaks a
+         server nothing will ever delete. The server refuses both regardless —
+         this is only what makes the refusal unsurprising. #}
+      <p class="hint note-locked">
+        <span class="ico ico-lock" aria-hidden="true">&#128274;</span>
+        <span>
+          <code>managedby = {{ owner }}</code> is set by {{ owner }} itself and is
+          not editable here. It is what decides which nodes {{ owner }} may drain
+          and delete, so it is a permission rather than a note. Saving below keeps
+          it exactly as it is.
+        </span>
+      </p>
+      {% endif %}
+      <p class="hint">
+        These are what a component's placement constraints match on:
+        <code>disk = ssd</code> here makes <code>node.labels.disk == ssd</code> in a
+        component's extra constraints select this machine. Saving sends the whole set —
+        a row you remove is removed from the node.
+      </p>
+      <p class="hint">
+        Nothing re-places a running task when a label changes. A constraint is evaluated
+        when a task is scheduled, so a service that no longer matches keeps running here
+        until something restarts it.
+      </p>
+    </div>
+    <div class="panel-note">
+      <button class="btn btn-primary btn-sm" type="submit">Save labels</button>
+    </div>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Tasks here</h2>
+    <span class="spacer"></span>
+    <span class="pill mute plain mono">{{ n.tasks_total }}</span>
+  </div>
+  <div class="panel-body">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Service</th><th>Image</th><th>Task</th><th>State</th><th>Reserves</th></tr></thead>
+        <tbody>
+          {% for t in n.tasks %}
+          <tr>
+            <td class="mono">{{ t.service }}</td>
+            <td class="mono small" title="{{ t.image }}">{{ t.tag }}</td>
+            <td class="mono small">{{ t.id }}</td>
+            <td><span class="pill {{ t.tone }}">{{ t.state }}</span></td>
+            <td class="mono small num">{{ t.cpu_share }}% cpu · {{ t.mem_share }}% mem</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5" class="muted">No running tasks on this node.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="panel-note">
+    Percentages are of THIS machine, and they are reservations rather than usage — the
+    same pair the rings on the fleet view draw.
+  </div>
+</section>
+
+{% if n.state != 'ready' %}
+<section class="panel">
+  <div class="panel-head"><h2>Remove from the swarm</h2></div>
+  <div class="panel-body stack">
+    <p class="hint">
+      This node is <strong>{{ n.state }}</strong>. Removing it deletes the swarm's record
+      of it. It does <strong>not</strong> delete the server behind it — the autoscaler's
+      reaper owns that, and it deletes Hetzner servers carrying its own label that never
+      joined. Use this for the entry that outlived its machine.
+    </p>
+    <form method="post" action="{{ node_action_href(n.id) }}"
+          {% if preview %}data-preview{% endif %}
+          data-confirm="Remove {{ n.hostname }} from the swarm? Its server, if it still exists, is not deleted.">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <input type="hidden" name="node_action" value="remove">
+      <button class="btn btn-danger" type="submit">Remove node</button>
+    </form>
+  </div>
+</section>
+{% endif %}

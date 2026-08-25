@@ -28,6 +28,7 @@ import envstore
 import hostops
 import registry
 import settings_def
+import shape
 import state
 from components import store as component_store
 
@@ -140,6 +141,11 @@ def _globals():
         "root_domain": ROOT_DOMAIN,
         "user": auth.current_user(),
         "preview": PREVIEW,
+        # Under the theme button on every page. It is a property of the master
+        # you are looking at, not of the Cluster tab it used to have a panel on,
+        # and it is the answer to "is what I am reading current" — which is a
+        # question you have on every other page too.
+        "infra": data.infra_version(),
         "types": components.TYPES,
         "system_access": system_access,
         "section_href": _section_href,
@@ -150,6 +156,11 @@ def _globals():
         "delete_href": lambda name: url_for("delete_component", name=name),
         "token_href": lambda name: url_for("rotate_token", name=name),
         "firewall_href": lambda name: url_for("firewall", name=name),
+        # `origin` is carried so the node page can send you back where you came
+        # from — the fleet view on Overview and the Cluster tab both link here.
+        "node_href": lambda node_id, origin="cluster": url_for(
+            "node_detail", node_id=node_id, **({"from": origin} if origin != "cluster" else {})),
+        "node_action_href": lambda node_id: url_for("node_action", node_id=node_id),
         "creds_href": lambda name: url_for("save_credentials", name=name),
         "new_href": lambda type_name: url_for("component_new", type=type_name),
         "create_href": lambda: url_for("component_create"),
@@ -186,8 +197,12 @@ def login():
     error = None
     if request.method == "POST":
         ip = request.headers.get("CF-Connecting-IP", request.remote_addr or "?")
-        if auth.locked_out(ip):
-            error = "Too many failed attempts. Try again in a few minutes."
+        wait = auth.retry_after(ip)
+        if wait:
+            # Named, not vague: the wait doubles every three failures, so "a few
+            # minutes" stops being true on the fourth lock and a user who cannot
+            # see the number cannot tell a lockout from a broken password.
+            error = f"Too many failed attempts. Try again in {_duration(wait)}."
         elif auth.verify(request.form.get("username", ""),
                          request.form.get("password", ""), ip):
             auth.start_session(request.form.get("username", "").strip())
@@ -197,8 +212,21 @@ def login():
             safe = nxt.startswith("/") and not nxt.startswith(("//", "/\\"))
             return redirect(nxt if safe else url_for("overview"))
         else:
+            wait = auth.retry_after(ip)
             error = "That username and password combination did not work."
+            if wait:
+                error += (f" That was the third failure in a row — this address is "
+                          f"locked out for {_duration(wait)}, and each further three "
+                          f"doubles it.")
     return render_template("login.html", error=error, configured=auth.configured())
+
+
+def _duration(seconds):
+    if seconds < 90:
+        return f"{seconds} seconds"
+    if seconds < 5400:
+        return f"{round(seconds / 60)} minutes"
+    return f"{round(seconds / 3600, 1)} hours"
 
 
 @app.post("/logout")
@@ -421,7 +449,7 @@ def _form_spec(form):
 #: Tabs whose content this route fetches only when they are the open tab. They
 #: must be followed as links rather than switched in the browser — see the
 #: handler in static/app.js.
-LAZY_TABS = ("logs", "deployments", "credentials")
+LAZY_TABS = ("logs", "deployments", "credentials", "map")
 
 
 @app.get("/components/<name>")
@@ -449,36 +477,42 @@ def component_detail(name):
         extra["webhook"] = webhook_for(name)
         extra["deployments"], extra["rollout"] = data.deployments(name, component.service)
         extra["registries"] = data.registry_logins()
-    if tab == "credentials" and component.TYPE == "redis":
-        extra["creds"] = _redis_credentials(component)
+    if tab == "map":
+        extra["map"] = data.component_map(component.services())
+    # Any type that declares credentials gets the tab, and a type that does not
+    # gets nothing. No branch here names a database.
+    if tab == "credentials" and type(component).SECRETS:
+        extra["creds"] = component.credentials(data.master_ip())
         extra["firewall"] = _firewall_state(component)
 
     return render_template("page_component_detail.html", section="components",
                            component=component, view=view, tabs=tabs, tab=tab,
-                           lazy_tabs=LAZY_TABS,
+                           lazy_tabs=LAZY_TABS, newest=_newest_deploy(name),
                            fields=type(component).fields(),
                            env_pairs=component_store.read_env(name), **extra)
 
 
-def _redis_credentials(component):
+def _newest_deploy(name):
     """
-    Built once, in Python, and rendered from that.
+    The last image anybody ASKED for, whatever became of it.
 
-    The old page assembled the internal URL in Jinja and the external one here,
-    so the two could disagree by construction — and one of them was a value
-    computed and never used.
+    The header already shows what is running, which is read off the service and
+    is therefore always a success — a failed deploy is invisible there, because
+    the thing it failed to replace is still up and looks fine. This is the other
+    half: newest equal to running means the latest request is live; newest
+    different means it is still rolling, or it was rolled back and nobody
+    noticed. Source is the history file, so a CI push and a button press are the
+    same event.
     """
-    port = component.spec.get("external_port")
-    master = data.master_ip()
-    return {
-        "password": component.password(),
-        "internal_host": component.service,
-        "internal_port": "6379",
-        "internal_url": component.connection_url(),
-        "external_port": port,
-        "external_host": master,
-        "external_url": component.connection_url(master, port) if port else "",
-    }
+    recent = data.history(name, limit=1)
+    if not recent:
+        return None
+    entry = recent[0]
+    return {"image": entry.get("image") or "",
+            "image_short": shape.short_image(entry.get("image")),
+            "status": entry.get("status") or "",
+            "source": entry.get("source") or "",
+            "at": entry.get("at") or ""}
 
 
 def _firewall_state(component):
@@ -566,10 +600,10 @@ def component_action(name):
         flash(output or ("Deployed." if ok else "Failed."), "ok" if ok else "bad")
         return redirect(_component_href(name, "deployments"))
 
-    handler = component.actions().get(verb)
-    if handler is None or handler[0] is None:
+    chosen = component.actions().get(verb)
+    if chosen is None or chosen["run"] is None:
         abort(400, "Unknown action.")
-    ok, output = handler[0]()
+    ok, output = chosen["run"]()
     flash(output or ("Done." if ok else "Failed."), "ok" if ok else "bad")
     return redirect(_component_href(name))
 
@@ -689,10 +723,68 @@ def save_registry():
 @app.get("/cluster")
 @auth.login_required
 def cluster():
-    # Nodes only. The infrastructure services moved to the Components tab.
+    # Nodes only. The infrastructure services moved to the Components tab, and
+    # the infrastructure version moved to the rail, under the theme button.
     return render_template("page_cluster.html", section="cluster",
-                           nodes=data.topology()["nodes"], s=data.summary(),
-                           version=data.infra_version())
+                           nodes=data.topology()["nodes"], s=data.summary())
+
+
+@app.get("/cluster/nodes/<node_id>")
+@auth.login_required
+def node_detail(node_id):
+    entry = data.node(node_id)
+    if entry is None:
+        abort(404)
+    back = request.args.get("from", "cluster")
+    if back not in ("cluster", "overview"):
+        back = "cluster"
+    return render_template("page_node.html", section="cluster", n=entry,
+                           back_section=back)
+
+
+@app.post("/cluster/nodes/<node_id>")
+@auth.login_required
+def node_action(node_id):
+    """
+    Availability, labels, and forgetting a node that is already gone.
+
+    Labels are here rather than in Settings because they are a property of one
+    machine, and because they are the other half of a component's placement
+    constraints — `node.labels.disk == ssd` matches nothing until something sets
+    `disk` on a node, and until now there was no way to do that from the panel
+    at all.
+    """
+    _require_csrf()
+    _no_writes_in_preview()
+    if data.node(node_id) is None:
+        abort(404)
+    verb = request.form.get("node_action", "")
+
+    if verb == "availability":
+        value = request.form.get("availability", "")
+        if value not in ("active", "pause", "drain"):
+            abort(400, "Unknown availability.")
+        ok, output = data.update_node(node_id, availability=value)
+    elif verb == "labels":
+        pairs = [{"key": k.strip(), "value": v.strip()}
+                 for k, v in zip(request.form.getlist("key"), request.form.getlist("value"))
+                 if k.strip()]
+        problems = shape.validate_labels(pairs)
+        if problems:
+            for problem in problems:
+                flash(problem, "bad")
+            return redirect(url_for("node_detail", node_id=node_id))
+        ok, output = data.update_node(node_id, labels=pairs)
+    elif verb == "remove":
+        ok, output = data.remove_node(node_id)
+        flash(output, "ok" if ok else "bad")
+        return redirect(url_for("cluster") if ok
+                        else url_for("node_detail", node_id=node_id))
+    else:
+        abort(400, "Unknown action.")
+
+    flash(output, "ok" if ok else "bad")
+    return redirect(url_for("node_detail", node_id=node_id))
 
 
 @app.post("/cluster/stack")

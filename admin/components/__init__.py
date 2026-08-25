@@ -11,12 +11,14 @@ CLI is driven by the same three, so neither of them learns the new name.
 from . import store
 from .app import AppComponent
 from .base import Component, Field
+from .mongo import MongoComponent
 from .redis import RedisComponent
 from .store import ComponentError
 
 TYPES = {
     AppComponent.TYPE: AppComponent,
     RedisComponent.TYPE: RedisComponent,
+    MongoComponent.TYPE: MongoComponent,
 }
 
 __all__ = [

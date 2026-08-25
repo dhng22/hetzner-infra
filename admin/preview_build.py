@@ -57,6 +57,8 @@ SEED = [
     ("redis", "sessions", {"maxmemory_mb": 128, "memory_reservation_mb": 256,
                            "cpu_reservation": 0.1, "exporter": "false",
                            "version": "7.2-alpine"}),
+    ("mongo", "documents", {"cache_mb": 256, "memory_reservation_mb": 768,
+                            "username": "root"}),
 ]
 
 SEED_ENV = {
@@ -94,13 +96,26 @@ def detail_contexts():
             "fields": type(component).fields(),
             "env_pairs": components.store.read_env(component.name),
             "logs": fixtures.logs(component.service),
-            "webhook": panel.webhook_for(component.name),
-            "deployments": fixtures.history(component.name),
-            "rollout": fixtures.update_status(component.service),
-            "registries": fixtures.registry_logins(),
+            "newest": panel._newest_deploy(component.name),
         }
-        if component.TYPE == "redis":
-            context["creds"] = panel._redis_credentials(component)
+        # Gated on the tabs the component actually declares, exactly as the live
+        # route is. Handing every component the deployments context rendered a
+        # CI webhook and an image field for a database that has neither — and
+        # the partial then reached for `spec.image`, which a database has not
+        # got, so seeding one was a build failure rather than a wrong page.
+        names = [key for key, _ in tabs]
+        if "deployments" in names:
+            context["webhook"] = panel.webhook_for(component.name)
+            context["deployments"] = fixtures.history(component.name)
+            context["rollout"] = fixtures.update_status(component.service)
+            context["registries"] = fixtures.registry_logins()
+        if "map" in names:
+            context["map"] = fixtures.component_map(component.services())
+        # Credentials come from the component, for any type that declares them.
+        # The preview used to branch on `TYPE == "redis"` here, which is exactly
+        # the drift a second database type turns into a blank tab.
+        if type(component).SECRETS:
+            context["creds"] = component.credentials(fixtures.master_ip())
             context["firewall"] = panel._firewall_state(component)
         out.append(context)
     return out
@@ -117,6 +132,10 @@ def main():
         labels[f"component-{d['component'].name}"] = d["component"].name
     for type_name, cls in components.TYPES.items():
         labels[f"new-{type_name}"] = f"New {cls.LABEL.lower()}"
+
+    fleet = fixtures.topology()["nodes"]
+    for n in fleet:
+        labels[f"node-{n['id']}"] = n["hostname"]
 
     views = fixtures.component_views()
     grouped = {}
@@ -150,6 +169,7 @@ def main():
             nodes=fixtures.topology()["nodes"],
             system=fixtures.system_view(),
             topo=fixtures.topology(),
+            infra=fixtures.infra_version(),
             a=fixtures.autoscaler_state(),
             # Two disjoint sets, exactly as the live routes pass them — one
             # shared `groups` here would put the whole form on both pages.
@@ -178,6 +198,9 @@ def main():
             delete_href=lambda name: "#",
             token_href=lambda name: "#",
             firewall_href=lambda name: "#",
+            node_views=fleet,
+            node_href=lambda node_id, origin="cluster": f"#view-node-{node_id}",
+            node_action_href=lambda node_id: "#",
             creds_href=lambda name: "#",
             create_href=lambda: "#",
             settings_href=lambda: "#",

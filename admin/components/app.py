@@ -288,12 +288,15 @@ class AppComponent(Component):
 
     def tabs(self):
         return [("overview", "Overview"), ("environment", "Environment"),
-                ("deployments", "Deployments"), ("settings", "Settings"),
-                ("logs", "Logs")]
+                ("deployments", "Deployments"), ("map", "Map"),
+                ("settings", "Settings"), ("logs", "Logs")]
 
     def actions(self):
         actions = super().actions()
-        actions["deploy-image"] = (None, "Deploy an image now", None)  # handled by the route
+        # Handled by the route rather than here: it is the one verb that carries
+        # an argument. `run` is None, so the button row skips it — it is rendered
+        # by the Deployments tab, next to the field it needs.
+        actions["deploy-image"] = base.action(None, "Deploy an image now")
         return actions
 
     def access(self):
