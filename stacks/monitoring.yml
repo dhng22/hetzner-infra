@@ -254,6 +254,13 @@ services:
       MIN_WORKERS: "${MIN_WORKERS}"
       MAX_WORKERS: "${MAX_WORKERS}"
       WORKER_TYPE: "${WORKER_TYPE}"
+      # The vertical ceiling. It sits next to WORKER_TYPE because it is the top
+      # of the ladder that starts there, and all three travel together: with
+      # either ceiling missing the feature turns itself off, so passing two of
+      # the three is the same as passing none.
+      WORKER_MAX_CORES: "${WORKER_MAX_CORES}"
+      WORKER_MAX_MEMORY_GB: "${WORKER_MAX_MEMORY_GB}"
+      NODE_RESIZE_COOLDOWN_SECONDS: "${NODE_RESIZE_COOLDOWN_SECONDS}"
       SCHEDULE_FLOOR: "${SCHEDULE_FLOOR}"
 
 networks:

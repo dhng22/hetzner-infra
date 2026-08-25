@@ -271,6 +271,55 @@ chmod +x "$INFRA_DIR"/bin/* 2>/dev/null || true
 state_set "commit=$got" "updated_at=$(date -Is)" "previous=$running"
 log "files updated to ${got:0:12}"
 
+# --- teach an existing cluster the settings the repo has gained ---------------
+# `/etc/infra/infra.env` is written once, by cloud-init, and nothing has ever
+# added a key to it afterwards. So a setting introduced later existed on new
+# clusters and nowhere else: the panel skips any key its values mapping does not
+# carry, and `docker stack deploy` substitutes an unset variable with the empty
+# string, which every reader turns back into its compiled-in default. The update
+# lands, the code is current, and the feature is simply absent — reported as
+# success, indistinguishable from the panel not having updated at all. That is
+# how hard vertical scaling shipped switched off on the cluster it was written
+# for.
+#
+# The cloud-init's infra.env block is the shipped default for every setting, so
+# it is what we reconcile against. ADD ONLY: an existing value is this cluster's
+# answer and the repo has no business overwriting it. Placeholders are skipped,
+# because writing REPLACE_ME into a live file is worse than leaving a key out.
+sync_infra_env() {
+  local shipped="$work/repo/master-cloud-init.yaml" added=0 line key value
+  [ -f "$shipped" ] || return 0
+  while IFS= read -r line; do
+    key="${line%%=*}"
+    value="${line#*=}"
+    grep -qE "^${key}=" "$INFRA_ENV" && continue
+    case "$value" in *REPLACE_ME*) log "infra.env: $key is new but ships as a placeholder — set it in the panel"; continue ;; esac
+    printf '%s=%s\n' "$key" "$value" >> "$INFRA_ENV"
+    log "infra.env: added $key=$value"
+    added=$((added + 1))
+  done < <(awk '
+    /^[[:space:]]*-[[:space:]]*path:[[:space:]]*\/etc\/infra\/infra\.env[[:space:]]*$/ { inside = 1; next }
+    inside && /^[[:space:]]*-[[:space:]]*path:/ { inside = 0 }
+    inside && /^      [A-Z][A-Z0-9_]*=/ {
+      line = substr($0, 7)
+      sub(/[[:space:]]*#.*$/, "", line)
+      sub(/[[:space:]]+$/, "", line)
+      print line
+    }
+  ' "$shipped")
+  # A new key can be read by anything, and which stack reads it is knowledge
+  # that lives in the panel rather than here. Both stacks that take their
+  # environment from this file are therefore re-applied — only on the one tick
+  # that actually gained a key, which is once per new setting, ever.
+  if [ "$added" -gt 0 ]; then
+    log "infra.env gained $added setting(s) — re-applying the stacks that read it"
+    deploy_monitoring=true
+    deploy_admin=true
+  fi
+}
+
+sync_infra_env
+
 # --- rebuild and redeploy only what moved ------------------------------------
 if [ "$rebuild_autoscaler" = true ]; then
   log "building autoscaler image"

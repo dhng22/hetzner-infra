@@ -638,6 +638,30 @@ class PanelTest(unittest.TestCase):
                 f"the preview shows {key}={self.panel.PREVIEW_INFRA.get(key)!r} but "
                 f"the cloud-init ships {shipped[key]!r}")
 
+    def test_every_fleet_setting_reaches_the_autoscaler(self):
+        """
+        A setting is only real once it arrives in the container that reads it.
+        The panel offering a key, the cloud-init shipping it and the stack
+        passing it are three separate edits, and the third has no visible
+        consequence when it is forgotten: `docker stack deploy` substitutes an
+        unset variable with the empty string, `_env` falls back to its
+        compiled-in default, and the feature is simply off while every page and
+        every log line says the update succeeded. Hard vertical scaling shipped
+        that way — two of the three edits made, on a cluster whose panel
+        reported the right commit.
+        """
+        import pathlib
+        import settings_def
+
+        root = pathlib.Path(__file__).resolve().parents[2]
+        stack = (root / "stacks" / "monitoring.yml").read_text()
+        fleet = next(keys for title, keys in settings_def.GROUPS if title == "Fleet")
+        for key in fleet:
+            self.assertIn(
+                "${%s}" % key, stack,
+                f"{key} is offered by the panel but stacks/monitoring.yml never "
+                f"passes it to the autoscaler, so setting it does nothing")
+
     def test_settings_refuses_a_key_it_does_not_manage(self):
         csrf = self.login()
         import envstore
