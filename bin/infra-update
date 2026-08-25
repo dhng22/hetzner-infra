@@ -175,27 +175,42 @@ changed() {
       "$INFRA_DIR/$area" "$work/repo/$area" >/dev/null 2>&1
 }
 
-# An image is stale if it was not built from the commit we are applying, which
-# is a stronger question than "did the files change". Comparing files alone
-# assumes the running image was built from the files on disk — and the moment
-# anybody copies something onto the box by hand, or a build fails halfway
-# through an earlier run, that stops being true and the cluster keeps serving an
-# image no commit corresponds to, with the updater reporting everything current.
-image_is_stale() {
-  local image="$1"
-  local built
-  built="$(docker image inspect "$image" \
-             -f '{{index .Config.Labels "infra.commit"}}' 2>/dev/null || echo "")"
-  [ "$built" != "$got" ]
+# What the RUNNING CONTAINER of a service was built from — which is a stronger
+# question than "did the files change", and a stronger one than "what does the
+# tag say".
+#
+# Files alone assume the running image was built from the files on disk, and the
+# moment anybody copies something onto the box by hand, or a build fails halfway
+# through an earlier run, that stops being true.
+#
+# The TAG is worse, and asking it is what wedged this script. `:latest` is
+# whatever the last build produced, so a run that rebuilt the image and then did
+# not restart the service — the normal outcome, since a locally-built tag gives
+# Swarm no spec change to act on — leaves the tag carrying the new commit and the
+# container carrying the old one. Every later run then reads the tag, concludes
+# there is nothing to do, and the cluster stays on the old code permanently, with
+# `--force` unable to recover it either. Asking the container is what makes that
+# state self-healing.
+#
+# Empty (service not running, or an unlabelled bootstrap build) is deliberately
+# "stale": there is nothing to preserve and a rebuild is cheap when the layers
+# are already cached.
+service_commit() {
+  local name="$1" cid img
+  cid="$(docker ps -q --filter "label=com.docker.swarm.service.name=$name" 2>/dev/null | head -1)"
+  [ -n "$cid" ] || { echo ""; return 0; }
+  img="$(docker inspect "$cid" -f '{{.Image}}' 2>/dev/null || echo "")"
+  [ -n "$img" ] || { echo ""; return 0; }
+  docker image inspect "$img" -f '{{index .Config.Labels "infra.commit"}}' 2>/dev/null || echo ""
 }
 
 rebuild_autoscaler=false; rebuild_admin=false
 deploy_monitoring=false; deploy_ingress=false; deploy_admin=false
 
-if changed autoscaler || image_is_stale "${APP_NAME}/autoscaler:latest"; then
+if changed autoscaler || [ "$(service_commit monitoring_autoscaler)" != "$got" ]; then
   rebuild_autoscaler=true; deploy_monitoring=true
 fi
-if changed admin || image_is_stale "${APP_NAME}/admin:latest"; then
+if changed admin || [ "$(service_commit admin_ui)" != "$got" ]; then
   rebuild_admin=true; deploy_admin=true
 fi
 changed config     && deploy_monitoring=true
@@ -241,6 +256,29 @@ if [ "$rebuild_admin" = true ]; then
     || die "admin image build failed — the files are updated but the old image is still running"
 fi
 
+# A LOCALLY-BUILT IMAGE IS INVISIBLE TO SWARM'S SPEC DIFF, and this is the whole
+# reason a pushed commit could land, record itself, and change nothing you could
+# see. `${APP_NAME}/admin:latest` exists only in this box's image store, so
+# `docker stack deploy` cannot resolve it to a digest and writes the bare tag
+# into the service spec. Rebuild that tag and the spec is byte-identical to the
+# running one — Swarm compares, finds no difference, and keeps the old container
+# serving while the image just built sits unused. The updater then reports
+# success, the panel shows the new commit, and the code is the old code.
+#
+# It is the same failure the vmagent/vmalert force below already covers, framed
+# differently: there the config moved without the spec, here the image did.
+#
+# Forced whenever the image was rebuilt, including when the stack file moved too
+# and the deploy already restarted it. That costs a second rolling restart in a
+# case that is rare, and the alternative — inferring that the deploy must have
+# picked it up — is the assumption that produced this bug.
+force_service() {
+  local service="$1"
+  log "restarting $service onto the image just built"
+  docker service update --force --quiet "$service" >/dev/null 2>&1 \
+    || log "WARNING: could not restart $service — it is STILL RUNNING THE OLD IMAGE"
+}
+
 # monitoring first: it owns the network the other two declare external, and
 # stack-deploy re-renders vmagent.yml and alertmanager.yml on the way through.
 if [ "$deploy_monitoring" = true ]; then
@@ -252,6 +290,7 @@ if [ "$deploy_monitoring" = true ]; then
   docker service update --force --quiet "monitoring_vmagent" >/dev/null 2>&1 || true
   docker service update --force --quiet "monitoring_vmalert" >/dev/null 2>&1 || true
 fi
+[ "$rebuild_autoscaler" = true ] && force_service "monitoring_autoscaler"
 [ "$deploy_ingress" = true ] && { log "deploying ingress"; "$INFRA_DIR/bin/stack-deploy" ingress >/dev/null || die "ingress deploy failed"; }
 
 # admin LAST, and on purpose: it is the console you would use to find out that
@@ -260,6 +299,7 @@ if [ "$deploy_admin" = true ]; then
   log "deploying admin"
   "$INFRA_DIR/bin/stack-deploy" admin >/dev/null || die "admin deploy failed"
 fi
+[ "$rebuild_admin" = true ] && force_service "admin_ui"
 
 if [ "$rebuild_autoscaler" = false ] && [ "$rebuild_admin" = false ] \
    && [ "$deploy_monitoring" = false ] && [ "$deploy_ingress" = false ] \

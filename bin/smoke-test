@@ -56,6 +56,39 @@ done
 for stack in monitoring ingress admin; do
   if docker stack ls --format '{{.Name}}' | grep -qx "$stack"; then ok "stack deployed: $stack"; else bad "stack deployed: $stack"; fi
 done
+
+# Is the CODE that is running the code the panel says is running?
+#
+# These two images live only in this box's store — nothing pushes them — so
+# `docker stack deploy` cannot resolve the tag to a digest and writes the bare
+# `:latest` into the service spec. Rebuild the tag and the spec is byte-identical
+# to the running one: Swarm finds no change, keeps the old container, and the
+# updater reports success at the new commit. That is a green cluster serving code
+# from a commit nobody can name, and the only way to see it is to ask the
+# CONTAINER what it was built from rather than asking the image store.
+want_commit="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("commit") or "")' \
+                 "$INFRA_DIR/state/version.json" 2>/dev/null || echo "")"
+if [ -z "$want_commit" ]; then
+  skip "running code matches the recorded commit" "this cluster does not self-update"
+else
+  for name in admin_ui monitoring_autoscaler; do
+    # The CONTAINER, not the tag. Resolving `${APP_NAME}/admin:latest` would read
+    # the image that was just built and always agree with itself — which is the
+    # very confusion being tested for. Both services are pinned to the manager,
+    # so the container is on this host.
+    cid="$(docker ps -q --filter "label=com.docker.swarm.service.name=$name" | head -1)"
+    [ -n "$cid" ] || { skip "$name runs the recorded commit" "no container on this node"; continue; }
+    img_id="$(docker inspect "$cid" -f '{{.Image}}' 2>/dev/null || echo "")"
+    built="$(docker image inspect "$img_id" \
+               -f '{{index .Config.Labels "infra.commit"}}' 2>/dev/null || echo "")"
+    if [ "$built" = "$want_commit" ]; then
+      ok "$name runs the recorded commit (${want_commit:0:12})"
+    else
+      bad "$name runs the recorded commit" \
+          "version.json says ${want_commit:0:12} but $name is on ${built:-an unlabelled build}. The image was rebuilt and Swarm never restarted the service. Fix: docker service update --force $name"
+    fi
+  done
+fi
 # The edge network is created by bootstrap, not by a stack, precisely so that
 # removing a component cannot take the tunnel's route to everything else with it.
 if docker network inspect edge >/dev/null 2>&1; then ok "edge network exists"; else bad "edge network exists" "components cannot be deployed and the tunnel can reach nothing"; fi

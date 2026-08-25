@@ -251,6 +251,23 @@ There are exactly two, and they must not be confused:
 
 The panel shells out to both and calls `docker stack deploy` itself nowhere.
 
+**A locally-built image gives Swarm nothing to diff, and that is a silent no-op.** Nothing pushes
+`${APP_NAME}/admin:latest` or `${APP_NAME}/autoscaler:latest` anywhere, so `docker stack deploy`
+cannot resolve either tag to a digest and writes the bare tag into the service spec. Rebuild the tag
+and the spec is byte-identical to the running one: Swarm compares, finds no change, and keeps the old
+container while the new image sits unused. `infra-update` therefore
+`docker service update --force`s each service whose image it rebuilt — the same remedy the
+vmagent/vmalert force already applies for the bind-mounted-config version of this problem.
+
+**Staleness is asked of the running CONTAINER, never of the tag.** `service_commit()` finds the
+container by its `com.docker.swarm.service.name` label, reads its image ID, and reads `infra.commit`
+off that. Asking the tag is self-confirming and wedges the cluster permanently: a run that rebuilt the
+image and did not restart the service leaves the tag on the new commit and the container on the old
+one, so every later run — including `--force` — reads the tag, concludes there is nothing to do, and
+the box serves old code forever while the panel reports the new SHA. `smoke-test` asserts the same
+property from the other end, and it is the check that names `docker service update --force <svc>` as
+the fix.
+
 ## The admin panel is a root console
 
 `admin/` is a Flask app pinned to the manager with the docker socket mounted. It can deploy anything
