@@ -61,7 +61,10 @@ x-autoscaler-env: &autoscaler-env
   WORKER_USERDATA_PATH: "/etc/infra/worker-cloud-init.yaml"
 
 x-autoscaler-base: &autoscaler-base
-  image: ${APP_NAME}/autoscaler:latest
+  # Pinned to a commit, and exported by bin/stack-deploy from
+  # bin/infra-images. Never `:latest`: a tag that does not change is a
+  # service spec that does not change, and Swarm has nothing to roll.
+  image: ${INFRA_IMAGE_AUTOSCALER}
   secrets: [HCLOUD_TOKEN]
   volumes:
     - /var/run/docker.sock:/var/run/docker.sock
@@ -269,7 +272,7 @@ services:
   # A manager subscribes by labelling ITS OWN service `infra.handles=database`.
   # Nothing here lists managers.
   dispatcher:
-    image: ${APP_NAME}/dispatcher:latest
+    image: ${INFRA_IMAGE_DISPATCHER}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks: [monitoring]

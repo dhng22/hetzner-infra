@@ -22,9 +22,17 @@
 #   docker secrets              immutable, and bootstrap's job
 #
 # It is not bootstrap. Bootstrap does the one-time things — swarm init, secrets,
-# the firewall — and must never run twice. This only refreshes files, rebuilds
-# the two local images when their source changed, and re-applies the three
-# infrastructure stacks that changed. Everything it does is idempotent.
+# the firewall — and must never run twice. This only refreshes files, pulls the
+# images GitHub Actions published for the new commit, and re-applies the three
+# infrastructure stacks. Everything it does is idempotent.
+#
+# IT BUILDS NOTHING. It used to build three images, run four test suites and
+# then work out which services Swarm had declined to restart, and every one of
+# those was a job that belongs in CI running on the box whose actual job is
+# serving the cluster. The images are built and tested by
+# .github/workflows/publish.yml and tagged with the commit they came from, so
+# this script pulls one exact reference per service and lets Swarm do the
+# rollout it was designed to do.
 # =============================================================================
 
 set -euo pipefail
@@ -122,17 +130,22 @@ remote="$(git ls-remote "$INFRA_REPO_URL" "refs/heads/$BRANCH" 2>/dev/null | awk
   || die "cannot reach the repo. Check INFRA_REPO_URL and the token in it."
 [ -n "$remote" ] || die "branch '$BRANCH' does not exist in the repo"
 
-state_set "checked_at=$(date -Is)" "remote=$remote" "branch=$BRANCH" \
-          "status=ok" "detail="
-
-# The commit is recorded BEFORE the rebuilds, so a run that fails after that
-# point leaves `commit == remote` with `status=error`. Without the status test
-# here that state is PERMANENT: every later tick sees the commit it wants and
-# exits, so a build that failed once never gets retried and the box serves the
-# old image forever while reporting the new SHA. It happened — a Dockerfile that
-# changed its build context was delivered by the previous version of this script
-# and could not be built by it.
+# READ BEFORE WRITING. The commit is recorded BEFORE the deploys, so a run that
+# fails after that point leaves `commit == remote` with `status=error`, and
+# without the status test below that state is PERMANENT: every later tick sees
+# the commit it wants and exits, so a run that failed once never gets retried
+# and the box serves the old code forever while reporting the new SHA.
+#
+# This read used to sit UNDER the check-in write below, which set `status=ok` on
+# every tick — so it always read "ok", the retry never fired, and the guard was
+# an elaborate no-op. The check-in write no longer touches `status` or `detail`
+# at all: whether the last APPLY worked is not something a poll finds out, and
+# overwriting it every five minutes is what destroyed the evidence. Only the end
+# of a successful run sets `ok`, and only `die` sets `error`.
 last_status="$(state_get status)"
+
+state_set "checked_at=$(date -Is)" "remote=$remote" "branch=$BRANCH"
+
 if [ "$MODE" != "force" ] && [ "$running" = "$remote" ] && [ "$last_status" != "error" ]; then
   [ "$MODE" = "check" ] && log "up to date at ${remote:0:12}"
   exit 0
@@ -161,20 +174,16 @@ got="$(git -C "$work/repo" rev-parse HEAD)"
 # stack file deploys most of a cluster and leaves the rest broken.
 for required in stacks/monitoring.yml stacks/ingress.yml stacks/admin.yml \
                 config/vmagent.yml.tpl config/alertmanager.yml.tpl \
-                config/alerts.yml autoscaler/Dockerfile admin/Dockerfile \
-                bin/component bin/stack-deploy bin/infra-update \
-                bin/render-fleet-env dispatcher/Dockerfile signals/classify.py; do
+                config/alerts.yml bin/component bin/stack-deploy bin/infra-update \
+                bin/render-fleet-env bin/infra-images; do
   [ -e "$work/repo/$required" ] || die "the fetched tree is missing $required — refusing to apply it"
 done
 
-# --- decide what actually has to be redeployed -------------------------------
-# Per area, so an admin-only change does not restart VictoriaMetrics. Compared
-# by content rather than by `git diff`, because the live tree is not a checkout:
-# it carries generated config and runtime directories that no commit contains.
-# The live tree carries things no commit does — config rendered by
-# stack-deploy, bytecode left by a test run — and comparing those would report a
-# difference on every single tick, so every tick would redeploy monitoring. The
-# exclusions mirror rsync's below; a file skipped by one and compared by the
+# --- what changed, for the one decision that still depends on it -------------
+# Compared by content rather than by `git diff`, because the live tree is not a
+# checkout: it carries config rendered by stack-deploy and bytecode left by a
+# test run, and comparing those would report a difference on every single tick.
+# The exclusions mirror rsync's below; a file skipped by one and compared by the
 # other is a permanent phantom change.
 DIFF_SKIP=(-x 'vmagent.yml' -x 'alertmanager.yml' -x 'worker-cloud-init.yaml'
            -x '__pycache__' -x '*.pyc' -x '.git')
@@ -186,79 +195,68 @@ changed() {
       "$INFRA_DIR/$area" "$work/repo/$area" >/dev/null 2>&1
 }
 
-# What the RUNNING CONTAINER of a service was built from — which is a stronger
-# question than "did the files change", and a stronger one than "what does the
-# tag say".
-#
-# Files alone assume the running image was built from the files on disk, and the
-# moment anybody copies something onto the box by hand, or a build fails halfway
-# through an earlier run, that stops being true.
-#
-# The TAG is worse, and asking it is what wedged this script. `:latest` is
-# whatever the last build produced, so a run that rebuilt the image and then did
-# not restart the service — the normal outcome, since a locally-built tag gives
-# Swarm no spec change to act on — leaves the tag carrying the new commit and the
-# container carrying the old one. Every later run then reads the tag, concludes
-# there is nothing to do, and the cluster stays on the old code permanently, with
-# `--force` unable to recover it either. Asking the container is what makes that
-# state self-healing.
-#
-# Empty (service not running, or an unlabelled bootstrap build) is deliberately
-# "stale": there is nothing to preserve and a rebuild is cheap when the layers
-# are already cached.
-service_commit() {
-  local name="$1" cid img
-  cid="$(docker ps -q --filter "label=com.docker.swarm.service.name=$name" 2>/dev/null | head -1)"
-  [ -n "$cid" ] || { echo ""; return 0; }
-  img="$(docker inspect "$cid" -f '{{.Image}}' 2>/dev/null || echo "")"
-  [ -n "$img" ] || { echo ""; return 0; }
-  docker image inspect "$img" -f '{{index .Config.Labels "infra.commit"}}' 2>/dev/null || echo ""
-}
+# The only thing left that has to be decided rather than just done. vmagent and
+# vmalert read their config from a BIND MOUNT, so a changed file is invisible to
+# the service spec: Swarm has nothing to update and the old config stays loaded.
+# Those two need telling, and only when the file actually moved.
+config_changed=false
+changed config && config_changed=true
 
-rebuild_autoscaler=false; rebuild_dispatcher=false; rebuild_admin=false
-deploy_monitoring=false; deploy_ingress=false; deploy_admin=false
+# --- the images for this commit, and whether they exist yet ------------------
+# Sourced from the FETCHED tree, not the live one: this is the new commit's idea
+# of where its own images live, and it is read before anything is copied over.
+. "$work/repo/bin/infra-images"
+infra_images "$got" || die "cannot work out which images ${got:0:12} should run (see above)"
 
-# `signals` is shared, so a change in it rebuilds BOTH. Rebuilding one and not
-# the other is exactly the split-brain the shared package exists to prevent:
-# two processes reading one service through two versions of the same query.
-if changed autoscaler || changed signals \
-   || [ "$(service_commit monitoring_autoscaler)" != "$got" ]; then
-  rebuild_autoscaler=true; deploy_monitoring=true
+# Pulling IS the check. A published commit pulls; an unpublished one does not,
+# and the reason — still building, build failed, registry credentials expired —
+# arrives in the error rather than being guessed at here.
+#
+# This happens BEFORE the files are swapped in, so a commit whose images are not
+# ready leaves the cluster exactly as it was rather than half-applied. The next
+# tick tries again, because `running` still differs from `remote`.
+pull_error=""
+for ref in $(infra_image_refs); do
+  log "pulling $ref"
+  out="$(docker pull --quiet "$ref" 2>&1)" || { pull_error="$ref: $out"; break; }
+done
+
+if [ -n "$pull_error" ]; then
+  # A wait and a failure look identical for the first minute or two — CI takes
+  # a couple of minutes to publish — so the difference is drawn in TIME rather
+  # than guessed from the error text. Below the deadline this is a quiet
+  # "pending"; above it, the panel says the update is failing and says why,
+  # because a cluster stuck at a commit with no images and no visible reason is
+  # the exact silent failure this whole file keeps being rewritten to remove.
+  since="$(state_get waiting_since)"
+  [ -n "$since" ] || since="$(date -Is)"
+  waited=$(( $(date +%s) - $(date -d "$since" +%s 2>/dev/null || date +%s) ))
+  state_set "waiting_since=$since"
+  if [ "$waited" -lt "${INFRA_IMAGE_WAIT_SECONDS:-1500}" ]; then
+    log "images for ${got:0:12} are not published yet; waiting ($((waited / 60))m so far)"
+    state_set "status=waiting" \
+              "detail=waiting for GitHub Actions to publish the images for ${got:0:12}"
+    exit 0
+  fi
+  die "no images for ${got:0:12} after $((waited / 60)) minutes. The build for this commit probably failed — check the repository's Actions tab. Last error: $pull_error"
 fi
-if changed dispatcher || changed signals \
-   || [ "$(service_commit monitoring_dispatcher)" != "$got" ]; then
-  rebuild_dispatcher=true; deploy_monitoring=true
-fi
-if changed admin || [ "$(service_commit admin_ui)" != "$got" ]; then
-  rebuild_admin=true; deploy_admin=true
-fi
-changed config     && deploy_monitoring=true
-[ -e "$INFRA_DIR/stacks/monitoring.yml" ] && \
-  ! diff -q "$INFRA_DIR/stacks/monitoring.yml" "$work/repo/stacks/monitoring.yml" >/dev/null 2>&1 && deploy_monitoring=true
-[ -e "$INFRA_DIR/stacks/ingress.yml" ] && \
-  ! diff -q "$INFRA_DIR/stacks/ingress.yml" "$work/repo/stacks/ingress.yml" >/dev/null 2>&1 && deploy_ingress=true
-[ -e "$INFRA_DIR/stacks/admin.yml" ] && \
-  ! diff -q "$INFRA_DIR/stacks/admin.yml" "$work/repo/stacks/admin.yml" >/dev/null 2>&1 && deploy_admin=true
+state_set "waiting_since="
 
 # --- swap the files in -------------------------------------------------------
 # rsync with --delete so a file REMOVED upstream is removed here too; `cp -a`
 # only ever adds, which leaves a deleted stack or a renamed script behind to be
 # found months later. The excludes are the runtime state that is this cluster's
 # and not the repo's — deleting those would take your components with them.
+#
 # The runtime excludes are ANCHORED with a leading slash, and that slash is
 # load-bearing. An rsync pattern without one matches a directory of that name at
 # ANY depth: `components/` was meant to protect `/opt/infra/components/` — your
 # component specs, which the repo must never overwrite — and it silently also
 # matched `/opt/infra/admin/components/`, the component CLASS LIBRARY, which is
 # repo code and has to ship. The panel then built from a frozen copy of that
-# package forever: a Redis with no `credentials()` (500 on the tab), an app with
-# no Map tab, and no MongoDB in the create form, all while every other file in
-# `admin/` updated normally and the updater reported success.
+# package forever, while every other file in `admin/` updated normally and the
+# updater reported success.
 #
-# It could not self-heal either. `changed admin` compares the two trees, saw the
-# difference rsync had just refused to deliver, and rebuilt the same stale
-# package on every single tick — the "permanent phantom change" the DIFF_SKIP
-# comment above warns about, arrived at from the opposite direction.
 # Compared BEFORE the copy, because the copy is what destroys the evidence.
 self_changed=false
 if ! diff -q "$INFRA_DIR/bin/infra-update" "$work/repo/bin/infra-update" >/dev/null 2>&1; then
@@ -276,35 +274,32 @@ rsync -a --delete \
 
 # Did the copy actually deliver the code? The excludes above are the one thing
 # in this script that can decline to copy a file and report success, and when
-# one of them over-matches the result is a cluster that rebuilds a frozen
-# directory on every tick forever. Comparing the delivered tree against the
-# fetched one costs a directory walk and turns that into a loud failure — before
-# the commit is recorded, so the panel shows "update failing" rather than the new
-# SHA. Same exclusions as `changed()`, or generated config would fail it every
-# time.
+# one of them over-matches the result is a cluster serving a frozen directory
+# forever. Comparing the delivered tree against the fetched one costs a
+# directory walk and turns that into a loud failure — before the commit is
+# recorded, so the panel shows "update failing" rather than the new SHA. Same
+# exclusions as `changed()`, or generated config would fail it every time.
 for area in admin autoscaler dispatcher signals bin stacks config; do
   [ -e "$work/repo/$area" ] || continue
   diff -qr --no-dereference "${DIFF_SKIP[@]}" \
        "$INFRA_DIR/$area" "$work/repo/$area" >/dev/null 2>&1 \
-    || die "$area still differs from the fetched tree after rsync — an exclude pattern is swallowing code. Refusing to build a stale image."
+    || die "$area still differs from the fetched tree after rsync — an exclude pattern is swallowing code. Refusing to deploy a stale tree."
 done
 
 chmod +x "$INFRA_DIR"/bin/* 2>/dev/null || true
 
 # THE UPDATER UPDATES ITSELF, AND THE RUN THAT DELIVERS A CHANGE IS THE OLD
 # VERSION. Everything above this line is generic — fetch, compare, copy — but
-# everything below it is specific: which images to build, with which context,
-# which suites to run, which stacks to deploy. A commit that changes any of
-# that arrives here already delivered and is then acted on by a script that
-# predates it. That is not hypothetical: moving the autoscaler's build context
-# to the repository root shipped a Dockerfile the previous script built from
-# the wrong directory, and the build failed on a tree that was otherwise
-# perfectly correct.
+# everything below it is specific: which images to pull, which stacks to deploy,
+# which services to wait for. A commit that changes any of that arrives here
+# already delivered and is then acted on by a script that predates it. That is
+# not hypothetical: moving the autoscaler's build context shipped a Dockerfile
+# the previous script built from the wrong directory, and the build failed on a
+# tree that was otherwise perfectly correct.
 #
-# So hand over. The replacement re-fetches (one extra clone, only on the ticks
-# where this file actually changed) and finds the tree already current, which is
-# exactly the case `service_commit` exists for: the files match, the RUNNING
-# CONTAINER does not, so it rebuilds and redeploys properly.
+# So hand over. The replacement re-fetches — one extra clone, only on the ticks
+# where this file actually changed — and finds the tree already current, which
+# costs nothing but a pull of images that are now in the local store.
 if [ -z "${INFRA_UPDATE_RESUMED:-}" ] && [ "$self_changed" = true ]; then
   log "bin/infra-update changed in ${got:0:12}; handing over to the new version"
   case "$MODE" in
@@ -312,125 +307,76 @@ if [ -z "${INFRA_UPDATE_RESUMED:-}" ] && [ "$self_changed" = true ]; then
     *)     INFRA_UPDATE_RESUMED=1 exec "$INFRA_DIR/bin/infra-update" ;;
   esac
 fi
-# Recorded BEFORE the rebuilds, because the files on disk are already the new
-# ones: a build that fails after this point must not leave the cluster claiming
-# to run the old commit it no longer has.
+
+# Recorded BEFORE the deploys, because the files on disk are already the new
+# ones — and because bin/stack-deploy reads this file to work out which image
+# tag to deploy. A deploy that fails after this point must not leave the cluster
+# claiming to run the commit it no longer has on disk.
 state_set "commit=$got" "updated_at=$(date -Is)" "previous=$running"
 log "files updated to ${got:0:12}"
 
-# --- rebuild and redeploy only what moved ------------------------------------
-# The context is the REPOSITORY ROOT for these two, not their own directory:
-# both copy in `signals/`, which is shared between them precisely so they cannot
-# disagree about whether a service is busy. `.dockerignore` keeps the git
-# history and the panel's preview artefact out of the context.
-if [ "$rebuild_autoscaler" = true ]; then
-  log "building autoscaler image"
-  docker build -q --label "infra.commit=$got" -f "$INFRA_DIR/autoscaler/Dockerfile" \
-    -t "${APP_NAME}/autoscaler:latest" "$INFRA_DIR" >/dev/null \
-    || die "autoscaler image build failed — the files are updated but the old image is still running"
-fi
-if [ "$rebuild_dispatcher" = true ]; then
-  log "building dispatcher image"
-  docker build -q --label "infra.commit=$got" -f "$INFRA_DIR/dispatcher/Dockerfile" \
-    -t "${APP_NAME}/dispatcher:latest" "$INFRA_DIR" >/dev/null \
-    || die "dispatcher image build failed — the files are updated but the old image is still running"
-fi
-if [ "$rebuild_admin" = true ]; then
-  log "building admin image"
-  docker build -q --label "infra.commit=$got" \
-    -t "${APP_NAME}/admin:latest" "$INFRA_DIR/admin" >/dev/null \
-    || die "admin image build failed — the files are updated but the old image is still running"
-fi
-
-# --- run the suite against the image just built, before anything is deployed --
-# The tests existed and passed on a laptop; nothing ran them here, and a commit
-# that crashlooped the autoscaler on import went straight into production
-# because of it. A suite that is only a manual step is not a gate, so this is
-# where it becomes one: the image is built, its own tests run INSIDE it, and a
-# failure stops before any `docker stack deploy`.
+# --- redeploy ----------------------------------------------------------------
+# All three, unconditionally, and that is a deliberate simplification of what
+# used to be four flags and a change-detection matrix. Each infrastructure image
+# is now tagged with the commit, so every stack file that names one produces a
+# DIFFERENT service spec on every commit and Swarm rolls it. Working out in
+# advance which of them would have differed bought nothing except a way to be
+# wrong: `docker stack deploy` compares specs itself and leaves a service whose
+# spec is unchanged completely alone.
 #
-# The repo is mounted rather than baked in: the panel's suite reaches the repo
-# ROOT — stacks/monitoring.yml, master-cloud-init.yaml — to pin the three copies
-# of every setting's default against each other, and the image only carries
-# `admin/`. Read-only, because a test that needs to write to /opt/infra is a
-# test that would corrupt the cluster it is checking; the panel's own tests
-# point INFRA_DIR at a temp directory of their own.
-#
-# On failure the commit has already been recorded, so the panel says "update
-# failing" with the reason and the PREVIOUS containers keep serving. The next
-# push changes `remote` and the tick runs again — a fix is a push, which is the
-# same motion that got you here.
-run_suite() {
-  local area="$1" image="$2"
-  [ -d "$INFRA_DIR/$area/tests" ] || return 0
-  log "running $area tests against the image just built"
-  docker run --rm \
-    -v "$INFRA_DIR:/repo:ro" -w "/repo/$area" \
-    -e PYTHONDONTWRITEBYTECODE=1 \
-    --entrypoint python "$image" -m unittest discover -s tests >"$work/$area-tests.log" 2>&1 \
-    || { log "--- $area tests ---"; tail -30 "$work/$area-tests.log" | while IFS= read -r l; do log "  $l"; done
-         die "$area tests failed against the newly built image — refusing to deploy it"; }
-}
-
-# `signals` carries the decision rule both processes apply, so its suite runs
-# with whichever image is being rebuilt rather than belonging to either.
-if [ "$rebuild_autoscaler" = true ]; then
-  run_suite signals "${APP_NAME}/autoscaler:latest"
-  run_suite autoscaler "${APP_NAME}/autoscaler:latest"
-fi
-[ "$rebuild_dispatcher" = true ] && run_suite dispatcher "${APP_NAME}/dispatcher:latest"
-[ "$rebuild_admin" = true ] && run_suite admin "${APP_NAME}/admin:latest"
-
-# A LOCALLY-BUILT IMAGE IS INVISIBLE TO SWARM'S SPEC DIFF, and this is the whole
-# reason a pushed commit could land, record itself, and change nothing you could
-# see. `${APP_NAME}/admin:latest` exists only in this box's image store, so
-# `docker stack deploy` cannot resolve it to a digest and writes the bare tag
-# into the service spec. Rebuild that tag and the spec is byte-identical to the
-# running one — Swarm compares, finds no difference, and keeps the old container
-# serving while the image just built sits unused. The updater then reports
-# success, the panel shows the new commit, and the code is the old code.
-#
-# It is the same failure the vmagent/vmalert force below already covers, framed
-# differently: there the config moved without the spec, here the image did.
-#
-# Forced whenever the image was rebuilt, including when the stack file moved too
-# and the deploy already restarted it. That costs a second rolling restart in a
-# case that is rare, and the alternative — inferring that the deploy must have
-# picked it up — is the assumption that produced this bug.
-force_service() {
-  local service="$1"
-  log "restarting $service onto the image just built"
-  docker service update --force --quiet "$service" >/dev/null 2>&1 \
-    || log "WARNING: could not restart $service — it is STILL RUNNING THE OLD IMAGE"
-}
-
 # monitoring first: it owns the network the other two declare external, and
-# stack-deploy re-renders vmagent.yml and alertmanager.yml on the way through.
-if [ "$deploy_monitoring" = true ]; then
-  log "deploying monitoring"
-  "$INFRA_DIR/bin/stack-deploy" monitoring >/dev/null || die "monitoring deploy failed"
-  # A bind-mounted config changes nothing in the service spec, so Swarm has
-  # nothing to update and the old config stays loaded. These two read theirs
-  # from disk and need telling.
+# stack-deploy re-renders vmagent.yml, alertmanager.yml and fleet.env on the way
+# through. admin LAST, on purpose — it is the console you would use to find out
+# that an update went wrong, so it stays up for as much of the update as it can.
+log "deploying monitoring"
+"$INFRA_DIR/bin/stack-deploy" monitoring >/dev/null || die "monitoring deploy failed"
+if [ "$config_changed" = true ]; then
+  log "config changed; restarting vmagent and vmalert onto it"
   docker service update --force --quiet "monitoring_vmagent" >/dev/null 2>&1 || true
   docker service update --force --quiet "monitoring_vmalert" >/dev/null 2>&1 || true
 fi
-[ "$rebuild_autoscaler" = true ] && force_service "monitoring_autoscaler"
-[ "$deploy_ingress" = true ] && { log "deploying ingress"; "$INFRA_DIR/bin/stack-deploy" ingress >/dev/null || die "ingress deploy failed"; }
 
-# admin LAST, and on purpose: it is the console you would use to find out that
-# an update went wrong, so it stays up for as much of the update as possible.
-if [ "$deploy_admin" = true ]; then
-  log "deploying admin"
-  "$INFRA_DIR/bin/stack-deploy" admin >/dev/null || die "admin deploy failed"
-fi
-[ "$rebuild_admin" = true ] && force_service "admin_ui"
+log "deploying ingress"
+"$INFRA_DIR/bin/stack-deploy" ingress >/dev/null || die "ingress deploy failed"
 
-if [ "$rebuild_autoscaler" = false ] && [ "$rebuild_admin" = false ] \
-   && [ "$deploy_monitoring" = false ] && [ "$deploy_ingress" = false ] \
-   && [ "$deploy_admin" = false ]; then
-  log "no infrastructure stack changed; files only"
-fi
+log "deploying admin"
+"$INFRA_DIR/bin/stack-deploy" admin >/dev/null || die "admin deploy failed"
+
+# --- did the new code actually start? ----------------------------------------
+# `docker stack deploy` is DETACHED: it exits 0 once Swarm accepts the spec,
+# which is before a single task has started. Taking that exit code as the answer
+# is how this script used to report success over a rollout that failed and was
+# rolled back — so the question is put to the CONTAINER instead, and the answer
+# is the commit label CI baked into the image it was started from.
+#
+# Asking the container rather than the tag is what makes a missed service loud.
+# The dispatcher was once given a build and no restart, so it rebuilt on every
+# tick and never once started, at status ok, for days.
+service_commit() {
+  local name="$1" cid img
+  cid="$(docker ps -q --filter "label=com.docker.swarm.service.name=$name" \
+         --filter status=running 2>/dev/null | head -1)"
+  [ -n "$cid" ] || { echo ""; return 0; }
+  img="$(docker inspect "$cid" -f '{{.Image}}' 2>/dev/null || echo "")"
+  [ -n "$img" ] || { echo ""; return 0; }
+  docker image inspect "$img" -f '{{index .Config.Labels "infra.commit"}}' 2>/dev/null || echo ""
+}
+
+wait_for_commit() {
+  local name="$1" want="$2" deadline actual=""
+  deadline=$(( $(date +%s) + ${INFRA_ROLLOUT_TIMEOUT_SECONDS:-300} ))
+  while :; do
+    actual="$(service_commit "$name")"
+    [ "$actual" = "$want" ] && { log "$name is running ${want:0:12}"; return 0; }
+    [ "$(date +%s)" -lt "$deadline" ] || break
+    sleep 5
+  done
+  die "$name did not come up on ${want:0:12} — it is on ${actual:-no running container on this node}. Swarm may have rolled it back. Check: docker service ps --no-trunc $name"
+}
+
+for name in monitoring_autoscaler monitoring_dispatcher admin_ui; do
+  wait_for_commit "$name" "$got"
+done
 
 state_set "status=ok" "detail="
 log "updated to ${got:0:12}"

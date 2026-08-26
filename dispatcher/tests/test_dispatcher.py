@@ -68,8 +68,8 @@ class WatchedTest(unittest.TestCase):
         self.assertEqual(w.thresholds.slo_ms, 500.0)
 
     def test_mute_list_is_parsed_and_junk_dropped(self):
-        w = D.Watched(service(**{"autoscale.mute_causes": "upstream:tikdrama, nonsense"}))
-        self.assertEqual(w.muted, frozenset({"upstream:tikdrama"}))
+        w = D.Watched(service(**{"autoscale.mute_causes": "upstream:vendor.example, nonsense"}))
+        self.assertEqual(w.muted, frozenset({"upstream:vendor.example"}))
 
 
 class AttributionTest(unittest.TestCase):
@@ -96,13 +96,13 @@ class AttributionTest(unittest.TestCase):
                          (classify.CAUSE_UNKNOWN, None))
 
     def test_a_slow_outbound_timer_names_the_third_party(self):
-        D.query.vm_query_map = lambda expr, label=None: {"tikdrama.example": 2200.0}
+        D.query.vm_query_map = lambda expr, label=None: {"vendor.example": 2200.0}
         deps = {"api_app": [(classify.CAUSE_UPSTREAM, "e", "http_client_requests_seconds", "host")]}
         self.assertEqual(D.attribute(self.s, 3.0, 4.0, deps, set()),
-                         (classify.CAUSE_UPSTREAM, "tikdrama.example"))
+                         (classify.CAUSE_UPSTREAM, "vendor.example"))
 
     def test_an_outbound_timer_inside_budget_is_not_the_cause(self):
-        D.query.vm_query_map = lambda expr, label=None: {"tikdrama.example": 12.0}
+        D.query.vm_query_map = lambda expr, label=None: {"vendor.example": 12.0}
         deps = {"api_app": [(classify.CAUSE_UPSTREAM, "e", "http_client_requests_seconds", "host")]}
         self.assertEqual(D.attribute(self.s, 3.0, 4.0, deps, set()),
                          (classify.CAUSE_UNKNOWN, None))
@@ -111,11 +111,11 @@ class AttributionTest(unittest.TestCase):
         readings = {"db": [(classify.CAUSE_DATABASE, "e1", "mongodb_driver_commands_seconds", "host")],
                     }
         D.query.vm_query_map = lambda expr, label=None: (
-            {"mongo.internal": 900.0} if "e1" in expr else {"tikdrama": 2200.0})
+            {"mongo.internal": 900.0} if "e1" in expr else {"vendor.example": 2200.0})
         deps = {"api_app": readings["db"] +
                 [(classify.CAUSE_UPSTREAM, "e2", "http_client_requests_seconds", "host")]}
         cause, target = D.attribute(self.s, 3.0, 4.0, deps, set())
-        self.assertEqual((cause, target), (classify.CAUSE_UPSTREAM, "tikdrama"))
+        self.assertEqual((cause, target), (classify.CAUSE_UPSTREAM, "vendor.example"))
 
     def test_a_busy_component_is_the_fallback_not_the_first_answer(self):
         self.assertEqual(D.attribute(self.s, 3.0, 4.0, {}, {"documents"}),
@@ -135,10 +135,10 @@ class OwnershipTest(unittest.TestCase):
                          ("claimed", False))
 
     def test_muting_one_target_does_not_mute_the_cause(self):
-        muted = frozenset({"upstream:tikdrama"})
-        self.assertEqual(classify.verdict("upstream", "tikdrama", muted, set()),
+        muted = frozenset({"upstream:vendor.example"})
+        self.assertEqual(classify.verdict("upstream", "vendor.example", muted, set()),
                          ("muted", False))
-        self.assertEqual(classify.verdict("upstream", "stripe", muted, set()),
+        self.assertEqual(classify.verdict("upstream", "other.example", muted, set()),
                          (None, True))
 
     def test_a_plain_claim_is_accepted(self):
@@ -162,7 +162,7 @@ class GaugeTest(unittest.TestCase):
                 "latency_ms": 904.0, "cpu_pct": 5.0, "mem_pct": 5.0}
 
     def test_only_the_attributed_cause_is_set(self):
-        D.publish(self.s, self.verdict(classify.CAUSE_UPSTREAM, "tikdrama"), None, True)
+        D.publish(self.s, self.verdict(classify.CAUSE_UPSTREAM, "vendor.example"), None, True)
         self.assertEqual(self.value(D.G_SIGNAL, "upstream"), 1)
         self.assertEqual(self.value(D.G_SIGNAL, "database"), 0)
 
@@ -172,7 +172,7 @@ class GaugeTest(unittest.TestCase):
         self.assertEqual(self.value(D.G_UNOWNED, "database"), 0)
 
     def test_a_muted_cause_signals_but_does_not_alert(self):
-        D.publish(self.s, self.verdict(classify.CAUSE_UPSTREAM, "tikdrama"), "muted", False)
+        D.publish(self.s, self.verdict(classify.CAUSE_UPSTREAM, "vendor.example"), "muted", False)
         self.assertEqual(self.value(D.G_SIGNAL, "upstream"), 1)
         self.assertEqual(self.value(D.G_UNOWNED, "upstream"), 0)
 
@@ -180,7 +180,7 @@ class GaugeTest(unittest.TestCase):
         # Without this a service that recovered keeps its last verdict forever:
         # the gauge is only written while something is wrong, so the alert would
         # fire on a problem that ended hours ago.
-        D.publish(self.s, self.verdict(classify.CAUSE_UPSTREAM, "tikdrama"), None, True)
+        D.publish(self.s, self.verdict(classify.CAUSE_UPSTREAM, "vendor.example"), None, True)
         D.quiet(self.s)
         for cause in classify.CAUSES:
             self.assertEqual(self.value(D.G_SIGNAL, cause), 0)

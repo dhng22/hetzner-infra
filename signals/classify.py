@@ -31,7 +31,7 @@ CAUSES = (CAUSE_LOCAL, CAUSE_DATABASE, CAUSE_UPSTREAM, CAUSE_UNKNOWN)
 HANDLER_LABEL = "infra.handles"
 
 #: Causes nobody will ever fix, named per component so the dispatcher stops
-#: raising them. `upstream:tikdrama` mutes one target; `upstream` mutes all.
+#: raising them. `upstream:vendor.example` mutes one target; `upstream` mutes all.
 MUTE_LABEL = "autoscale.mute_causes"
 
 #: How busy a replica has to be before a latency breach counts as ITS problem.
@@ -65,7 +65,7 @@ def parse_causes(raw, on_bad=None):
         token = token.strip().lower()
         if not token:
             continue
-        # `upstream:tikdrama` names one target; `upstream` names the cause.
+        # `upstream:vendor.example` names one target; `upstream` names the cause.
         if token.split(":", 1)[0] in CAUSES:
             out.add(token)
         else:

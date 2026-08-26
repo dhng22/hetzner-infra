@@ -202,8 +202,15 @@ write_files:
       #
       # Leave it empty and the cluster simply never self-updates; that is a
       # supported state, not a broken one.
-      INFRA_REPO_URL=https://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@github.com/dhng22/hetzner-infra.git
+      INFRA_REPO_URL=https://github.com/dhng22/hetzner-infra.git
       INFRA_REPO_BRANCH=master
+      # WHERE THE IMAGES COME FROM — and there is nothing to fill in for it.
+      # Nothing is built on this master: the repository above builds the
+      # autoscaler, the dispatcher and the panel on every push and publishes
+      # them to its own GHCR namespace tagged with the commit. Both halves of
+      # every image name are therefore derived from things already on this
+      # line — the path from INFRA_REPO_URL, the tag from the commit applied —
+      # so there is no setting to get wrong.
       # How often to ask whether the branch has moved. One `git ls-remote` per
       # tick, which is a single request that transfers nothing when nothing has
       # changed.
@@ -220,20 +227,54 @@ write_files:
       exec > >(tee -a /var/log/infra-bootstrap.log) 2>&1
       echo "=== bootstrap started $(date -Is) ==="
 
+      # --- fetch the bundle, and remember exactly which commit it is ----------
+      # THE COMMIT IS THE VERSION. Every infrastructure image this cluster runs is
+      # published by GitHub Actions and tagged with the commit it was built from,
+      # so the master pulls one exact reference per service instead of building
+      # three images on the box whose actual job is running the cluster. Recording
+      # the SHA here is what lets the very first boot name them.
+      #
+      # Skipped if /opt/infra/stacks already exists, so re-running this script
+      # does not re-clone. A tree put there by hand rather than cloned has no
+      # commit recorded, and the images are named by commit — so that case stops
+      # a few lines further down with an explanation rather than guessing.
+      mkdir -p /opt/infra/state && chmod 700 /opt/infra/state
+      if [ ! -e /opt/infra/stacks ]; then
+        case "${INFRA_REPO_URL:-}" in
+          ""|*REPLACE_ME*)
+            echo "FATAL: /opt/infra has no bundle and INFRA_REPO_URL is not set." >&2
+            echo "Set it in the infra.env block above — it is both where the bundle" >&2
+            echo "comes from and where this cluster's images are published." >&2
+            exit 1
+            ;;
+        esac
+        echo "cloning ${INFRA_REPO_URL} (${INFRA_REPO_BRANCH:-master})"
+        rm -rf /tmp/infra-bundle
+        git clone --quiet --depth 1 --branch "${INFRA_REPO_BRANCH:-master}" \
+          "$INFRA_REPO_URL" /tmp/infra-bundle \
+          || { echo "FATAL: could not clone $INFRA_REPO_URL" >&2; exit 1; }
+        git -C /tmp/infra-bundle rev-parse HEAD > /opt/infra/state/commit
+        # The working files, not a checkout: bin/infra-update compares /opt/infra
+        # against a freshly fetched tree, and a .git directory here would be one
+        # more thing for it to have to skip.
+        rm -rf /tmp/infra-bundle/.git
+        cp -a /tmp/infra-bundle/. /opt/infra/
+        rm -rf /tmp/infra-bundle
+      fi
+
       # --- preflight ----------------------------------------------------------
       # This script is written by cloud-init, but the rest of the bundle is not.
       # Say so plainly instead of failing later on a missing stack file.
       for required in stacks/monitoring.yml stacks/ingress.yml stacks/admin.yml \
                       config/vmagent.yml.tpl config/alertmanager.yml.tpl \
                       config/alertmanager-none.yml config/alerts.yml \
-                      autoscaler/Dockerfile admin/Dockerfile \
                       bin/component bin/stack-deploy bin/panel-hostops \
-                      bin/render-fleet-env; do
+                      bin/render-fleet-env bin/infra-images; do
         if [ ! -e "/opt/infra/$required" ]; then
           echo "FATAL: /opt/infra/$required is missing." >&2
-          echo "The bundle was never copied to the master. Uncomment the clone line" >&2
-          echo "in the cloud-config, or scp stacks/ config/ autoscaler/ admin/ bin/" >&2
-          echo "into /opt/infra and re-run this script." >&2
+          echo "The bundle in /opt/infra is incomplete. Delete it and re-run this" >&2
+          echo "script to clone it again, or scp stacks/ config/ bin/ into" >&2
+          echo "/opt/infra yourself." >&2
           exit 1
         fi
       done
@@ -478,14 +519,56 @@ write_files:
       cp /opt/infra/config/worker-cloud-init.yaml.tpl \
          /opt/infra/config/worker-cloud-init.yaml
 
-      # --- build local images --------------------------------------------------
-      # Root context for these two: both copy in /opt/infra/signals, which they
-      # share so that they cannot disagree about whether a service is busy.
-      docker build -f /opt/infra/autoscaler/Dockerfile \
-        -t "${APP_NAME}/autoscaler:latest" /opt/infra
-      docker build -f /opt/infra/dispatcher/Dockerfile \
-        -t "${APP_NAME}/dispatcher:latest" /opt/infra
-      docker build -t "${APP_NAME}/admin:latest"      /opt/infra/admin
+      # --- infrastructure images: PULLED, never built --------------------------
+      # These three used to be built right here, which cost a fresh master several
+      # minutes of its boot and left the cluster running images that existed
+      # nowhere else — so `docker stack deploy` could not resolve them to a digest,
+      # and every later update had to work around a service spec that never
+      # changed no matter what was rebuilt. They are built, tested and published by
+      # .github/workflows/publish.yml now, one immutable tag per commit, and this
+      # pulls the exact commit this master was cloned from.
+      . /opt/infra/bin/infra-images
+      infra_images "$(cat /opt/infra/state/commit 2>/dev/null || true)" || exit 1
+      echo "infrastructure images: $(infra_image_repo) at ${INFRA_IMAGE_COMMIT:0:12}"
+
+      # A master created moments after a push gets here before the build has
+      # finished, so it waits rather than failing — up to twenty minutes, saying
+      # what it is waiting for. A build that FAILED looks identical until the
+      # deadline, and then this stops with the registry's own reason.
+      for ref in $(infra_image_refs); do
+        pulled=0
+        for attempt in $(seq 1 40); do
+          if docker pull --quiet "$ref" >/dev/null 2>&1; then pulled=1; break; fi
+          echo "  $ref is not published yet (attempt ${attempt}/40); waiting 30s"
+          sleep 30
+        done
+        if [ "$pulled" != "1" ]; then
+          echo "FATAL: $ref never appeared." >&2
+          echo "Check the repository's Actions tab — the build for this commit" >&2
+          echo "probably failed. If the GHCR package is private, GHCR_USER and" >&2
+          echo "GHCR_TOKEN in infra.env need read:packages on it. The pull said:" >&2
+          docker pull "$ref" >&2 || true
+          exit 1
+        fi
+      done
+
+      # What bin/stack-deploy reads to know which image tag to deploy, and what
+      # bin/infra-update reads on its very first tick. Written only once the
+      # images are actually here, so a master that could not pull them does not
+      # claim to be running the commit.
+      cat > /opt/infra/state/version.json <<JSON
+      {
+        "commit": "${INFRA_IMAGE_COMMIT}",
+        "remote": "${INFRA_IMAGE_COMMIT}",
+        "branch": "${INFRA_REPO_BRANCH:-master}",
+        "previous": "",
+        "updated_at": "$(date -Is)",
+        "checked_at": "$(date -Is)",
+        "status": "ok",
+        "detail": ""
+      }
+      JSON
+      chmod 600 /opt/infra/state/version.json
 
       # --- networks -------------------------------------------------------------
       # `edge` is created here rather than by a stack, because every component
@@ -576,7 +659,9 @@ write_files:
       # Deployed last: it is the console for a cluster that must already be up.
       # It is the ONLY thing here with both the docker socket and a login form,
       # so it is deliberately the smallest surface we can get away with.
-      envsubst < /opt/infra/stacks/admin.yml | docker stack deploy -c - admin
+      # Through stack-deploy rather than envsubst, because the stack names
+      # ${INFRA_IMAGE_ADMIN} and there is exactly one place that resolves it.
+      /opt/infra/bin/stack-deploy admin
 
       echo "=== bootstrap finished $(date -Is) ==="
       echo
@@ -598,8 +683,11 @@ write_files:
       echo "the panel shows you."
 
 runcmd:
+  # The clone moved INTO bootstrap.sh, so it reads INFRA_REPO_URL from the file
+  # you edited above instead of from a URL repeated down here. Two spellings of
+  # "which repo is this cluster" is a master built from one branch and updated
+  # from another.
   - [ bash, -lc, "mkdir -p /opt/infra" ]
-  - [ bash, -lc, "git clone --depth 1 https://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@github.com/dhng22/hetzner-infra.git /tmp/i && rm -rf /tmp/i/.git && cp -a /tmp/i/. /opt/infra/ && rm -rf /tmp/i" ]
   - [ bash, -lc, "/opt/infra/bootstrap.sh" ]
 
 final_message: "Master ready after $UPTIME seconds. See /var/log/infra-bootstrap.log"

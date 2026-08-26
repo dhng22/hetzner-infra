@@ -108,7 +108,7 @@ class AppComponent(Component):
                   help="Comma separated. When latency is being caused by something the "
                        "replicas are waiting on, the autoscaler names the cause and "
                        "alerts if nothing in the cluster handles it. Mute the ones "
-                       "nobody ever will: `upstream:tikdrama` for one third party, "
+                       "nobody ever will: `upstream:vendor.example` for one third party, "
                        "`upstream` for all of them. Causes: local, database, upstream, "
                        "unknown.", group="autoscale"),
             Field("sustain_up_seconds", "Sustain up (s)", "number", 90, minimum=30, maximum=3600,

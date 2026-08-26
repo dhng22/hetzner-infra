@@ -50,32 +50,40 @@ if ufw status 2>/dev/null | grep -qE "^22/tcp .*ALLOW"; then ok "ssh (22) still 
 
 # ---------------------------------------------------------------------------
 head_ "images and stacks"
-for img in "${APP_NAME}/autoscaler:latest" "${APP_NAME}/admin:latest"; do
-  if docker image inspect "$img" >/dev/null 2>&1; then ok "image built: $img"; else bad "image built: $img"; fi
-done
+# Pulled from GHCR, one immutable tag per commit — not built here. Missing means
+# either the pull never happened or somebody deleted the package version out
+# from under a running cluster, and both leave Swarm unable to reschedule.
+if . "$INFRA_DIR/bin/infra-images" 2>/dev/null && infra_images 2>/dev/null; then
+  for img in $(infra_image_refs); do
+    if docker image inspect "$img" >/dev/null 2>&1; then
+      ok "image present: $img"
+    else
+      bad "image present: $img" \
+          "the master cannot start this service without it. Try: docker pull $img"
+    fi
+  done
+else
+  skip "infrastructure images present" "this cluster has no recorded commit to name them by"
+fi
 for stack in monitoring ingress admin; do
   if docker stack ls --format '{{.Name}}' | grep -qx "$stack"; then ok "stack deployed: $stack"; else bad "stack deployed: $stack"; fi
 done
 
 # Is the CODE that is running the code the panel says is running?
 #
-# These two images live only in this box's store — nothing pushes them — so
-# `docker stack deploy` cannot resolve the tag to a digest and writes the bare
-# `:latest` into the service spec. Rebuild the tag and the spec is byte-identical
-# to the running one: Swarm finds no change, keeps the old container, and the
-# updater reports success at the new commit. That is a green cluster serving code
-# from a commit nobody can name, and the only way to see it is to ask the
-# CONTAINER what it was built from rather than asking the image store.
+# Asked of the CONTAINER, never of the tag or of the service spec. A spec can
+# name the right image while the task that is actually serving was started from
+# the previous one — a rollout still in progress, a rollout Swarm rolled back
+# after the new tasks failed their health check, a node that could not pull. All
+# three report a perfectly correct spec, and the panel would show the new commit
+# over the old code.
 want_commit="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("commit") or "")' \
                  "$INFRA_DIR/state/version.json" 2>/dev/null || echo "")"
 if [ -z "$want_commit" ]; then
   skip "running code matches the recorded commit" "this cluster does not self-update"
 else
-  for name in admin_ui monitoring_autoscaler; do
-    # The CONTAINER, not the tag. Resolving `${APP_NAME}/admin:latest` would read
-    # the image that was just built and always agree with itself — which is the
-    # very confusion being tested for. Both services are pinned to the manager,
-    # so the container is on this host.
+  for name in admin_ui monitoring_autoscaler monitoring_dispatcher; do
+    # All three are pinned to the manager, so the container is on this host.
     cid="$(docker ps -q --filter "label=com.docker.swarm.service.name=$name" | head -1)"
     [ -n "$cid" ] || { skip "$name runs the recorded commit" "no container on this node"; continue; }
     img_id="$(docker inspect "$cid" -f '{{.Image}}' 2>/dev/null || echo "")"
@@ -85,7 +93,7 @@ else
       ok "$name runs the recorded commit (${want_commit:0:12})"
     else
       bad "$name runs the recorded commit" \
-          "version.json says ${want_commit:0:12} but $name is on ${built:-an unlabelled build}. The image was rebuilt and Swarm never restarted the service. Fix: docker service update --force $name"
+          "version.json says ${want_commit:0:12} but $name is on ${built:-an unlabelled image}. The rollout did not take. Look at why first: docker service ps --no-trunc $name"
     fi
   done
 fi
@@ -343,10 +351,24 @@ else
   bad "alerts have a destination" \
       "alertmanager.yml has a receiver with no configs — every alert is generated, grouped and then DROPPED. Set ALERT_TELEGRAM_BOT_TOKEN and ALERT_TELEGRAM_CHAT_ID, then: stack-deploy monitoring"
 fi
-# It holds a bot token now, so it must not be world-readable.
+# It holds a bot token, so it must not be WORLD-readable. Not 0600 though: that
+# is what this check used to demand and it is wrong. prom/alertmanager runs as
+# `nobody` (uid 65534) and the file is a bind mount, so 0600 root meant the
+# container could not read its own config — it exited 1 on "permission denied"
+# and crash-looped from the very first deploy while every other service came up
+# fine. bin/stack-deploy therefore writes it 0640 root:nogroup on purpose, and
+# this assertion has sat in permanent disagreement with that fix, failing every
+# smoke test on a cluster that is correct.
+#
+# The property that actually matters is the last digit: nothing outside the
+# owner and that one group may read it.
 if [ -f "$INFRA_DIR/config/alertmanager.yml" ]; then
   mode="$(stat -c '%a' "$INFRA_DIR/config/alertmanager.yml" 2>/dev/null || stat -f '%Lp' "$INFRA_DIR/config/alertmanager.yml" 2>/dev/null)"
-  if [ "$mode" = "600" ]; then ok "alertmanager.yml is 0600"; else bad "alertmanager.yml is 0600" "found $mode — it contains the bot token"; fi
+  case "$mode" in
+    *0) ok "alertmanager.yml is not world-readable ($mode)" ;;
+    *)  bad "alertmanager.yml is not world-readable" \
+            "found $mode — it holds the alert bot token. bin/stack-deploy writes it 0640 root:nogroup; something else has changed it." ;;
+  esac
 fi
 
 if vm "http://alertmanager:9093/api/v2/status" | grep -q '"cluster"'; then

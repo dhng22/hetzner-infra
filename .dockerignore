@@ -8,3 +8,6 @@ admin/preview
 **/__pycache__
 **/*.pyc
 docs
+
+# The workflow that publishes the images. Nothing in the build needs it.
+.github

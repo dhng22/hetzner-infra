@@ -747,6 +747,79 @@ class PanelTest(unittest.TestCase):
         with open(path) as fh:
             self.assertIn("# the free floor", fh.read())
 
+    def test_ci_publishes_exactly_the_images_this_cluster_pulls(self):
+        """
+        THREE FILES HAVE TO AGREE ON ONE STRING, and none of them can import the
+        others: GitHub Actions decides what to publish, bin/infra-images decides
+        what the master pulls, and the stack files decide what Swarm runs. A
+        disagreement is not a crash — the master pulls a tag that was never
+        published, gets a 404 it correctly treats as "CI has not finished yet",
+        and sits at "update pending" forever with nothing in any log that says
+        the name was simply wrong.
+
+        So the derivation is not read, it is RUN, against a repository URL whose
+        answer is known, and compared against the name the workflow builds for
+        the same repository.
+        """
+        import pathlib
+        import re
+        import subprocess
+
+        import yaml
+
+        root = pathlib.Path(__file__).resolve().parents[2]
+        workflow = yaml.safe_load(
+            (root / ".github" / "workflows" / "publish.yml").read_text())
+        steps = workflow["jobs"]["publish"]["steps"]
+        naming = next(s for s in steps if s.get("id") == "names")["run"]
+        pushes = next(s for s in steps if s.get("name") == "Publish")["run"]
+
+        # What the workflow would call each image for github.com/Owner/Repo at
+        # commit abc123 — computed by running the workflow's own shell, with the
+        # two expressions GitHub would have substituted already substituted.
+        script = naming.replace("${{ github.repository }}", "Owner/Repo") \
+                       .replace("${{ github.sha }}", "abc123")
+        out = subprocess.run(
+            ["bash", "-c", script],
+            capture_output=True, text=True,
+            env={"GITHUB_OUTPUT": "/dev/stdout", "PATH": "/usr/bin:/bin"})
+        self.assertEqual(out.returncode, 0, out.stderr)
+        published = dict(line.split("=", 1) for line in out.stdout.split() if "=" in line)
+        self.assertTrue(published, f"the naming step produced nothing: {out.stdout!r}")
+
+        # What the master would pull for the same repository and commit.
+        pull = subprocess.run(
+            ["bash", "-c",
+             f'. "{root}/bin/infra-images"; infra_images abc123 || exit 1; infra_image_refs'],
+            capture_output=True, text=True,
+            env={"INFRA_REPO_URL": "https://github.com/Owner/Repo.git",
+                 "PATH": "/usr/bin:/bin"})
+        self.assertEqual(pull.returncode, 0, pull.stderr)
+        pulled = pull.stdout.split()
+
+        self.assertEqual(sorted(published.values()), sorted(pulled),
+                         "GitHub Actions publishes one set of names and the master "
+                         "pulls another")
+
+        # Everything built is also pushed. A partial publish is the one outcome
+        # the master cannot recover from on its own: it finds some of the images
+        # at a commit and waits for the rest until the deadline.
+        for name, ref in published.items():
+            self.assertIn(f"steps.names.outputs.{name}", pushes,
+                          f"the workflow builds {name} but never pushes it")
+
+        # And everything published is referenced by a stack, under the variable
+        # bin/infra-images exports. An image nobody deploys is dead weight; a
+        # stack naming a variable nobody exports is an empty `image:` field.
+        stacks = "\n".join((root / "stacks" / f).read_text()
+                            for f in ("monitoring.yml", "admin.yml", "ingress.yml"))
+        exported = set(re.findall(r"INFRA_IMAGE_[A-Z]+", (root / "bin" / "infra-images").read_text()))
+        for name in published:
+            var = f"INFRA_IMAGE_{name.upper()}"
+            self.assertIn(var, exported, f"bin/infra-images never exports {var}")
+            self.assertIn("${%s}" % var, stacks,
+                          f"{name} is published and pulled but no stack runs it")
+
     def test_the_stack_and_the_renderer_agree_on_one_path(self):
         """
         bin/stack-deploy writes the file and stacks/monitoring.yml reads it. Two

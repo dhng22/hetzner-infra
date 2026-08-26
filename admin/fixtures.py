@@ -63,7 +63,7 @@ _SERVICES = {
     "ingress_cloudflared": _svc("ingress_cloudflared", "cloudflare/cloudflared:2024.10.1",
                                 4, 4, mode="global", cpu=None, mem=None, cpu_res=0.05,
                                 mem_res=32, placement=[], updated="9d ago"),
-    "admin_ui": _svc("admin_ui", "aichat/admin:latest", 1, 1, cpu=0.5, mem=256,
+    "admin_ui": _svc("admin_ui", "ghcr.io/dhng22/hetzner-infra/admin:73887dec9c22", 1, 1, cpu=0.5, mem=256,
                      cpu_res=0.10, mem_res=128, placement=["node.role == manager"],
                      networks=("monitoring",), updated="3d ago"),
 }
@@ -74,7 +74,8 @@ for _name, _image, _cpu_res, _mem_res in [
     ("monitoring_alertmanager", "prom/alertmanager:v0.27.0", 0.1, 96),
     ("monitoring_loki", "grafana/loki:3.1.1", 0.3, 512),
     ("monitoring_grafana", "grafana/grafana:11.3.0", 0.2, 256),
-    ("monitoring_autoscaler", "aichat/autoscaler:latest", 0.1, 96),
+    ("monitoring_autoscaler", "ghcr.io/dhng22/hetzner-infra/autoscaler:73887dec9c22", 0.1, 96),
+    ("monitoring_dispatcher", "ghcr.io/dhng22/hetzner-infra/dispatcher:73887dec9c22", 0.03, 64),
     ("monitoring_node-exporter", "prom/node-exporter:v1.8.2", 0.05, 64),
     ("monitoring_cadvisor", "gcr.io/cadvisor/cadvisor:v0.49.1", 0.10, 128),
 ]:

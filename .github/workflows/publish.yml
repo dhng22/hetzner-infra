@@ -1,0 +1,151 @@
+# =============================================================================
+# Build, test and publish this cluster's three infrastructure images.
+# =============================================================================
+# The master used to do all of this itself: clone the repo, `docker build` the
+# autoscaler, the dispatcher and the panel, run their suites, then redeploy. It
+# was three jobs in one script, on a box whose actual job is running the
+# cluster, and the failure modes were miserable — a build that failed left the
+# files updated and the old image serving, and a build that SUCCEEDED still
+# changed nothing, because a locally-built `:latest` gives Swarm no spec
+# difference to act on.
+#
+# So the master no longer builds anything. This publishes one immutable image
+# per commit and the master pulls the exact tag it is supposed to be running.
+# `docker stack deploy` then sees a genuinely different image reference and
+# rolls the service, which is the mechanism Swarm was built around.
+#
+# ORDER MATTERS: all three are built and their suites run BEFORE anything is
+# pushed. A partial publish is the one outcome the master cannot recover from
+# on its own — it would find two of the three images at a commit and wait for
+# the third forever — so the push is the last step and it is all-or-nothing.
+#
+# The tests are the same four suites the master used to run, in the same way:
+# inside the freshly built image, with the repository mounted read-only. That
+# is deliberate. Running them on the runner instead would test the runner's
+# python and the runner's dependencies, and the bug this gate exists to catch
+# is a module that is missing from the IMAGE.
+#
+# amd64 only. Every one of these three services is pinned to the manager, so
+# the only architecture that matters is the master's, and the master is a CPX
+# (amd64) throughout this repo. On an arm64 master the pull fails loudly with
+# "no matching manifest" rather than doing anything subtle; the fix is to add
+# `platforms: linux/amd64,linux/arm64` to the three build steps and accept the
+# slower emulated build.
+# =============================================================================
+
+name: Publish infrastructure images
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# Two pushes in quick succession must not race to publish, but neither may be
+# cancelled: the master polls the branch head, and a cancelled run leaves that
+# head with no images at all, which stalls every cluster until the next push.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # GHCR rejects uppercase in a repository path and a GitHub owner may have
+      # it, so the name is lowercased here. bin/infra-images does the same on
+      # the master; the two have to produce the same string or the cluster pulls
+      # a tag that was never published.
+      - name: Name the images
+        id: names
+        run: |
+          repo="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          {
+            echo "autoscaler=$repo/autoscaler:${{ github.sha }}"
+            echo "dispatcher=$repo/dispatcher:${{ github.sha }}"
+            echo "admin=$repo/admin:${{ github.sha }}"
+          } >> "$GITHUB_OUTPUT"
+
+      # The context is the REPOSITORY ROOT for the first two, not their own
+      # directory, because they share `signals/` — the package that keeps the
+      # autoscaler and the dispatcher from disagreeing about whether a service
+      # is busy. `.dockerignore` keeps the git history out of the context.
+      - name: Build autoscaler
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: autoscaler/Dockerfile
+          load: true
+          tags: ${{ steps.names.outputs.autoscaler }}
+          labels: infra.commit=${{ github.sha }}
+          cache-from: type=gha,scope=autoscaler
+          cache-to: type=gha,mode=max,scope=autoscaler
+
+      - name: Build dispatcher
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: dispatcher/Dockerfile
+          load: true
+          tags: ${{ steps.names.outputs.dispatcher }}
+          labels: infra.commit=${{ github.sha }}
+          cache-from: type=gha,scope=dispatcher
+          cache-to: type=gha,mode=max,scope=dispatcher
+
+      - name: Build admin
+        uses: docker/build-push-action@v6
+        with:
+          context: admin
+          file: admin/Dockerfile
+          load: true
+          tags: ${{ steps.names.outputs.admin }}
+          labels: infra.commit=${{ github.sha }}
+          cache-from: type=gha,scope=admin
+          cache-to: type=gha,mode=max,scope=admin
+
+      # The repository is mounted rather than baked in: the panel's suite reads
+      # the repo ROOT — stacks/monitoring.yml, master-cloud-init.yaml — to pin
+      # the three copies of every setting's default against each other, and the
+      # panel image only carries admin/. Read-only, because a test that writes
+      # into the tree it is checking is a test that can pass by breaking it.
+      #
+      # `signals` carries the decision rule both processes apply, so its suite
+      # runs against the autoscaler image rather than belonging to either.
+      - name: Test inside the images
+        run: |
+          set -euo pipefail
+          suite() {
+            echo "::group::$1 tests"
+            docker run --rm \
+              -v "$PWD:/repo:ro" -w "/repo/$1" \
+              -e PYTHONDONTWRITEBYTECODE=1 \
+              --entrypoint python "$2" -m unittest discover -s tests -v
+            echo "::endgroup::"
+          }
+          suite signals    '${{ steps.names.outputs.autoscaler }}'
+          suite autoscaler '${{ steps.names.outputs.autoscaler }}'
+          suite dispatcher '${{ steps.names.outputs.dispatcher }}'
+          suite admin      '${{ steps.names.outputs.admin }}'
+
+      # Last, and only once every suite above has passed. Publishing a commit
+      # is what tells every master it may move to it.
+      - name: Publish
+        run: |
+          set -euo pipefail
+          docker push '${{ steps.names.outputs.autoscaler }}'
+          docker push '${{ steps.names.outputs.dispatcher }}'
+          docker push '${{ steps.names.outputs.admin }}'
+          echo "published ${{ github.sha }}"

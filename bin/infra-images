@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# =============================================================================
+# infra-images — where this cluster's infrastructure images live, and which
+# one of them it is supposed to be running. SOURCED, never executed.
+# =============================================================================
+#   . /opt/infra/bin/infra-images
+#   infra_images            # resolve the pinned commit from state/version.json
+#   infra_images <commit>   # resolve that commit instead
+#
+# It exports three references:
+#   INFRA_IMAGE_AUTOSCALER  ghcr.io/<owner>/<repo>/autoscaler:<commit>
+#   INFRA_IMAGE_DISPATCHER  ghcr.io/<owner>/<repo>/dispatcher:<commit>
+#   INFRA_IMAGE_ADMIN       ghcr.io/<owner>/<repo>/admin:<commit>
+#
+# WHY THE TAG IS A COMMIT SHA AND NEVER `latest`.
+#
+# These three images used to be built on the master, tagged `:latest`, and
+# handed to `docker stack deploy`. A tag that exists only in one box's image
+# store cannot be resolved to a digest, so Swarm wrote the bare string into the
+# service spec — and rebuilding the tag then produced a spec byte-identical to
+# the running one. Swarm compared, found no difference, and kept the OLD
+# container serving while the new image sat unused. The updater reported
+# success, the panel showed the new commit, and the code was the old code.
+#
+# Every remedy for that was a workaround for the same missing fact: the spec did
+# not say what it was running. `docker service update --force` after each build,
+# a list of services to force, an assertion that the list was complete, a
+# rebuild-because-the-container-is-unlabelled fallback — all of it existed
+# because the image reference carried no version.
+#
+# An immutable per-commit tag from a registry deletes the whole class. The spec
+# changes on every commit, so Swarm rolls the service because the spec genuinely
+# differs, which is the mechanism it was built around. Nothing has to be forced,
+# and "what is this cluster running" is answerable by reading the service.
+#
+# THERE IS NOTHING TO CONFIGURE HERE. Both halves of every name are derived —
+# the path from INFRA_REPO_URL, the tag from the commit this master applied — so
+# there is no setting to get wrong and no second place for the answer to live.
+# =============================================================================
+
+INFRA_IMAGE_COMPONENTS="autoscaler dispatcher admin"
+
+#: The registry path the images are published under.
+#: Derived from INFRA_REPO_URL, never configured, so there is one answer to
+#: "which repo is this cluster" rather than two that can disagree. GHCR rejects
+#: uppercase and a GitHub owner is allowed to have it, so the path is lowercased.
+infra_image_repo() {
+    local url="${INFRA_REPO_URL:-}" path
+    case "$url" in
+        git@github.com:*)       path="${url#git@github.com:}" ;;
+        ssh://git@github.com/*) path="${url#ssh://git@github.com/}" ;;
+        # Covers https://github.com/... and https://<user>:<token>@github.com/...
+        http://*github.com/*|https://*github.com/*) path="${url#*github.com/}" ;;
+        *) return 1 ;;
+    esac
+    path="${path%.git}"
+    path="${path%/}"
+    # owner/repo exactly — one slash, both halves non-empty.
+    case "$path" in
+        */*/*) return 1 ;;
+        /*|*/) return 1 ;;
+        */*) ;;
+        *) return 1 ;;
+    esac
+    printf 'ghcr.io/%s' "$(printf '%s' "$path" | tr '[:upper:]' '[:lower:]')"
+}
+
+#: The commit bin/infra-update last applied, or "" if this cluster has never
+#: updated. Read from one place by all three callers, because a second reader
+#: of this file is a second chance to spell the path differently.
+infra_commit() {
+    python3 - "${INFRA_DIR:-/opt/infra}/state/version.json" <<'PYEOF' 2>/dev/null || printf ''
+import json, sys
+try:
+    print(json.load(open(sys.argv[1])).get("commit") or "")
+except Exception:
+    print("")
+PYEOF
+}
+
+#: Export the three image references. Returns non-zero, with an explanation on
+#: stderr, when it cannot work out either half of the name — the alternative is
+#: exporting an empty string, which `docker stack deploy` substitutes happily
+#: and which surfaces as a compose error about an image field nobody set.
+infra_images() {
+    local tag repo
+    tag="${1:-}"
+    [ -n "$tag" ] || tag="$(infra_commit)"
+    if [ -z "$tag" ]; then
+        echo "cannot name the infrastructure images: this cluster has no recorded commit." >&2
+        echo "That is ${INFRA_DIR:-/opt/infra}/state/version.json, written by bootstrap and by" >&2
+        echo "bin/infra-update. If /opt/infra was put here by hand rather than cloned, the" >&2
+        echo "commit is unknowable: remove it and re-run bootstrap so it clones." >&2
+        return 1
+    fi
+    if ! repo="$(infra_image_repo)"; then
+        echo "cannot name the infrastructure images: INFRA_REPO_URL=${INFRA_REPO_URL:-<unset>}" >&2
+        echo "is not a github.com repository URL, so the GHCR path cannot be derived." >&2
+        echo "Fix INFRA_REPO_URL in /etc/infra/infra.env — the images are published by" >&2
+        echo "that repository's own Actions workflow and live under its own namespace." >&2
+        return 1
+    fi
+    # Outputs, not settings. INFRA_IMAGE_COMMIT is what the three references
+    # below are pinned to, which callers log and write into version.json.
+    export INFRA_IMAGE_COMMIT="$tag"
+    export INFRA_IMAGE_AUTOSCALER="$repo/autoscaler:$tag"
+    export INFRA_IMAGE_DISPATCHER="$repo/dispatcher:$tag"
+    export INFRA_IMAGE_ADMIN="$repo/admin:$tag"
+}
+
+#: Every reference infra_images just exported, one per line — so a caller that
+#: pulls them cannot pull two of the three because somebody added a component.
+infra_image_refs() {
+    printf '%s\n' "$INFRA_IMAGE_AUTOSCALER" "$INFRA_IMAGE_DISPATCHER" "$INFRA_IMAGE_ADMIN"
+}

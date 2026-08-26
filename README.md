@@ -297,13 +297,67 @@ docker service rollback api_app                         # undo
 `--with-registry-auth` is not optional: it ships the registry credential with
 the service spec, so a worker created an hour from now can still pull.
 
+## Updating the infrastructure itself
+
+Push to `master`. That is the whole procedure.
+
+GitHub Actions builds the three images this repository owns — the autoscaler,
+the dispatcher and the admin panel — runs all four test suites **inside** the
+images it just built, and only then publishes them to GHCR, tagged with the
+commit:
+
+```
+ghcr.io/<owner>/<repo>/autoscaler:<sha>
+ghcr.io/<owner>/<repo>/dispatcher:<sha>
+ghcr.io/<owner>/<repo>/admin:<sha>
+```
+
+Every master polls the branch head every five minutes. When it moves, the master
+pulls those three exact references, copies the new tree into `/opt/infra`, and
+re-applies the three stacks. It builds nothing and it tests nothing — both of
+those jobs belong to CI, and doing them on the box whose actual job is running
+the cluster is what made updates slow and fragile.
+
+**The tag is a commit sha and never `latest`, and that is the whole design.**
+These images used to be built on the master and tagged `:latest`. A tag that
+exists only in one box's image store cannot be resolved to a digest, so Swarm
+wrote the bare string into the service spec — and rebuilding the tag then
+produced a spec byte-identical to the running one. Swarm compared, found no
+difference, and kept the **old** container serving while the new image sat
+unused. The updater reported success, the panel showed the new commit, and the
+code was the old code. With an immutable per-commit reference the spec genuinely
+changes, so Swarm rolls the service because that is what it does; nothing has to
+be forced, and "what is this cluster running" is answerable by reading the
+service.
+
+Two things follow from CI owning the build:
+
+- **A commit with no images is a commit no cluster moves to.** A failing test
+  publishes nothing, so the master pulls a 404 and stays where it is. It waits
+  quietly for the first 25 minutes — CI takes a couple of minutes and a master
+  should not panic about that — and after the deadline the panel says *update
+  failing* and names the missing image.
+- **The GHCR packages must be readable by the master.** Making them public is
+  simplest. If you keep them private, `GHCR_USER` / `GHCR_TOKEN` in
+  `master-cloud-init.yaml` need `read:packages` on them — the same PAT the
+  cluster already uses to pull your application image.
+
+`.github/workflows/publish.yml` and `bin/infra-images` have to agree on the
+image names down to the character, and neither can import the other, so
+`test_ci_publishes_exactly_the_images_this_cluster_pulls` runs both derivations
+and compares them. A disagreement would not crash anything — the master would
+pull a tag that was never published, treat the 404 as "CI has not finished yet",
+and sit at *update pending* forever.
+
 ## Before you start
 
 Four things to have open in other tabs:
 
 1. **Hetzner** — a private network `10.0.0.0/16`, and a **Read & Write** API token.
 2. **Cloudflare** — one Tunnel; copy the connector token. Hostnames come later.
-3. **GitHub** — a PAT with `read:packages`, for the cluster to pull your image.
+3. **GitHub** — a PAT with `read:packages`, for the cluster to pull your
+   application image, and this repository pushed somewhere Actions can build
+   it. See *Updating the infrastructure itself*.
 4. **Telegram** — a bot from @BotFather, added to a group. The chat id comes
    from `curl https://api.telegram.org/bot<TOKEN>/getUpdates` after you send one
    message there; group ids are negative. Optional at boot — the cluster comes
@@ -456,10 +510,16 @@ rolls production back:
 
 ## Bring it up, in order
 
-1. **Put this repo somewhere private** and uncomment the clone line in
-   `master-cloud-init.yaml` (`runcmd`), filling in your token. See the comment
-   there — it strips `.git` before copying, though the token is still in the
-   instance's user-data, so use a short-lived one and revoke it after.
+1. **Push this repo to GitHub and let the workflow run once.** The master
+   pulls its three infrastructure images from GHCR rather than building them,
+   so the commit you boot from has to have been published — check the Actions
+   tab is green before creating the server. A public repository with public
+   packages needs nothing else; a private one needs `GHCR_TOKEN` to have
+   `read:packages`.
+
+   There is nothing to configure for this. The image path is derived from
+   `INFRA_REPO_URL` and the tag is the commit, so both halves of every name
+   come from facts the cluster already has.
 2. **Fill every `REPLACE_ME`** in the `VARIABLES` block. The one that matters
    most is **`ADMIN_PASSWORD`**: it is the key to the cluster. Bootstrap refuses
    to run while any of them is unset.

@@ -35,9 +35,9 @@
       </span>
     </div>
     {% if infra.status == 'error' %}
-      <div class="rail-version-row"><span class="pill bad">update failing</span></div>
+      <div class="rail-version-row"><span class="pill bad" title="{{ infra.detail }}">update failing</span></div>
     {% elif infra.behind %}
-      <div class="rail-version-row"><span class="pill warn">update pending</span></div>
+      <div class="rail-version-row"><span class="pill warn" title="{{ infra.detail }}">update pending</span></div>
     {% endif %}
   {% endif %}
 </div>

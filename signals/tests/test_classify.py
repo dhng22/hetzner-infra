@@ -31,7 +31,7 @@ def decide(lat=None, cpu=None, mem=None, lat_pk=None, cpu_pk=None, mem_pk=None, 
 class UpTest(unittest.TestCase):
     def test_the_real_event_does_not_scale(self):
         """
-        08-22 14:05 on short-drama-master. One person testing an Android client
+        08-22 14:05, recorded on a live master. One person testing an Android client
         made four calls; one took 904ms. With no other traffic in the 2-minute
         rate window that single request WAS the service's mean latency, held
         past the 90-second sustain check. CPU was 11%. The cluster went

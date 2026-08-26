@@ -18,7 +18,8 @@ version: "3.8"
 services:
 
   ui:
-    image: ${APP_NAME}/admin:latest
+    # Pinned to a commit by bin/stack-deploy — see bin/infra-images.
+    image: ${INFRA_IMAGE_ADMIN}
     environment:
       APP_NAME: "${APP_NAME}"
       ROOT_DOMAIN: "${ROOT_DOMAIN}"

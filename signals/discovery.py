@@ -39,7 +39,7 @@ DEPENDENCY_HINTS = (
 )
 
 #: Labels that name WHICH dependency, best first. Whichever one the series
-#: actually carries becomes the target, so `upstream:tikdrama` can be muted
+#: actually carries becomes the target, so `upstream:vendor.example` can be muted
 #: without muting every outbound call the service makes.
 TARGET_LABELS = ("host", "server_address", "net_peer_name", "client_name",
                  "target", "pool", "database", "uri")

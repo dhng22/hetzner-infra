@@ -46,6 +46,25 @@ set -a; . "$INFRA_ENV"; set +a
 # http://:3100 and every container's logs vanish.
 [ -n "${MASTER_PRIVATE_IP:-}" ] || die "MASTER_PRIVATE_IP is not set in $INFRA_ENV"
 
+# --- which images this cluster is supposed to be running ---------------------
+# `monitoring` and `admin` name ${INFRA_IMAGE_*} rather than a tag, and those
+# are resolved here from the commit bin/infra-update last applied. Doing it in
+# ONE place is the point: the panel redeploys monitoring when you save a
+# setting, and if that path resolved the image differently from the updater's
+# path, saving a setting would quietly move the cluster to another version of
+# the autoscaler.
+#
+# `ingress` is deliberately not in this list — it runs cloudflared's published
+# image and nothing this repository builds, so a cluster with no recorded
+# commit can still redeploy its tunnel.
+case "$stack" in
+  monitoring|admin)
+    . "$INFRA_DIR/bin/infra-images"
+    infra_images || die "cannot resolve the infrastructure image references (see above)"
+    echo "images pinned to ${INFRA_IMAGE_COMMIT:0:12}"
+    ;;
+esac
+
 # --- rendering ---------------------------------------------------------------
 # The monitoring stack mounts two generated files, so they are regenerated HERE
 # rather than only at boot. That is what makes the panel's Settings page work:
