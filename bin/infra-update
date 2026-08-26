@@ -125,10 +125,20 @@ remote="$(git ls-remote "$INFRA_REPO_URL" "refs/heads/$BRANCH" 2>/dev/null | awk
 state_set "checked_at=$(date -Is)" "remote=$remote" "branch=$BRANCH" \
           "status=ok" "detail="
 
-if [ "$MODE" != "force" ] && [ "$running" = "$remote" ]; then
+# The commit is recorded BEFORE the rebuilds, so a run that fails after that
+# point leaves `commit == remote` with `status=error`. Without the status test
+# here that state is PERMANENT: every later tick sees the commit it wants and
+# exits, so a build that failed once never gets retried and the box serves the
+# old image forever while reporting the new SHA. It happened — a Dockerfile that
+# changed its build context was delivered by the previous version of this script
+# and could not be built by it.
+last_status="$(state_get status)"
+if [ "$MODE" != "force" ] && [ "$running" = "$remote" ] && [ "$last_status" != "error" ]; then
   [ "$MODE" = "check" ] && log "up to date at ${remote:0:12}"
   exit 0
 fi
+[ "$last_status" = "error" ] && [ "$running" = "$remote" ] \
+  && log "retrying ${remote:0:12} after a failed run: $(state_get detail)"
 
 log "running ${running:0:12}${running:+ ->} upstream ${remote:0:12} on $BRANCH"
 if [ "$MODE" = "check" ]; then
@@ -249,6 +259,12 @@ changed config     && deploy_monitoring=true
 # difference rsync had just refused to deliver, and rebuilt the same stale
 # package on every single tick — the "permanent phantom change" the DIFF_SKIP
 # comment above warns about, arrived at from the opposite direction.
+# Compared BEFORE the copy, because the copy is what destroys the evidence.
+self_changed=false
+if ! diff -q "$INFRA_DIR/bin/infra-update" "$work/repo/bin/infra-update" >/dev/null 2>&1; then
+  self_changed=true
+fi
+
 rsync -a --delete \
   --exclude '.git' \
   --exclude '/components/' \
@@ -274,6 +290,28 @@ for area in admin autoscaler dispatcher signals bin stacks config; do
 done
 
 chmod +x "$INFRA_DIR"/bin/* 2>/dev/null || true
+
+# THE UPDATER UPDATES ITSELF, AND THE RUN THAT DELIVERS A CHANGE IS THE OLD
+# VERSION. Everything above this line is generic — fetch, compare, copy — but
+# everything below it is specific: which images to build, with which context,
+# which suites to run, which stacks to deploy. A commit that changes any of
+# that arrives here already delivered and is then acted on by a script that
+# predates it. That is not hypothetical: moving the autoscaler's build context
+# to the repository root shipped a Dockerfile the previous script built from
+# the wrong directory, and the build failed on a tree that was otherwise
+# perfectly correct.
+#
+# So hand over. The replacement re-fetches (one extra clone, only on the ticks
+# where this file actually changed) and finds the tree already current, which is
+# exactly the case `service_commit` exists for: the files match, the RUNNING
+# CONTAINER does not, so it rebuilds and redeploys properly.
+if [ -z "${INFRA_UPDATE_RESUMED:-}" ] && [ "$self_changed" = true ]; then
+  log "bin/infra-update changed in ${got:0:12}; handing over to the new version"
+  case "$MODE" in
+    force) INFRA_UPDATE_RESUMED=1 exec "$INFRA_DIR/bin/infra-update" --force ;;
+    *)     INFRA_UPDATE_RESUMED=1 exec "$INFRA_DIR/bin/infra-update" ;;
+  esac
+fi
 # Recorded BEFORE the rebuilds, because the files on disk are already the new
 # ones: a build that fails after this point must not leave the cluster claiming
 # to run the old commit it no longer has.
