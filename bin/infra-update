@@ -153,7 +153,7 @@ for required in stacks/monitoring.yml stacks/ingress.yml stacks/admin.yml \
                 config/vmagent.yml.tpl config/alertmanager.yml.tpl \
                 config/alerts.yml autoscaler/Dockerfile admin/Dockerfile \
                 bin/component bin/stack-deploy bin/infra-update \
-                bin/render-fleet-env; do
+                bin/render-fleet-env dispatcher/Dockerfile signals/classify.py; do
   [ -e "$work/repo/$required" ] || die "the fetched tree is missing $required — refusing to apply it"
 done
 
@@ -205,11 +205,19 @@ service_commit() {
   docker image inspect "$img" -f '{{index .Config.Labels "infra.commit"}}' 2>/dev/null || echo ""
 }
 
-rebuild_autoscaler=false; rebuild_admin=false
+rebuild_autoscaler=false; rebuild_dispatcher=false; rebuild_admin=false
 deploy_monitoring=false; deploy_ingress=false; deploy_admin=false
 
-if changed autoscaler || [ "$(service_commit monitoring_autoscaler)" != "$got" ]; then
+# `signals` is shared, so a change in it rebuilds BOTH. Rebuilding one and not
+# the other is exactly the split-brain the shared package exists to prevent:
+# two processes reading one service through two versions of the same query.
+if changed autoscaler || changed signals \
+   || [ "$(service_commit monitoring_autoscaler)" != "$got" ]; then
   rebuild_autoscaler=true; deploy_monitoring=true
+fi
+if changed dispatcher || changed signals \
+   || [ "$(service_commit monitoring_dispatcher)" != "$got" ]; then
+  rebuild_dispatcher=true; deploy_monitoring=true
 fi
 if changed admin || [ "$(service_commit admin_ui)" != "$got" ]; then
   rebuild_admin=true; deploy_admin=true
@@ -258,7 +266,7 @@ rsync -a --delete \
 # the commit is recorded, so the panel shows "update failing" rather than the new
 # SHA. Same exclusions as `changed()`, or generated config would fail it every
 # time.
-for area in admin autoscaler bin stacks config; do
+for area in admin autoscaler dispatcher signals bin stacks config; do
   [ -e "$work/repo/$area" ] || continue
   diff -qr --no-dereference "${DIFF_SKIP[@]}" \
        "$INFRA_DIR/$area" "$work/repo/$area" >/dev/null 2>&1 \
@@ -273,11 +281,21 @@ state_set "commit=$got" "updated_at=$(date -Is)" "previous=$running"
 log "files updated to ${got:0:12}"
 
 # --- rebuild and redeploy only what moved ------------------------------------
+# The context is the REPOSITORY ROOT for these two, not their own directory:
+# both copy in `signals/`, which is shared between them precisely so they cannot
+# disagree about whether a service is busy. `.dockerignore` keeps the git
+# history and the panel's preview artefact out of the context.
 if [ "$rebuild_autoscaler" = true ]; then
   log "building autoscaler image"
-  docker build -q --label "infra.commit=$got" \
-    -t "${APP_NAME}/autoscaler:latest" "$INFRA_DIR/autoscaler" >/dev/null \
+  docker build -q --label "infra.commit=$got" -f "$INFRA_DIR/autoscaler/Dockerfile" \
+    -t "${APP_NAME}/autoscaler:latest" "$INFRA_DIR" >/dev/null \
     || die "autoscaler image build failed — the files are updated but the old image is still running"
+fi
+if [ "$rebuild_dispatcher" = true ]; then
+  log "building dispatcher image"
+  docker build -q --label "infra.commit=$got" -f "$INFRA_DIR/dispatcher/Dockerfile" \
+    -t "${APP_NAME}/dispatcher:latest" "$INFRA_DIR" >/dev/null \
+    || die "dispatcher image build failed — the files are updated but the old image is still running"
 fi
 if [ "$rebuild_admin" = true ]; then
   log "building admin image"
@@ -316,7 +334,13 @@ run_suite() {
          die "$area tests failed against the newly built image — refusing to deploy it"; }
 }
 
-[ "$rebuild_autoscaler" = true ] && run_suite autoscaler "${APP_NAME}/autoscaler:latest"
+# `signals` carries the decision rule both processes apply, so its suite runs
+# with whichever image is being rebuilt rather than belonging to either.
+if [ "$rebuild_autoscaler" = true ]; then
+  run_suite signals "${APP_NAME}/autoscaler:latest"
+  run_suite autoscaler "${APP_NAME}/autoscaler:latest"
+fi
+[ "$rebuild_dispatcher" = true ] && run_suite dispatcher "${APP_NAME}/dispatcher:latest"
 [ "$rebuild_admin" = true ] && run_suite admin "${APP_NAME}/admin:latest"
 
 # A LOCALLY-BUILT IMAGE IS INVISIBLE TO SWARM'S SPEC DIFF, and this is the whole

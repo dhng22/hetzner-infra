@@ -479,7 +479,12 @@ write_files:
          /opt/infra/config/worker-cloud-init.yaml
 
       # --- build local images --------------------------------------------------
-      docker build -t "${APP_NAME}/autoscaler:latest" /opt/infra/autoscaler
+      # Root context for these two: both copy in /opt/infra/signals, which they
+      # share so that they cannot disagree about whether a service is busy.
+      docker build -f /opt/infra/autoscaler/Dockerfile \
+        -t "${APP_NAME}/autoscaler:latest" /opt/infra
+      docker build -f /opt/infra/dispatcher/Dockerfile \
+        -t "${APP_NAME}/dispatcher:latest" /opt/infra
       docker build -t "${APP_NAME}/admin:latest"      /opt/infra/admin
 
       # --- networks -------------------------------------------------------------

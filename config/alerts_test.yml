@@ -493,3 +493,101 @@ tests:
         exp_alerts:
           - exp_labels: { severity: none }
             exp_annotations: { summary: "Alerting pipeline is alive" }
+
+  # --- ThrottledByUnownedDependency ----------------------------------------
+  # Nothing claims the cause and it is not muted -> a human has to hear it.
+  - interval: 1m
+    input_series:
+      - series: 'dispatcher_signal_unowned{service="api_app", cause="upstream"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: ThrottledByUnownedDependency
+        exp_alerts:
+          - exp_labels: { severity: warning, service: api_app, cause: upstream }
+            exp_annotations:
+              summary: "api_app is slow because of upstream, and nothing handles it"
+              description: "p95 has been over budget for half an hour while the replicas themselves are idle, so the autoscaler is deliberately not scaling. The suspected cause is upstream; the dispatcher's log names the specific target. Either give something the infra.handles=upstream label, or mute it on the component with autoscale.mute_causes."
+
+  # Claimed or muted: the autoscaler zeroes the gauge, so the rule stays quiet
+  # with no list of exceptions to maintain here. This is what makes adding
+  # dbmanager a label on dbmanager rather than an edit to this file.
+  - interval: 1m
+    input_series:
+      - series: 'dispatcher_signal{service="api_app", cause="database"}'
+        values: '1x40'
+      - series: 'dispatcher_signal_unowned{service="api_app", cause="database"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: ThrottledByUnownedDependency
+        exp_alerts: []
+
+  # Half an hour is the bar. A dependency having a bad ten minutes is not a page.
+  - interval: 1m
+    input_series:
+      - series: 'dispatcher_signal_unowned{service="api_app", cause="database"}'
+        values: '1x12 0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: ThrottledByUnownedDependency
+        exp_alerts: []
+
+  # --- DispatcherSilent -----------------------------------------------------
+  # Nothing arriving: the safe failure, made visible.
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_services_awaiting_dispatch'
+        values: '2x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: DispatcherSilent
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "no verdicts arriving — 2 service(s) frozen at their current replica count"
+              description: "The autoscaler has had no fresh verdict for at least ten minutes, so it is holding every replica count where it is. Placement, node lifecycle and reaping are unaffected. Check that monitoring_dispatcher is running and that the autoscaler service still carries infra.handles=local with a reachable infra.handles.port."
+
+  # Verdicts arriving normally: silent. Zero is the healthy value, and it is a
+  # value rather than an absent series so the rule can tell the two apart.
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_services_awaiting_dispatch'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: DispatcherSilent
+        exp_alerts: []
+
+  # A brief gap — one missed delivery — is not a page.
+  - interval: 1m
+    input_series:
+      - series: 'autoscaler_services_awaiting_dispatch'
+        values: '1x5 0x20'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: DispatcherSilent
+        exp_alerts: []
+
+  # --- ManagerUnreachable ---------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'dispatcher_delivery_ok{manager="monitoring_autoscaler"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ManagerUnreachable
+        exp_alerts:
+          - exp_labels: { severity: warning, manager: monitoring_autoscaler }
+            exp_annotations:
+              summary: "monitoring_autoscaler claims a cause but cannot be delivered to"
+              description: "The dispatcher has a verdict for monitoring_autoscaler and its POST has been failing for ten minutes, so that manager is acting on nothing. Deliveries are level-triggered and retried every loop, so this clears by itself the moment the manager answers."
+
+  - interval: 1m
+    input_series:
+      - series: 'dispatcher_delivery_ok{manager="monitoring_autoscaler"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ManagerUnreachable
+        exp_alerts: []

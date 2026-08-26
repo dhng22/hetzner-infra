@@ -88,6 +88,29 @@ class AppComponent(Component):
                        "signal, and at low traffic it is the only one: p95 over an empty "
                        "histogram returns nothing at all.", group="autoscale"),
             Field("down_cpu_pct", "Scale down below CPU %", "number", 30, minimum=1, maximum=200, group="autoscale"),
+            Field("up_mem_pct", "Scale up above memory %", "number", 85, minimum=1, maximum=100,
+                  help="Working set of ONE replica against its own limit. CPU is "
+                       "compressible and memory is not — over its limit is an OOM kill, "
+                       "not a slowdown.", group="autoscale"),
+            Field("down_mem_pct", "Scale down below memory %", "number", 60,
+                  minimum=1, maximum=100, group="autoscale"),
+            Field("busy_cpu_pct", "Latency counts above CPU %", "number", 25,
+                  minimum=0, maximum=200,
+                  help="Latency is a SYMPTOM. Below this — and below the memory floor "
+                       "— a slow response is something the replicas are WAITING ON, and "
+                       "more of them would only aim more concurrency at it. One user "
+                       "making four calls once grew this cluster 2 to 4 replicas at 11% "
+                       "CPU; this is the guard that refuses.", group="autoscale"),
+            Field("busy_mem_pct", "Latency counts above memory %", "number", 60,
+                  minimum=0, maximum=100, group="autoscale"),
+            Field("mute_causes", "Mute throttling causes", "text", "",
+                  required=False,
+                  help="Comma separated. When latency is being caused by something the "
+                       "replicas are waiting on, the autoscaler names the cause and "
+                       "alerts if nothing in the cluster handles it. Mute the ones "
+                       "nobody ever will: `upstream:tikdrama` for one third party, "
+                       "`upstream` for all of them. Causes: local, database, upstream, "
+                       "unknown.", group="autoscale"),
             Field("sustain_up_seconds", "Sustain up (s)", "number", 90, minimum=30, maximum=3600,
                   help="How long a signal must stay high. Up fast, down slow — never "
                        "make these two symmetric.", group="autoscale"),
@@ -164,6 +187,11 @@ class AppComponent(Component):
             "autoscale.down_p95_ratio": str(s["down_p95_ratio"]),
             "autoscale.up_cpu_pct": str(s["up_cpu_pct"]),
             "autoscale.down_cpu_pct": str(s["down_cpu_pct"]),
+            "autoscale.up_mem_pct": str(s["up_mem_pct"]),
+            "autoscale.down_mem_pct": str(s["down_mem_pct"]),
+            "autoscale.busy_cpu_pct": str(s["busy_cpu_pct"]),
+            "autoscale.busy_mem_pct": str(s["busy_mem_pct"]),
+            "autoscale.mute_causes": str(s.get("mute_causes") or ""),
             "autoscale.sustain_up_seconds": str(s["sustain_up_seconds"]),
             "autoscale.sustain_down_seconds": str(s["sustain_down_seconds"]),
             "autoscale.up_factor": str(s["up_factor"]),

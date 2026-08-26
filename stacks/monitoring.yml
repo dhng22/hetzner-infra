@@ -75,6 +75,14 @@ x-autoscaler-base: &autoscaler-base
       prometheus.scrape: "true"
       prometheus.port: "9200"
       prometheus.path: "/metrics"
+      # THE AUTOSCALER IS A MANAGER, and this is its whole subscription. It
+      # claims `local` — the one cause more replicas can fix — and says where to
+      # deliver. The dispatcher reads these three labels off the service list;
+      # nothing anywhere is configured with this service's address, so dbmanager
+      # is the same three labels on a different service and no edit here.
+      infra.handles: "local"
+      infra.handles.port: "9201"
+      infra.handles.path: "/signal"
     resources:
       reservations: { cpus: "0.05", memory: 96M }
     restart_policy:
@@ -243,6 +251,43 @@ services:
       mode: global
       resources:
         reservations: { cpus: "0.05", memory: 96M }
+
+  # --- the performance dispatcher -------------------------------------------
+  # Works out WHY a service is slow and hands the answer to whoever owns it.
+  #
+  # Separate from the autoscaler on purpose. Deciding that MongoDB is throttling
+  # an API is not a capacity decision, and it used to mean the process holding a
+  # Hetzner token — one that creates and deletes servers — also had to know what
+  # a MongoDB driver timer looks like. This one holds no token, mounts the
+  # socket READ-ONLY, and changes nothing at all.
+  #
+  # It is also the answer's second consumer that forced the split: a future
+  # dbmanager needs to know a database is the bottleneck, and if that lived in
+  # the autoscaler, dbmanager would either re-derive it — two implementations
+  # that will disagree — or depend on the autoscaler, which is backwards.
+  #
+  # A manager subscribes by labelling ITS OWN service `infra.handles=database`.
+  # Nothing here lists managers.
+  dispatcher:
+    image: ${APP_NAME}/dispatcher:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [monitoring]
+    deploy:
+      replicas: 1
+      # Manager-only because it reads the service list, which is a manager API.
+      # It carries no state and no volume, so this is the API's requirement
+      # rather than a data one.
+      <<: *manager-only
+      labels:
+        prometheus.scrape: "true"
+        prometheus.port: "9210"
+        prometheus.path: "/metrics"
+      resources:
+        reservations: { cpus: "0.03", memory: 64M }
+      restart_policy:
+        condition: any
+        delay: 30s
 
   # --- the autoscaler -------------------------------------------------------
   # Manages the single shared worker pool. Staging rides along on it as one

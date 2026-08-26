@@ -27,10 +27,16 @@ RUN apt-get update \
 RUN useradd -m -u 10001 scaler
 WORKDIR /app
 
-COPY requirements.txt .
+COPY autoscaler/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY autoscaler.py .
+# The build context is the REPOSITORY ROOT, not autoscaler/, because `signals`
+# is shared with the dispatcher. Both processes must reach the same verdict
+# about whether a service is busy — the autoscaler acts on it, the dispatcher
+# attributes what the autoscaler refused to act on — and a copy per image is
+# how those two silently drift apart.
+COPY signals/ ./signals/
+COPY autoscaler/autoscaler.py .
 
 # Runs as root only because it needs the docker socket. If you prefer, add the
 # scaler user to the host's docker group GID and drop back with USER scaler.

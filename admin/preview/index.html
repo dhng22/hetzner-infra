@@ -2104,7 +2104,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-26T04:20:11Z" data-localtime>2026-08-26T04:20:11Z</time>
+          <time datetime="2026-08-26T05:13:27Z" data-localtime>2026-08-26T05:13:27Z</time>
           
         </div>
       </div>
@@ -2979,6 +2979,101 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         
         
 <div class="field">
+  <label for="f-up_mem_pct">Scale up above memory %</label>
+
+  
+    <input id="f-up_mem_pct" name="up_mem_pct"
+           type="number"
+           
+           min="1"
+           max="100"
+           
+           
+           value="85">
+  
+
+  <p class="hint">Working set of ONE replica against its own limit. CPU is compressible and memory is not — over its limit is an OOM kill, not a slowdown.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-down_mem_pct">Scale down below memory %</label>
+
+  
+    <input id="f-down_mem_pct" name="down_mem_pct"
+           type="number"
+           
+           min="1"
+           max="100"
+           
+           
+           value="60">
+  
+
+  
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-busy_cpu_pct">Latency counts above CPU %</label>
+
+  
+    <input id="f-busy_cpu_pct" name="busy_cpu_pct"
+           type="number"
+           
+           min="0"
+           max="200"
+           
+           
+           value="25">
+  
+
+  <p class="hint">Latency is a SYMPTOM. Below this — and below the memory floor — a slow response is something the replicas are WAITING ON, and more of them would only aim more concurrency at it. One user making four calls once grew this cluster 2 to 4 replicas at 11% CPU; this is the guard that refuses.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-busy_mem_pct">Latency counts above memory %</label>
+
+  
+    <input id="f-busy_mem_pct" name="busy_mem_pct"
+           type="number"
+           
+           min="0"
+           max="100"
+           
+           
+           value="60">
+  
+
+  
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-mute_causes">Mute throttling causes</label>
+
+  
+    <input id="f-mute_causes" name="mute_causes"
+           type="text"
+           
+           
+           
+           
+           
+           value="">
+  
+
+  <p class="hint">Comma separated. When latency is being caused by something the replicas are waiting on, the autoscaler names the cause and alerts if nothing in the cluster handles it. Mute the ones nobody ever will: `upstream:tikdrama` for one third party, `upstream` for all of them. Causes: local, database, upstream, unknown.</p>
+</div>
+      
+        
+        
+<div class="field">
   <label for="f-sustain_up_seconds">Sustain up (s)</label>
 
   
@@ -3326,7 +3421,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-26T04:20:11Z" data-localtime>2026-08-26T04:20:11Z</time>
+          <time datetime="2026-08-26T05:13:27Z" data-localtime>2026-08-26T05:13:27Z</time>
           
         </div>
       </div>
@@ -4116,6 +4211,101 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         
         
 <div class="field">
+  <label for="f-up_mem_pct">Scale up above memory %</label>
+
+  
+    <input id="f-up_mem_pct" name="up_mem_pct"
+           type="number"
+           
+           min="1"
+           max="100"
+           
+           
+           value="85">
+  
+
+  <p class="hint">Working set of ONE replica against its own limit. CPU is compressible and memory is not — over its limit is an OOM kill, not a slowdown.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-down_mem_pct">Scale down below memory %</label>
+
+  
+    <input id="f-down_mem_pct" name="down_mem_pct"
+           type="number"
+           
+           min="1"
+           max="100"
+           
+           
+           value="60">
+  
+
+  
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-busy_cpu_pct">Latency counts above CPU %</label>
+
+  
+    <input id="f-busy_cpu_pct" name="busy_cpu_pct"
+           type="number"
+           
+           min="0"
+           max="200"
+           
+           
+           value="25">
+  
+
+  <p class="hint">Latency is a SYMPTOM. Below this — and below the memory floor — a slow response is something the replicas are WAITING ON, and more of them would only aim more concurrency at it. One user making four calls once grew this cluster 2 to 4 replicas at 11% CPU; this is the guard that refuses.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-busy_mem_pct">Latency counts above memory %</label>
+
+  
+    <input id="f-busy_mem_pct" name="busy_mem_pct"
+           type="number"
+           
+           min="0"
+           max="100"
+           
+           
+           value="60">
+  
+
+  
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-mute_causes">Mute throttling causes</label>
+
+  
+    <input id="f-mute_causes" name="mute_causes"
+           type="text"
+           
+           
+           
+           
+           
+           value="">
+  
+
+  <p class="hint">Comma separated. When latency is being caused by something the replicas are waiting on, the autoscaler names the cause and alerts if nothing in the cluster handles it. Mute the ones nobody ever will: `upstream:tikdrama` for one third party, `upstream` for all of them. Causes: local, database, upstream, unknown.</p>
+</div>
+      
+        
+        
+<div class="field">
   <label for="f-sustain_up_seconds">Sustain up (s)</label>
 
   
@@ -4444,7 +4634,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-26T04:20:11Z" data-localtime>2026-08-26T04:20:11Z</time>
+          <time datetime="2026-08-26T05:13:27Z" data-localtime>2026-08-26T05:13:27Z</time>
           
         </div>
       </div>
@@ -4592,9 +4782,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis://default:5007cae530b433c579f99848d2a7a335e2baa272ef7f02fc@cache_redis:6379</code>
+              <code>redis://default:49cc644b4f59215b404074773a84ad120a1d9800ea8fe48b@cache_redis:6379</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis://default:5007cae530b433c579f99848d2a7a335e2baa272ef7f02fc@cache_redis:6379">Copy</button>
+                      data-copy-text="redis://default:49cc644b4f59215b404074773a84ad120a1d9800ea8fe48b@cache_redis:6379">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -4605,7 +4795,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="5007cae530b433c579f99848d2a7a335e2baa272ef7f02fc">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="49cc644b4f59215b404074773a84ad120a1d9800ea8fe48b">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -4631,9 +4821,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="panel-body stack">
           
           <div class="conn">
-            <code>redis://default:5007cae530b433c579f99848d2a7a335e2baa272ef7f02fc@10.0.0.2:46379</code>
+            <code>redis://default:49cc644b4f59215b404074773a84ad120a1d9800ea8fe48b@10.0.0.2:46379</code>
             <button class="btn btn-sm" type="button" data-copy
-                    data-copy-text="redis://default:5007cae530b433c579f99848d2a7a335e2baa272ef7f02fc@10.0.0.2:46379">Copy</button>
+                    data-copy-text="redis://default:49cc644b4f59215b404074773a84ad120a1d9800ea8fe48b@10.0.0.2:46379">Copy</button>
           </div>
           <div class="table-wrap">
             <table>
@@ -5079,7 +5269,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-26T04:20:11Z" data-localtime>2026-08-26T04:20:11Z</time>
+          <time datetime="2026-08-26T05:13:27Z" data-localtime>2026-08-26T05:13:27Z</time>
           
         </div>
       </div>
@@ -5186,9 +5376,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>mongodb://root:17d9a47fe8e76660113a47820f84abd64771890f5d5e1ab4@documents_mongo:27017/?authSource=admin</code>
+              <code>mongodb://root:6006f26c483079702f3bdbb1a83551386f24f5c42a8a37ec@documents_mongo:27017/?authSource=admin</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:17d9a47fe8e76660113a47820f84abd64771890f5d5e1ab4@documents_mongo:27017/?authSource=admin">Copy</button>
+                      data-copy-text="mongodb://root:6006f26c483079702f3bdbb1a83551386f24f5c42a8a37ec@documents_mongo:27017/?authSource=admin">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -5199,7 +5389,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="17d9a47fe8e76660113a47820f84abd64771890f5d5e1ab4">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="6006f26c483079702f3bdbb1a83551386f24f5c42a8a37ec">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -5632,7 +5822,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-26T04:20:11Z" data-localtime>2026-08-26T04:20:11Z</time>
+          <time datetime="2026-08-26T05:13:27Z" data-localtime>2026-08-26T05:13:27Z</time>
           
         </div>
       </div>
@@ -5773,9 +5963,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis://default:e1b34cee91092d0c48ce6c6df27ee437e4af53fc6c39e1c8@sessions_redis:6379</code>
+              <code>redis://default:495c545e90d24e9b4ef7eb30c93f3df4326d046ae77a90b6@sessions_redis:6379</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis://default:e1b34cee91092d0c48ce6c6df27ee437e4af53fc6c39e1c8@sessions_redis:6379">Copy</button>
+                      data-copy-text="redis://default:495c545e90d24e9b4ef7eb30c93f3df4326d046ae77a90b6@sessions_redis:6379">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -5786,7 +5976,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="e1b34cee91092d0c48ce6c6df27ee437e4af53fc6c39e1c8">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="495c545e90d24e9b4ef7eb30c93f3df4326d046ae77a90b6">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -6634,6 +6824,101 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   
 
   
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-up_mem_pct">Scale up above memory %</label>
+
+  
+    <input id="f-up_mem_pct" name="up_mem_pct"
+           type="number"
+           
+           min="1"
+           max="100"
+           
+           
+           value="85">
+  
+
+  <p class="hint">Working set of ONE replica against its own limit. CPU is compressible and memory is not — over its limit is an OOM kill, not a slowdown.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-down_mem_pct">Scale down below memory %</label>
+
+  
+    <input id="f-down_mem_pct" name="down_mem_pct"
+           type="number"
+           
+           min="1"
+           max="100"
+           
+           
+           value="60">
+  
+
+  
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-busy_cpu_pct">Latency counts above CPU %</label>
+
+  
+    <input id="f-busy_cpu_pct" name="busy_cpu_pct"
+           type="number"
+           
+           min="0"
+           max="200"
+           
+           
+           value="25">
+  
+
+  <p class="hint">Latency is a SYMPTOM. Below this — and below the memory floor — a slow response is something the replicas are WAITING ON, and more of them would only aim more concurrency at it. One user making four calls once grew this cluster 2 to 4 replicas at 11% CPU; this is the guard that refuses.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-busy_mem_pct">Latency counts above memory %</label>
+
+  
+    <input id="f-busy_mem_pct" name="busy_mem_pct"
+           type="number"
+           
+           min="0"
+           max="100"
+           
+           
+           value="60">
+  
+
+  
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-mute_causes">Mute throttling causes</label>
+
+  
+    <input id="f-mute_causes" name="mute_causes"
+           type="text"
+           
+           
+           
+           
+           
+           value="">
+  
+
+  <p class="hint">Comma separated. When latency is being caused by something the replicas are waiting on, the autoscaler names the cause and alerts if nothing in the cluster handles it. Mute the ones nobody ever will: `upstream:tikdrama` for one third party, `upstream` for all of them. Causes: local, database, upstream, unknown.</p>
 </div>
       
         

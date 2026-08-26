@@ -14,10 +14,16 @@ module cannot be imported without a socket. It is stubbed before import.
 
 import os
 import sys
+import time
 import types
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(_HERE))
+# The repository root, for `signals` — shared with the dispatcher, so it lives
+# beside both rather than inside either. The image copies it next to
+# autoscaler.py; only a checkout needs this line.
+sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))
 
 os.environ.setdefault("HCLOUD_TOKEN", "test-token")
 os.environ.setdefault("APP_NAME", "testcluster")
@@ -46,6 +52,7 @@ def workload(name, cores=0.5, mb=384, **policy):
         name=name, id=f"id-{name}",
         policy=A.policy_from_labels(name, labels, spec_replicas),
         spec_replicas=spec_replicas, cost=res(cores, mb), cpu_limit=cores * 2,
+        mem_limit=int(mb * 2 * 1024 * 1024),
         pinned=False, rolling=False, component=name.split("_")[0],
         rolled_back=False, placement_pinned=False,
     )
@@ -1407,3 +1414,88 @@ class ConfigTest(unittest.TestCase):
         os.environ["PROBE_INT"] = ""
         with self.assertRaises(RuntimeError):
             A._env("PROBE_INT")
+
+
+def verdict(direction="hold", reason="", cause="local", target=None,
+            latency_ms=None, cpu_pct=None, mem_pct=None):
+    """A delivery as the dispatcher sends it."""
+    return {"service": "api_app", "direction": direction, "reason": reason,
+            "cause": cause, "target": target, "latency_ms": latency_ms,
+            "cpu_pct": cpu_pct, "mem_pct": mem_pct}
+
+
+class DispatchedScalingTest(unittest.TestCase):
+    """
+    The autoscaler no longer judges whether a service is slow. It receives a
+    DIRECTION and turns it into a count inside that service's own bounds.
+    """
+
+    def setUp(self):
+        self.w = workload("api_app", min_replicas=2, max_replicas=8, up_factor=0.5)
+
+    def test_up_grows_by_the_factor_with_a_floor_of_one(self):
+        self.assertEqual(A.desired_replicas(self.w, verdict("up"), 2), 3)
+        self.assertEqual(A.desired_replicas(self.w, verdict("up"), 4), 6)
+
+    def test_up_never_passes_the_ceiling(self):
+        self.assertEqual(A.desired_replicas(self.w, verdict("up"), 8), 8)
+
+    def test_down_steps_one_at_a_time_and_stops_at_the_floor(self):
+        self.assertEqual(A.desired_replicas(self.w, verdict("down"), 4), 3)
+        self.assertEqual(A.desired_replicas(self.w, verdict("down"), 2), 2)
+
+    def test_hold_does_nothing(self):
+        self.assertEqual(A.desired_replicas(self.w, verdict("hold"), 4), 4)
+
+    def test_NO_VERDICT_HOLDS(self):
+        """
+        The shape of the whole split. A missing verdict is "nobody has told us
+        anything", not "nothing is wrong" — so a dispatcher outage stops the
+        fleet changing instead of returning this loop to a worse rule at the
+        moment it is least able to afford it.
+        """
+        for current in (1, 2, 5, 9):
+            self.assertEqual(A.desired_replicas(self.w, None, current), current)
+
+    def test_a_disabled_service_ignores_even_a_dispatched_verdict(self):
+        fixed = workload("fixed_app", enabled="false", spec_replicas=3)
+        self.assertEqual(A.desired_replicas(fixed, verdict("up"), 3), 3)
+
+
+class ReceiverTest(unittest.TestCase):
+    """Deliveries are level-triggered and they expire."""
+
+    def setUp(self):
+        A._dispatched.clear()
+
+    def tearDown(self):
+        A._dispatched.clear()
+
+    def test_a_delivery_is_readable_back(self):
+        n = A.record_dispatch({"signals": [verdict("up", reason="busy")]})
+        self.assertEqual(n, 1)
+        self.assertEqual(A.dispatched_for("api_app")["direction"], "up")
+
+    def test_a_later_delivery_replaces_an_earlier_one(self):
+        A.record_dispatch({"signals": [verdict("up")]})
+        A.record_dispatch({"signals": [verdict("down")]})
+        self.assertEqual(A.dispatched_for("api_app")["direction"], "down")
+
+    def test_a_stale_verdict_is_no_verdict(self):
+        A.record_dispatch({"signals": [verdict("up")]})
+        future = time.time() + A.SIGNAL_TTL_SECONDS + 1
+        self.assertIsNone(A.dispatched_for("api_app", now=future))
+
+    def test_a_service_nobody_mentioned_has_no_verdict(self):
+        A.record_dispatch({"signals": [verdict("up")]})
+        self.assertIsNone(A.dispatched_for("other_app"))
+
+    def test_an_entry_without_a_service_name_is_dropped_not_stored(self):
+        A.record_dispatch({"signals": [{"direction": "up"}]})
+        self.assertEqual(A._dispatched, {})
+
+
+# InvestigatorTest and ThrottleOwnershipTest moved to dispatcher/tests when
+# attribution left this process. What remains here is the half the autoscaler
+# still owns: whether a latency breach is THIS service's problem, which it must
+# decide itself because it acts on the answer inside its own loop.

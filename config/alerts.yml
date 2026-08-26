@@ -129,6 +129,82 @@ groups:
       #
       # Distinct from AutoscalerAtMax on purpose. That one means "out of node
       # budget"; this means "this component is out of replicas".
+      # THE DISPATCHER HAS GONE QUIET.
+      #
+      # It owns the performance loop: it measures, decides, and pushes a verdict
+      # to whichever manager claims the cause. Managers do not poll, so if it
+      # stops, nothing arrives, verdicts expire, and every service holds exactly
+      # where it is.
+      #
+      # That is the intended failure — a fleet that stops changing rather than
+      # one that falls back to a worse rule at the moment it can least afford
+      # it. But it is INVISIBLE from the outside: a cluster nobody is scaling
+      # looks exactly like a cluster nothing is happening to. This rule is what
+      # makes the safe failure a noticed one.
+      - alert: DispatcherSilent
+        expr: autoscaler_services_awaiting_dispatch > 0
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "no verdicts arriving — {{ $value }} service(s) frozen at their current replica count"
+          description: >-
+            The autoscaler has had no fresh verdict for at least ten minutes, so
+            it is holding every replica count where it is. Placement, node
+            lifecycle and reaping are unaffected. Check that monitoring_dispatcher
+            is running and that the autoscaler service still carries
+            infra.handles=local with a reachable infra.handles.port.
+
+      # A manager claimed a cause and cannot be reached. Whatever it handles is
+      # not being handled, and the manager itself cannot report that — it is not
+      # being told anything at all.
+      - alert: ManagerUnreachable
+        expr: dispatcher_delivery_ok == 0
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.manager }} claims a cause but cannot be delivered to"
+          description: >-
+            The dispatcher has a verdict for {{ $labels.manager }} and its POST
+            has been failing for ten minutes, so that manager is acting on
+            nothing. Deliveries are level-triggered and retried every loop, so
+            this clears by itself the moment the manager answers.
+
+      # SOMETHING ELSE IS SLOW AND NOBODY OWNS IT.
+      #
+      # The autoscaler refuses to add replicas for a latency breach its own
+      # replicas are not causing — more of them would only aim more concurrency
+      # at whatever is already struggling. That refusal is correct and it is
+      # also silent, so this is the rule that stops "we are not scaling" from
+      # meaning "nobody ever finds out".
+      #
+      # The gauge belongs to the DISPATCHER, not the autoscaler: attribution is
+      # diagnosis, it has more than one consumer, and it has no business living
+      # in the process that can delete servers.
+      #
+      # Only UNOWNED causes reach here. A cause some service claims with
+      # `infra.handles` is that manager's to report, and a cause the operator
+      # muted with `autoscale.mute_causes` is a decision already made — the
+      # third-party API nobody will ever be able to speed up. Both zero the
+      # gauge rather than being filtered here, so this rule needs no list of
+      # exceptions and gains nothing to forget when a manager is added.
+      #
+      # 30m because a dependency having a bad ten minutes is not a page, and
+      # because the thing being alerted on is by definition not something the
+      # cluster can fix by itself.
+      - alert: ThrottledByUnownedDependency
+        expr: dispatcher_signal_unowned == 1
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.service }} is slow because of {{ $labels.cause }}, and nothing handles it"
+          description: >-
+            p95 has been over budget for half an hour while the replicas
+            themselves are idle, so the autoscaler is deliberately not scaling.
+            The suspected cause is {{ $labels.cause }}; the dispatcher's log
+            names the specific target. Either give something the
+            infra.handles={{ $labels.cause }} label, or mute it on the component
+            with autoscale.mute_causes.
+
       - alert: ReplicaCeiling
         expr: |
           (autoscaler_service_current_replicas >= on (service) autoscaler_service_max_replicas)

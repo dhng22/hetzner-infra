@@ -156,6 +156,7 @@ deleted. Removing a server saves all of its cost; dropping it a rung saves a
 fraction of one.
 """
 
+import json
 import logging
 import math
 import os
@@ -163,12 +164,16 @@ import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 from collections import namedtuple
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import docker
 import requests
+
+from signals import classify, discovery, expressions, query
 from hcloud import Client
 from hcloud.images import Image
 from hcloud.locations import Location
@@ -293,6 +298,42 @@ logging.basicConfig(
 )
 log = logging.getLogger("autoscaler")
 
+
+# ---------------------------------------------------------------------------
+# shared signal library
+# ---------------------------------------------------------------------------
+# How a service's performance is MEASURED and CLASSIFIED is shared with the
+# dispatcher, which attributes the breaches this loop refuses to act on. Two
+# copies of `mean_expr` in two images is the drift this repository keeps being
+# bitten by: a query fixed in one process and not the other leaves the two
+# disagreeing about whether the same service is busy, and nothing fails while
+# they do. The names below are aliases so the rest of this file — and its tests
+# — read exactly as they did before the split.
+vm_query = query.vm_query
+vm_query_map = query.vm_query_map
+sustained = query.sustained
+p95_expr = expressions.p95_expr
+mean_expr = expressions.mean_expr
+_unit_of = expressions.unit_of
+_rank_latency = discovery.rank_latency
+_CPU_LABEL = expressions.CPU_LABEL
+CPU_BY_SERVICE = expressions.CPU_BY_SERVICE
+MEM_BY_SERVICE = expressions.MEM_BY_SERVICE
+
+# Errors are counted here rather than in the library, because each process owns
+# its own registry and a counter declared in shared code would belong to
+# neither.
+query.on_error = lambda stage: M_ERRORS.labels(stage=stage).inc()
+
+
+def discover_latency(service_names):
+    return discovery.discover_latency(
+        service_names,
+        on_missing=lambda svc: warn_once(
+            (svc, "nolatency"),
+            "%s publishes no recognisable request-latency metric; scaling it on "
+            "CPU alone", svc))
+
 #: Both halves of the ceiling are required. One without the other is an
 #: operator who meant to cap something and capped nothing, so it is refused
 #: rather than half-applied.
@@ -372,7 +413,28 @@ Policy = namedtuple("Policy", [
     "autoscale", "min_replicas", "max_replicas", "slo_ms", "up_ratio", "down_ratio",
     "up_cpu", "down_cpu", "sustain_up", "sustain_down", "up_factor", "cooldown",
     "priority", "histogram", "unit", "histogram_explicit",
+    # Latency is a SYMPTOM, and these decide whether it is this service's
+    # symptom. A replica that is not working hard is not the reason a request
+    # was slow — something it called was — and adding replicas then aims more
+    # concurrency at the thing that is already struggling. See desired_replicas.
+    "busy_cpu", "busy_mem",
+    # Memory as a first-class trigger, not just a gate. CPU is compressible and
+    # memory is not: a replica near its limit is one allocation from an OOM
+    # kill, which no amount of latency headroom warns you about.
+    "up_mem", "down_mem",
 ])
+
+
+#: How busy a replica has to be before a latency breach counts as ITS problem.
+#: Imported rather than restated: the dispatcher reads the same two numbers off
+#: the same service, and if the two disagreed this loop would refuse to scale
+#: something the dispatcher had already attributed to it.
+_BUSY_CPU = classify.BUSY_CPU
+_BUSY_MEM = classify.BUSY_MEM
+#: Memory's own thresholds. Higher than CPU's on purpose — a JVM sits near its
+#: heap ceiling by design, so only the top of the range means trouble.
+_UP_MEM = 85.0
+_DOWN_MEM = 60.0
 
 
 def policy_from_labels(service_name, labels, spec_replicas):
@@ -393,7 +455,8 @@ def policy_from_labels(service_name, labels, spec_replicas):
         if not enabled:
             fixed = max(0, int(spec_replicas or 0))
             return Policy(False, fixed, fixed, 500.0, 0.8, 0.4, 70.0, 30.0,
-                          90, 900, 0.5, 60, 100, "", "seconds", False)
+                          90, 900, 0.5, 60, 100, "", "seconds", False,
+                          _BUSY_CPU, _BUSY_MEM, _UP_MEM, _DOWN_MEM)
 
         lo = _label_num(labels, "autoscale.min_replicas", 1, int, 0, 100, service_name)
         hi = _label_num(labels, "autoscale.max_replicas", lo, int, 0, 100, service_name)
@@ -423,6 +486,21 @@ def policy_from_labels(service_name, labels, spec_replicas):
                       "%s: scale-down CPU %.0f%% is not below scale-up %.0f%%; "
                       "using the defaults for both", service_name, down_cpu, up_cpu)
             up_cpu, down_cpu = 70.0, 30.0
+
+        up_mem = _label_num(labels, "autoscale.up_mem_pct", _UP_MEM, float, 1.0, 100.0, service_name)
+        down_mem = _label_num(labels, "autoscale.down_mem_pct", _DOWN_MEM, float, 1.0, 100.0, service_name)
+        if down_mem >= up_mem:
+            warn_once((service_name, "mems", f"{up_mem}/{down_mem}"),
+                      "%s: scale-down memory %.0f%% is not below scale-up %.0f%%; "
+                      "using the defaults for both", service_name, down_mem, up_mem)
+            up_mem, down_mem = _UP_MEM, _DOWN_MEM
+
+        # The saturation floors. Capped at the scale-up thresholds, because a
+        # floor ABOVE the trigger is a service that can never scale on latency
+        # at all — a footgun that reads as "stricter" and means "off".
+        busy_cpu = _label_num(labels, "autoscale.busy_cpu_pct", _BUSY_CPU, float, 0.0, 200.0, service_name)
+        busy_mem = _label_num(labels, "autoscale.busy_mem_pct", _BUSY_MEM, float, 0.0, 100.0, service_name)
+        busy_cpu, busy_mem = min(busy_cpu, up_cpu), min(busy_mem, up_mem)
 
         sustain_up = _label_num(labels, "autoscale.sustain_up_seconds", 90, int, 30, 3600, service_name)
         sustain_down = _label_num(labels, "autoscale.sustain_down_seconds", 900, int, 60, 86400, service_name)
@@ -457,6 +535,7 @@ def policy_from_labels(service_name, labels, spec_replicas):
             _label_num(labels, "autoscale.cooldown_seconds", 60, int, 0, 3600, service_name),
             _label_num(labels, "autoscale.priority", 100, int, 0, 1000, service_name),
             histogram, unit, histogram_explicit,
+            busy_cpu, busy_mem, up_mem, down_mem,
         )
     except Exception as exc:  # noqa: BLE001
         M_ERRORS.labels(stage="policy").inc()
@@ -464,7 +543,8 @@ def policy_from_labels(service_name, labels, spec_replicas):
                     service_name, exc)
         fixed = max(0, int(spec_replicas or 0))
         return Policy(False, fixed, fixed, 500.0, 0.8, 0.4, 70.0, 30.0, 90, 900,
-                      0.5, 60, 100, "", "seconds", False)
+                      0.5, 60, 100, "", "seconds", False,
+                      _BUSY_CPU, _BUSY_MEM, _UP_MEM, _DOWN_MEM)
 
 
 # ---------------------------------------------------------------------------
@@ -560,6 +640,13 @@ M_EVENTS = Counter("autoscaler_scale_events_total", "Scaling actions taken", ["d
 M_RESIZING = Gauge("autoscaler_worker_resize_in_flight",
                    "1 while a worker is being power-cycled onto another plan")
 M_ERRORS = Counter("autoscaler_errors_total", "Errors encountered", ["stage"])
+# The dispatcher owns the performance loop, so these two say whether this
+# process is being told anything at all. A fleet that has stopped changing looks
+# identical to a quiet one until you can see that no verdict has arrived.
+M_SIGNAL_AT = Gauge("autoscaler_last_dispatch_timestamp_seconds",
+                    "Unix time of the last verdict delivered by the dispatcher")
+M_DISPATCH_WAITING = Gauge("autoscaler_services_awaiting_dispatch",
+                           "Autoscaled services with no fresh verdict, therefore holding")
 
 _SVC = ["service"]
 S_P95 = Gauge("autoscaler_service_p95_ms", "p95 latency in milliseconds", _SVC)
@@ -591,9 +678,10 @@ S_STARVED = Gauge("autoscaler_service_min_unsatisfied", "1 when the cluster cann
 S_UNPLACEABLE = Gauge("autoscaler_service_unplaceable", "1 when one replica exceeds any possible node", _SVC)
 S_COST_CPU = Gauge("autoscaler_service_replica_cost_cpu_cores", "CPU one replica reserves", _SVC)
 S_COST_MEM = Gauge("autoscaler_service_replica_cost_memory_bytes", "Memory one replica reserves", _SVC)
-
+S_MEM = Gauge("autoscaler_service_memory_per_replica_percent",
+              "Mean working set per replica, % of limit", _SVC)
 _PER_SERVICE = [S_P95, S_SLO, S_CURRENT, S_DESIRED, S_ADMITTED, S_RUNNING, S_PENDING,
-                S_MIN, S_MAX, S_AUTO, S_CPU, S_PINNED, S_STARVED, S_UNPLACEABLE,
+                S_MIN, S_MAX, S_AUTO, S_CPU, S_MEM, S_PINNED, S_STARVED, S_UNPLACEABLE,
                 S_COST_CPU, S_COST_MEM]
 _exported_services = set()
 
@@ -642,43 +730,6 @@ signal.signal(signal.SIGINT, _stop)
 # metric queries
 # ---------------------------------------------------------------------------
 
-def vm_query(expr):
-    """Instant query against VictoriaMetrics. Returns float or None."""
-    try:
-        resp = requests.get(f"{VM_URL}/api/v1/query", params={"query": expr}, timeout=15)
-        resp.raise_for_status()
-        results = resp.json().get("data", {}).get("result", [])
-        if not results:
-            return None
-        return float(results[0]["value"][1])
-    except Exception as exc:  # noqa: BLE001
-        M_ERRORS.labels(stage="query").inc()
-        log.warning("query failed (%s): %s", expr[:60], exc)
-        return None
-
-
-def vm_query_map(expr, label="service"):
-    """
-    One query, many series. Returns {label value: float}.
-
-    Every per-service signal is aggregated `by (service)` and read through this
-    rather than issued once per service. Ten components x six queries at a 15s
-    timeout does not fit in a 60s loop, and AutoscalerStalled fires at 300s.
-    """
-    out = {}
-    try:
-        resp = requests.get(f"{VM_URL}/api/v1/query", params={"query": expr}, timeout=15)
-        resp.raise_for_status()
-        for row in resp.json().get("data", {}).get("result", []):
-            key = row.get("metric", {}).get(label)
-            if key:
-                out[key] = float(row["value"][1])
-    except Exception as exc:  # noqa: BLE001
-        M_ERRORS.labels(stage="query").inc()
-        log.warning("grouped query failed (%s): %s", expr[:60], exc)
-    return out
-
-
 _SEL = 'node_role="worker"'
 _MGR = 'node_role="manager"'
 
@@ -693,151 +744,6 @@ MEM_EXPR = (f'avg(100 * (1 - node_memory_MemAvailable_bytes{{{_SEL}}}'
 MGR_CPU_EXPR = f'100 - (avg(rate(node_cpu_seconds_total{{mode="idle",{_MGR}}}[5m])) * 100)'
 MGR_MEM_EXPR = (f'avg(100 * (1 - node_memory_MemAvailable_bytes{{{_MGR}}}'
                 f' / node_memory_MemTotal_bytes{{{_MGR}}}))')
-
-# CPU per replica, for every scraped service at once. Divided by each service's
-# own limit locally, which is what finally removes APP_CPU_LIMIT.
-_CPU_LABEL = "container_label_com_docker_swarm_service_name"
-CPU_BY_SERVICE = (f'avg by ({_CPU_LABEL}) (rate(container_cpu_usage_seconds_total'
-                  f'{{{_CPU_LABEL}!=""}}[3m]))')
-
-
-def p95_expr(histogram, unit):
-    """p95 by service, in milliseconds. `service` is written by vmagent."""
-    scale = 1000 if unit == "seconds" else 1
-    return (f"histogram_quantile(0.95, sum by (service, le) "
-            f"(rate({histogram}[2m]))) * {scale}")
-
-
-def mean_expr(base, unit):
-    """
-    Mean request latency by service, in milliseconds.
-
-    Used when a service publishes a timer but no buckets. It is NOT a p95 and
-    is not pretended to be one: the mean sits below the tail, so a service
-    compared against a p95 SLO through this will scale up later than one with a
-    real histogram. That is still enormously better than the alternative, which
-    is no latency signal at all — and it is the common case, because a
-    Micrometer/Prometheus timer publishes _sum and _count by default and
-    publishes buckets only when someone explicitly enables them.
-    """
-    scale = 1000 if unit == "seconds" else 1
-    return (f"(sum by (service) (rate({base}_sum[2m])) "
-            f"/ sum by (service) (rate({base}_count[2m]))) * {scale}")
-
-
-#: Name fragments that make a metric family look like HTTP server latency,
-#: best first. Discovery ranks candidates by the first fragment they contain, so
-#: an app publishing both client and server timers picks the server one.
-_LATENCY_HINTS = ("http_server_requests", "http_server_request",
-                  "http_server_duration", "http_request_duration",
-                  "http_requests_duration", "request_duration",
-                  "requests_seconds", "request_seconds")
-
-#: Discovery is a metadata query, not a signal — the answer changes only when
-#: someone ships a new framework, so it is cached and refreshed rarely.
-_LATENCY_TTL_SECONDS = 900
-_latency_cache = {}          # service -> (expr, unit, kind) or None
-_latency_checked_at = 0.0
-
-
-def _rank_latency(name):
-    """Lower is better. None means it does not look like request latency."""
-    lowered = name.lower()
-    for i, hint in enumerate(_LATENCY_HINTS):
-        if hint in lowered:
-            return i
-    return None
-
-
-def _unit_of(name):
-    return "milliseconds" if ("millis" in name or name.endswith("_ms")) else "seconds"
-
-
-def discover_latency(service_names):
-    """
-    {service: (expr, kind)} for services whose latency metric we can find.
-
-    Two metadata queries for the whole cluster, cached. This exists so a
-    component does not have to be told the name of its own latency metric: the
-    default was `http_server_requests_seconds_bucket`, a Spring convention, and
-    a Ktor app publishing `ktor_http_server_requests_seconds` matched nothing —
-    so p95 read n/a forever and only CPU could ever move the replica count.
-    Nothing warned, because an empty histogram_quantile is also what an idle
-    service looks like.
-    """
-    global _latency_checked_at
-    now = time.time()
-    if _latency_cache and now - _latency_checked_at < _LATENCY_TTL_SECONDS:
-        return {k: v for k, v in _latency_cache.items() if v}
-
-    wanted = set(service_names)
-    found = {}
-
-    # Real histograms first — a true p95 always beats a mean.
-    for suffix, kind in (("_bucket", "p95"), ("_count", "mean")):
-        rows = vm_series_names(f'{{__name__=~".+{suffix}", service!=""}}')
-        for metric, svc in rows:
-            if svc not in wanted or svc in found:
-                continue
-            base = metric[: -len(suffix)]
-            rank = _rank_latency(base)
-            if rank is None:
-                continue
-            best = found.get(svc)
-            if best and best[0] <= rank:
-                continue
-            unit = _unit_of(base)
-            expr = (p95_expr(f"{base}_bucket", unit) if kind == "p95"
-                    else mean_expr(base, unit))
-            found[svc] = (rank, expr, kind, base)
-
-    _latency_cache.clear()
-    for svc in wanted:
-        hit = found.get(svc)
-        _latency_cache[svc] = (hit[1], hit[2], hit[3]) if hit else None
-        if hit:
-            log.info("%s: latency signal is %s from %s", svc, hit[2], hit[3])
-        else:
-            warn_once((svc, "nolatency"),
-                      "%s publishes no recognisable request-latency metric; "
-                      "scaling it on CPU alone", svc)
-    _latency_checked_at = now
-    return {k: v for k, v in _latency_cache.items() if v}
-
-
-def vm_series_names(selector):
-    """
-    [(metric name, service)] for a selector, via the /series metadata endpoint.
-
-    /series rather than an instant query: it returns label sets without values,
-    so asking "which metrics does this cluster publish" does not also drag every
-    sample back through the loop.
-    """
-    out = []
-    try:
-        resp = requests.get(f"{VM_URL}/api/v1/series",
-                            params={"match[]": selector,
-                                    "start": int(time.time()) - 3600},
-                            timeout=15)
-        resp.raise_for_status()
-        for row in resp.json().get("data", []):
-            name, svc = row.get("__name__"), row.get("service")
-            if name and svc:
-                out.append((name, svc))
-    except Exception as exc:  # noqa: BLE001
-        M_ERRORS.labels(stage="query").inc()
-        log.warning("series lookup failed (%s): %s", selector[:60], exc)
-    return out
-
-
-def sustained(expr, window, aggregate):
-    """
-    Was `expr` continuously above (min_over_time) or below (max_over_time) for
-    the whole window? A subquery, so no local state is needed.
-    """
-    step = max(15, window // 12)
-    return f"{aggregate}(({expr})[{window}s:{step}s])"
-
 
 # ---------------------------------------------------------------------------
 # swarm + hetzner inventory
@@ -959,8 +865,8 @@ def index_tasks():
 # ---------------------------------------------------------------------------
 
 Workload = namedtuple("Workload", [
-    "name", "id", "policy", "spec_replicas", "cost", "cpu_limit", "pinned",
-    "rolling", "component", "rolled_back", "placement_pinned",
+    "name", "id", "policy", "spec_replicas", "cost", "cpu_limit", "mem_limit",
+    "pinned", "rolling", "component", "rolled_back", "placement_pinned",
 ])
 
 #: Set by a component whose placement was chosen by hand in the panel. The
@@ -1061,10 +967,16 @@ def discover_workloads():
                           service.name, WORKLOAD_LABEL, WORKLOAD_APP)
             limit = _limits(resources)
             cpu_limit = limit.cores or cost.cores or 1.0
+            # Falling back to the RESERVATION is what makes the percentage mean
+            # something for a service with no limit set: without it the divisor
+            # would be zero and memory would read as absent rather than as
+            # "measured against what it asked for".
+            mem_limit = limit.mem or cost.mem or 0
             workloads.append(Workload(
                 name=service.name, id=service.id,
                 policy=policy_from_labels(service.name, labels, replicas),
                 spec_replicas=replicas, cost=cost, cpu_limit=cpu_limit,
+                mem_limit=mem_limit,
                 pinned=is_pinned(service), rolling=update_in_progress(service),
                 component=labels.get(COMPONENT_LABEL, service.name.split("_")[0]),
                 rolled_back=update_rolled_back(service),
@@ -1655,75 +1567,15 @@ def running_and_pending(tasks_by_node, workloads):
 # signals
 # ---------------------------------------------------------------------------
 
-Signals = namedtuple("Signals", ["p95", "cpu", "p95_held", "cpu_held", "p95_peak", "cpu_peak"])
-
-
-def read_signals_batch(workloads, worker_count):
+def read_node_pressure(worker_count):
     """
-    Every service's signals, in a handful of grouped queries.
+    Whichever of CPU or memory is fullest on the boxes that hold the replicas.
 
-    Returns ({service name: Signals}, node_pressure). Services are grouped by
-    (histogram, unit, window) so in practice this is one or two round trips
-    rather than six per component.
+    A PLACEMENT GUARD, never a scaling trigger — it averages in the exporters,
+    the tunnel connector and everything else on the machine. It is the last
+    per-signal query this process makes: everything about how a SERVICE is
+    performing now arrives from the dispatcher.
     """
-    signals = {w.name: Signals(None, None, None, None, None, None) for w in workloads}
-    scalers = [w for w in workloads if w.policy.autoscale]
-
-    cpu_raw = vm_query_map(CPU_BY_SERVICE, label=_CPU_LABEL) if scalers else {}
-
-    # A latency metric named explicitly on the service wins; anything else is
-    # discovered. Discovery is what makes a component work without being told
-    # its own framework's metric name, and the explicit label is the escape
-    # hatch for an app that publishes several and wants a specific one.
-    discovered = discover_latency([w.name for w in scalers]) if scalers else {}
-
-    groups = {}
-    for w in scalers:
-        explicit = w.policy.histogram_explicit
-        if explicit:
-            expr = p95_expr(w.policy.histogram, w.policy.unit)
-        elif w.name in discovered:
-            expr = discovered[w.name][0]
-        else:
-            continue          # no latency signal for this one; CPU still applies
-        groups.setdefault(expr, []).append(w)
-
-    p95_now, p95_held, p95_peak = {}, {}, {}
-    for expr, members in groups.items():
-        p95_now.update(vm_query_map(expr))
-        for window in {w.policy.sustain_up for w in members}:
-            p95_held.update({k: v for k, v in
-                             vm_query_map(sustained(expr, window, "min_over_time")).items()
-                             if any(w.policy.sustain_up == window and w.name == k
-                                    for w in members)})
-        for window in {w.policy.sustain_down for w in members}:
-            p95_peak.update({k: v for k, v in
-                             vm_query_map(sustained(expr, window, "max_over_time")).items()
-                             if any(w.policy.sustain_down == window and w.name == k
-                                    for w in members)})
-
-    cpu_windows_up, cpu_windows_down = {}, {}
-    for window in {w.policy.sustain_up for w in scalers}:
-        cpu_windows_up[window] = vm_query_map(
-            sustained(CPU_BY_SERVICE, window, "min_over_time"), label=_CPU_LABEL)
-    for window in {w.policy.sustain_down for w in scalers}:
-        cpu_windows_down[window] = vm_query_map(
-            sustained(CPU_BY_SERVICE, window, "max_over_time"), label=_CPU_LABEL)
-
-    for w in scalers:
-        def pct(value):
-            # Each service against its OWN limit, read from its own live spec.
-            return None if value is None else value / max(w.cpu_limit, 0.01) * 100
-
-        signals[w.name] = Signals(
-            p95=p95_now.get(w.name),
-            cpu=pct(cpu_raw.get(w.name)),
-            p95_held=p95_held.get(w.name),
-            cpu_held=pct(cpu_windows_up.get(w.policy.sustain_up, {}).get(w.name)),
-            p95_peak=p95_peak.get(w.name),
-            cpu_peak=pct(cpu_windows_down.get(w.policy.sustain_down, {}).get(w.name)),
-        )
-
     # With an empty fleet the worker-scoped guards have no series to return, so
     # measure the box that is actually holding the replicas instead.
     if worker_count:
@@ -1734,50 +1586,148 @@ def read_signals_batch(workloads, worker_count):
         M_CPU.set(node_cpu)
     if node_mem is not None:
         M_MEM.set(node_mem)
-
-    # Whichever resource runs out first is the one that blocks placement.
     pressures = [v for v in (node_cpu, node_mem) if v is not None]
-    return signals, (max(pressures) if pressures else None)
+    return max(pressures) if pressures else None
 
 
-def desired_replicas(workload, signals, current):
+# ---------------------------------------------------------------------------
+# the dispatch receiver
+# ---------------------------------------------------------------------------
+# This process no longer reads latency, and no longer decides whether a service
+# is slow. The DISPATCHER owns the performance loop and pushes a verdict here;
+# what is left is the half that is genuinely capacity work — turning a direction
+# into a replica count within this service's bounds, then placing it.
+#
+# NO SIGNAL MEANS NO ACTION. If the dispatcher is down, nothing arrives, the
+# verdicts go stale and every service holds exactly where it is. That is the
+# whole reason the loop lives over there: the failure mode is a fleet that stops
+# changing, not one that falls back to a worse rule at the moment it is least
+# able to afford it. Everything else this loop does — placement, node lifecycle,
+# reaping, resizing — is driven by the replica counts that already exist and
+# keeps running normally.
+
+SIGNAL_PORT = _env("SIGNAL_PORT", "9201", int)
+#: A verdict older than this is not a verdict. Three loops of slack, so a single
+#: missed delivery is absorbed and a dead dispatcher is noticed.
+SIGNAL_TTL_SECONDS = _env("SIGNAL_TTL_SECONDS", str(LOOP_SECONDS * 3), int)
+
+_signals_lock = threading.Lock()
+_dispatched = {}            # service name -> (received at, verdict dict)
+
+
+def record_dispatch(payload):
+    """Store a delivery. Returns how many verdicts it carried."""
+    now = time.time()
+    received = payload.get("signals") or []
+    with _signals_lock:
+        for verdict in received:
+            name = verdict.get("service")
+            if name:
+                _dispatched[name] = (now, verdict)
+    M_SIGNAL_AT.set(now)
+    return len(received)
+
+
+def dispatched_for(name, now=None):
     """
-    Latency first, CPU-per-replica second. Both must be SUSTAINED — a single
-    scrape above threshold is noise, not a trend.
+    The current verdict for a service, or None if nothing fresh has arrived.
+
+    None is the safe answer and the caller must treat it as "hold": a stale
+    verdict is a decision made about a cluster that has since changed.
+    """
+    now = now or time.time()
+    with _signals_lock:
+        entry = _dispatched.get(name)
+    if not entry:
+        return None
+    at, verdict = entry
+    if now - at > SIGNAL_TTL_SECONDS:
+        return None
+    return verdict
+
+
+class _SignalHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def do_POST(self):                                   # noqa: N802
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0 or length > 1_000_000:
+            self.send_error(400, "empty or oversized body")
+            return
+        try:
+            payload = json.loads(self.rfile.read(length))
+            count = record_dispatch(payload)
+        except Exception as exc:  # noqa: BLE001
+            M_ERRORS.labels(stage="signal").inc()
+            self.send_error(400, f"unreadable dispatch: {exc}")
+            return
+        body = json.dumps({"accepted": count}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        """One line per delivery would be 1440 a day saying nothing."""
+
+
+def serve_signals():
+    """
+    Listen on the monitoring overlay only.
+
+    Not published to a host port and not on `edge`: the only things that can
+    reach this are the infrastructure services on that network. Components live
+    on `edge`, so an application cannot reach the endpoint that changes its own
+    replica count.
+    """
+    server = ThreadingHTTPServer(("0.0.0.0", SIGNAL_PORT), _SignalHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True,
+                              name="signal-receiver")
+    thread.start()
+    log.info("listening for dispatch on :%d (verdicts expire after %ds)",
+             SIGNAL_PORT, SIGNAL_TTL_SECONDS)
+    return server
+
+
+def desired_replicas(workload, verdict, current):
+    """
+    A dispatched DIRECTION turned into a replica count, within this service's
+    own bounds.
+
+    The performance judgement — is it slow, is that its own fault — was made by
+    the dispatcher and arrived as `verdict`. What is decided here is capacity:
+    how big a step, against which floor and ceiling.
+
+    NO VERDICT MEANS HOLD. A missing or stale dispatch is not "nothing is
+    wrong", it is "nobody has told us anything", and the two are only the same
+    when the fleet is allowed to drift on a guess.
     """
     policy = workload.policy
-    if not policy.autoscale:
+    if not policy.autoscale or not verdict:
         return current
 
-    up_p95 = policy.slo_ms * policy.up_ratio
-    down_p95 = policy.slo_ms * policy.down_ratio
+    direction = verdict.get("direction")
+    reason = verdict.get("reason") or "dispatched"
 
-    reasons = []
-    if signals.p95_held is not None and signals.p95_held > up_p95:
-        reasons.append(f"p95 held above {up_p95:.0f}ms ({signals.p95_held:.0f}ms)")
-    if signals.cpu_held is not None and signals.cpu_held > policy.up_cpu:
-        reasons.append(f"cpu/replica held above {policy.up_cpu:.0f}% ({signals.cpu_held:.0f}%)")
-
-    if reasons:
+    if direction == classify.DIRECTION_UP:
         step = max(1, int(current * policy.up_factor))
         want = min(policy.max_replicas, current + step)
         if want != current:
-            log.info("%s: replicas %d -> %d: %s", workload.name, current, want,
-                     "; ".join(reasons))
+            log.info("%s: replicas %d -> %d: %s", workload.name, current, want, reason)
         return want
 
-    # Scale down only when BOTH signals have stayed low for the full window.
-    # `quiet_cpu` requires a non-None peak on purpose: a missing cadvisor series
-    # must hold the count, not authorise shrinking it.
-    quiet_latency = signals.p95_peak is None or signals.p95_peak < down_p95
-    quiet_cpu = signals.cpu_peak is not None and signals.cpu_peak < policy.down_cpu
-    if quiet_latency and quiet_cpu and current > policy.min_replicas:
-        log.info("%s: replicas %d -> %d: quiet for %ds (p95 peak %s, cpu/replica peak %.0f%%)",
-                 workload.name, current, current - 1, policy.sustain_down,
-                 f"{signals.p95_peak:.0f}ms" if signals.p95_peak is not None else "no traffic",
-                 signals.cpu_peak)
+    if direction == classify.DIRECTION_DOWN and current > policy.min_replicas:
+        log.info("%s: replicas %d -> %d: %s", workload.name, current, current - 1, reason)
         return current - 1
 
+    if direction == classify.DIRECTION_HOLD and reason != "dispatched":
+        # The dispatcher said slow-but-not-ours. Said once rather than every
+        # loop; WHICH dependency is its answer, published as `dispatcher_signal`.
+        warn_once((workload.name, "throttled"),
+                  "%s: %s. Cause: %s%s.", workload.name, reason,
+                  verdict.get("cause") or "unknown",
+                  f" ({verdict['target']})" if verdict.get("target") else "")
     return current
 
 
@@ -2724,19 +2674,29 @@ def newest_worker_age():
 # the loop
 # ---------------------------------------------------------------------------
 
-def export_service_metrics(workloads, wants, admitted, signals, running, pending):
+def export_service_metrics(workloads, wants, admitted, verdicts, running, pending):
+    """
+    The per-service series, unchanged in name and meaning.
+
+    The NUMBERS now arrive in the dispatched verdict rather than being queried
+    here — which is why the verdict carries them at all. Keeping the metric
+    names is deliberate: the panel and every alert join on them, and moving a
+    control loop is not a reason to break a dashboard.
+    """
     names = {w.name for w in workloads}
     forget_vanished(names)
     for w in workloads:
-        s = signals.get(w.name, Signals(None, None, None, None, None, None))
-        if s.p95 is not None:
-            S_P95.labels(w.name).set(s.p95)
-        if s.cpu is not None:
-            S_CPU.labels(w.name).set(s.cpu)
+        v = verdicts.get(w.name) or {}
+        if v.get("latency_ms") is not None:
+            S_P95.labels(w.name).set(v["latency_ms"])
+        if v.get("cpu_pct") is not None:
+            S_CPU.labels(w.name).set(v["cpu_pct"])
+        if v.get("mem_pct") is not None:
+            S_MEM.labels(w.name).set(v["mem_pct"])
         # Reported for every scaler, every loop, present or not — an absent
         # series cannot alert, which is the whole point.
         S_CPU_SIGNAL.labels(w.name).set(
-            1 if (w.policy.autoscale and s.cpu_peak is not None) else 0)
+            1 if (w.policy.autoscale and v.get("cpu_pct") is not None) else 0)
         S_SLO.labels(w.name).set(w.policy.slo_ms)
         S_CURRENT.labels(w.name).set(w.spec_replicas)
         S_DESIRED.labels(w.name).set(wants.get(w.name, w.spec_replicas))
@@ -2860,20 +2820,38 @@ def loop():
 
     running, pending = running_and_pending(tasks_by_node, workloads)
 
-    # 6. SIGNALS + 7. TIER 1, per service, each isolated.
+    # 6. PLACEMENT GUARD. The only signal query left here; how a SERVICE is
+    #    performing arrives from the dispatcher instead.
     try:
-        signals, node_pressure = read_signals_batch(workloads, current_workers)
+        pressure = read_node_pressure(current_workers)
     except Exception as exc:  # noqa: BLE001
         M_ERRORS.labels(stage="signals").inc()
-        log.warning("signal read failed; every service holds this loop: %s", exc)
-        signals = {w.name: Signals(None, None, None, None, None, None) for w in workloads}
-        node_pressure = None
+        log.warning("node pressure unreadable this loop: %s", exc)
+        pressure = None
+
+    # 7. TIER 1, from the dispatched verdict. Nothing is judged here: the
+    #    dispatcher decided the direction, this turns it into a count within
+    #    each service's own bounds.
+    #
+    #    A SERVICE WITH NO FRESH VERDICT HOLDS. That is the whole shape of the
+    #    split — if the dispatcher is down nothing arrives, the verdicts expire
+    #    and the fleet stops changing, rather than falling back to a worse rule
+    #    at the moment it is least able to afford it. Placement, node lifecycle,
+    #    reaping and resizing all carry on from the counts that already exist.
+    verdicts = {w.name: dispatched_for(w.name) for w in workloads}
+    waiting = [w.name for w in workloads if w.policy.autoscale and not verdicts[w.name]]
+    if waiting:
+        warn_once(("nodispatch", ",".join(sorted(waiting))),
+                  "no fresh verdict for %s; holding their replica counts. Is the "
+                  "dispatcher running, and does this service carry %s=%s?",
+                  ", ".join(sorted(waiting)), classify.HANDLER_LABEL, classify.CAUSE_LOCAL)
+    M_DISPATCH_WAITING.set(len(waiting))
 
     live = {w.name: w.spec_replicas for w in workloads}
     wants = {}
     for w in workloads:
         try:
-            want = desired_replicas(w, signals.get(w.name), w.spec_replicas)
+            want = desired_replicas(w, verdicts[w.name], w.spec_replicas)
         except Exception as exc:  # noqa: BLE001
             M_ERRORS.labels(stage="signals").inc()
             log.warning("%s holds at %d: %s", w.name, w.spec_replicas, exc)
@@ -2888,7 +2866,7 @@ def loop():
     M_DEMAND_MEM.set(demand.mem)
 
     # 8. SIZING, from the UNCAPPED want.
-    want_servers = workers_needed(workloads, wants, node_pressure, manager_free,
+    want_servers = workers_needed(workloads, wants, pressure, manager_free,
                                   worker_bins, new_free) if workloads else 0
     # Exported BEFORE the clamp. M_DESIRED is post-clamp, so a fleet pinned at
     # MAX_WORKERS reported exactly the same number whether demand wanted one more
@@ -3164,7 +3142,7 @@ def loop():
             M_ERRORS.labels(stage="resize").inc()
             log.warning("right-sizing skipped this loop: %s", exc)
 
-    export_service_metrics(workloads, wants, admitted, signals, running, pending)
+    export_service_metrics(workloads, wants, admitted, verdicts, running, pending)
 
     log.info(
         "workers %d/%d (floor %d, ceiling %d) · %d component(s) · demand %s · master %s · "
@@ -3177,17 +3155,19 @@ def loop():
         " -> master" if not want_pinned and any_pinned else "",
     )
     for w in workloads:
-        s = signals.get(w.name)
-        log.info("  %-28s %d/%d replicas (want %d) · p95 %s · cpu/replica %s · %s",
+        v = verdicts.get(w.name)
+        log.info("  %-28s %d/%d replicas (want %d) · latency %s · cpu/replica %s · %s · %s",
                  w.name, running.get(w.name, 0), admitted.get(w.name, w.spec_replicas),
                  wants.get(w.name, w.spec_replicas),
-                 f"{s.p95:.0f}ms" if s and s.p95 is not None else "n/a",
-                 f"{s.cpu:.0f}%" if s and s.cpu is not None else "n/a",
-                 "workers" if w.name in pinned else "master")
+                 f"{v['latency_ms']:.0f}ms" if v and v.get("latency_ms") is not None else "n/a",
+                 f"{v['cpu_pct']:.0f}%" if v and v.get("cpu_pct") is not None else "n/a",
+                 "workers" if w.name in pinned else "master",
+                 (v.get("direction") or "?") if v else "no verdict")
 
 
 def main():
     start_http_server(9200)
+    serve_signals()
     log.info("autoscaler up — cluster=%s workers=%d..%d worker_type=%s dry_run=%s",
              CLUSTER, MIN_WORKERS, MAX_WORKERS, WORKER_TYPE, DRY_RUN)
     log.info("scaling targets are DISCOVERED: any service labelled %s=%s is managed, "
