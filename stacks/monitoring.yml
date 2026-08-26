@@ -38,6 +38,38 @@ version: "3.8"
 # are the two that grow with how much you store.
 # =============================================================================
 
+# RESERVATIONS ARE APP CAPACITY SPENT, NOT A COMFORT SETTING.
+#
+# The autoscaler measures a node's room for applications as its real size MINUS
+# the reservations of everything on it that is not an app. So every megabyte
+# reserved here is a megabyte it will not place a replica in — and when the
+# replicas stop fitting, it buys a Hetzner worker. Over-reserving infrastructure
+# does not make the cluster safer; it makes it more expensive, silently, at the
+# moment traffic arrives.
+#
+# The numbers below are MEASURED, not guessed: peak CPU and peak memory working
+# set per service over 7 days, put through the same headroom rule the autoscaler
+# applies when it resizes a component, so infrastructure and applications are
+# sized by one convention rather than two.
+#
+#   cpu = max(peak x CPU_RESERVE_HEADROOM, CPU_RESERVE_FLOOR)   # 2.0, 0.02
+#   mem = max(peak x MEM_RESERVE_HEADROOM, MEM_RESERVE_FLOOR_MB) # 1.5, 32
+#
+# CPU is deliberately generous relative to observed load and still tiny: none of
+# these carry a CPU limit, so a low reservation costs scheduling preference, not
+# throughput. Memory is the one that kills a container, which is why it gets the
+# true maximum rather than a quantile.
+#
+# Two are held above the formula on purpose, because their footprint tracks the
+# SIZE OF THE CLUSTER rather than last week's load: victoriametrics grows with
+# active time series, cadvisor with the number of containers on the node. Loki
+# grows with log volume and is given room beyond its measured peak for the same
+# reason. Re-measure after adding components; a reservation copied forward from
+# a smaller cluster is the same mistake in the other direction.
+#
+# node-exporter and cadvisor are `global`, so their reservations are a per-node
+# tax that comes off EVERY worker's advertised capacity, not just the master's.
+
 x-manager-only: &manager-only
   placement:
     constraints: [node.role == manager]
@@ -87,7 +119,7 @@ x-autoscaler-base: &autoscaler-base
       infra.handles.port: "9201"
       infra.handles.path: "/signal"
     resources:
-      reservations: { cpus: "0.05", memory: 96M }
+      reservations: { cpus: "0.03", memory: 48M }
     restart_policy:
       condition: any
       delay: 30s
@@ -110,7 +142,7 @@ services:
       <<: *manager-only
       resources:
         limits:       { memory: 1500M }
-        reservations: { cpus: "0.15", memory: 384M }
+        reservations: { cpus: "0.02", memory: 352M }
 
   # --- scraper with Swarm service discovery ---------------------------------
   # Discovers new nodes and app tasks automatically. This is why adding a
@@ -129,7 +161,7 @@ services:
       replicas: 1
       <<: *manager-only   # dockerswarm_sd requires a manager socket
       resources:
-        reservations: { cpus: "0.05", memory: 96M }
+        reservations: { cpus: "0.03", memory: 64M }
 
   # --- alerting -------------------------------------------------------------
   vmalert:
@@ -146,7 +178,7 @@ services:
       replicas: 1
       <<: *manager-only
       resources:
-        reservations: { cpus: "0.03", memory: 64M }
+        reservations: { cpus: "0.02", memory: 32M }
 
   alertmanager:
     image: prom/alertmanager:v0.27.0
@@ -163,7 +195,7 @@ services:
       replicas: 1
       <<: *manager-only
       resources:
-        reservations: { cpus: "0.03", memory: 64M }
+        reservations: { cpus: "0.02", memory: 32M }
 
   # --- logs -----------------------------------------------------------------
   loki:
@@ -183,7 +215,7 @@ services:
       replicas: 1
       <<: *manager-only
       resources:
-        reservations: { cpus: "0.10", memory: 320M }
+        reservations: { cpus: "0.02", memory: 224M }
 
   # --- dashboards -----------------------------------------------------------
   grafana:
@@ -202,7 +234,7 @@ services:
       replicas: 1
       <<: *manager-only
       resources:
-        reservations: { cpus: "0.05", memory: 128M }
+        reservations: { cpus: "0.02", memory: 112M }
 
   # --- per-node exporters (global = every current AND future node) ----------
   node-exporter:
@@ -221,7 +253,7 @@ services:
     deploy:
       mode: global
       resources:
-        reservations: { cpus: "0.03", memory: 48M }
+        reservations: { cpus: "0.02", memory: 32M }
 
   cadvisor:
     # >= v0.55 is load-bearing, and the failure it fixes is silent.
@@ -253,7 +285,7 @@ services:
     deploy:
       mode: global
       resources:
-        reservations: { cpus: "0.05", memory: 96M }
+        reservations: { cpus: "0.04", memory: 96M }
 
   # --- the performance dispatcher -------------------------------------------
   # Works out WHY a service is slow and hands the answer to whoever owns it.
@@ -287,7 +319,7 @@ services:
         prometheus.port: "9210"
         prometheus.path: "/metrics"
       resources:
-        reservations: { cpus: "0.03", memory: 64M }
+        reservations: { cpus: "0.02", memory: 48M }
       restart_policy:
         condition: any
         delay: 30s

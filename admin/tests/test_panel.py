@@ -820,6 +820,35 @@ class PanelTest(unittest.TestCase):
             self.assertIn("${%s}" % var, stacks,
                           f"{name} is published and pulled but no stack runs it")
 
+    def test_every_infrastructure_service_reserves_something(self):
+        """
+        A SERVICE WITH NO RESERVATION IS INVISIBLE TO THE CAPACITY ARITHMETIC.
+
+        `node_free_for_apps` measures room as the node's real size minus the
+        reservations of everything on it that is not an app. A service that
+        declares none therefore contributes zero to that subtraction while
+        consuming real memory, so the autoscaler places replicas into space that
+        is already occupied — and the symptom is not a scheduling refusal, it is
+        the kernel picking something to kill once the box is actually full.
+
+        Cheap to get wrong, too: `resources:` is optional, so a service added
+        without one deploys perfectly and reports healthy.
+        """
+        import pathlib
+
+        import yaml
+
+        root = pathlib.Path(__file__).resolve().parents[2]
+        for name in ("monitoring.yml", "admin.yml", "ingress.yml"):
+            spec = yaml.safe_load((root / "stacks" / name).read_text())
+            for service, body in (spec.get("services") or {}).items():
+                res = (((body.get("deploy") or {}).get("resources") or {})
+                       .get("reservations") or {})
+                self.assertTrue(
+                    res.get("cpus") and res.get("memory"),
+                    f"{name}: service '{service}' declares no CPU/memory reservation, "
+                    f"so the autoscaler counts the space it occupies as free")
+
     def test_the_stack_and_the_renderer_agree_on_one_path(self):
         """
         bin/stack-deploy writes the file and stacks/monitoring.yml reads it. Two

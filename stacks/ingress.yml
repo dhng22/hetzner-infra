@@ -71,7 +71,7 @@ services:
       resources:
         # Global, so this is the per-node tax the autoscaler subtracts from a
         # new worker's advertised size before counting application capacity.
-        reservations: { cpus: "0.03", memory: 48M }
+        reservations: { cpus: "0.02", memory: 48M }
       labels:
         prometheus.scrape: "true"
         prometheus.port: "2000"

@@ -84,7 +84,7 @@ services:
         limits:       { cpus: "0.5", memory: 256M }
         # Reserved so the autoscaler's capacity model knows the master is
         # running a panel, not sitting idle.
-        reservations: { cpus: "0.05", memory: 128M }
+        reservations: { cpus: "0.07", memory: 96M }
 
 networks:
   monitoring:
