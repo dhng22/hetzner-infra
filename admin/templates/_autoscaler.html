@@ -9,6 +9,14 @@
   </div>
 </div>
 
+{% if not a.live %}
+<div class="banner bad">
+  <div><strong>The autoscaler is not reporting.</strong> Every number below is unknown, not zero —
+  either the service is down or its metrics have not been scraped yet. Nothing is being scaled while
+  this says so. Check <code>monitoring_autoscaler</code> on the Cluster tab.</div>
+</div>
+{% endif %}
+
 <div class="tiles">
   <div class="tile">
     <span class="k">Managed</span>
@@ -19,8 +27,8 @@
     <span class="k">Workers</span>
     <span class="v">{{ a.current_workers|int }}<span class="muted">/{{ a.desired_workers|int }}</span></span>
     <span class="m">billed servers · floor {{ a.min_workers|int }} · ceiling {{ a.max_workers|int }}</span>
-    <div class="meter {% if a.current_workers >= a.max_workers %}is-warn{% endif %}">
-      <i style="width: {{ (a.current_workers / a.max_workers * 100)|round|int if a.max_workers else 0 }}%"></i>
+    <div class="meter {% if a.current_workers is not none and a.max_workers and a.current_workers >= a.max_workers %}is-warn{% endif %}">
+      <i style="width: {{ (a.current_workers / a.max_workers * 100)|round|int if a.max_workers and a.current_workers is not none else 0 }}%"></i>
     </div>
   </div>
   <div class="tile">

@@ -972,7 +972,7 @@ def autoscaler_state():
             "worker_pinned": pinned.get(name),
         })
 
-    return {
+    state = {
         "services": services,
         "signals": [
             {"key": "Node CPU", "value": g("autoscaler_cluster_cpu_percent"), "unit": "%",
@@ -1004,6 +1004,13 @@ def autoscaler_state():
         "min_workers": g("autoscaler_effective_min_workers"),
         "last_loop": g("autoscaler_last_loop_timestamp_seconds"),
     }
+    # Every value above is None when the autoscaler is down or has not been
+    # scraped yet, and this page is the one you open BECAUSE the autoscaler is
+    # down — so it has to render in that state and say so, rather than 500 on
+    # the first tile that compares two of them. `last_loop` is stamped once per
+    # loop, which makes it the honest answer to "is anything reporting".
+    state["live"] = state["last_loop"] is not None
+    return state
 
 
 def alert_destination():

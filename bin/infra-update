@@ -152,7 +152,8 @@ got="$(git -C "$work/repo" rev-parse HEAD)"
 for required in stacks/monitoring.yml stacks/ingress.yml stacks/admin.yml \
                 config/vmagent.yml.tpl config/alertmanager.yml.tpl \
                 config/alerts.yml autoscaler/Dockerfile admin/Dockerfile \
-                bin/component bin/stack-deploy bin/infra-update; do
+                bin/component bin/stack-deploy bin/infra-update \
+                bin/render-fleet-env; do
   [ -e "$work/repo/$required" ] || die "the fetched tree is missing $required — refusing to apply it"
 done
 
@@ -271,55 +272,6 @@ chmod +x "$INFRA_DIR"/bin/* 2>/dev/null || true
 state_set "commit=$got" "updated_at=$(date -Is)" "previous=$running"
 log "files updated to ${got:0:12}"
 
-# --- teach an existing cluster the settings the repo has gained ---------------
-# `/etc/infra/infra.env` is written once, by cloud-init, and nothing has ever
-# added a key to it afterwards. So a setting introduced later existed on new
-# clusters and nowhere else: the panel skips any key its values mapping does not
-# carry, and `docker stack deploy` substitutes an unset variable with the empty
-# string, which every reader turns back into its compiled-in default. The update
-# lands, the code is current, and the feature is simply absent — reported as
-# success, indistinguishable from the panel not having updated at all. That is
-# how hard vertical scaling shipped switched off on the cluster it was written
-# for.
-#
-# The cloud-init's infra.env block is the shipped default for every setting, so
-# it is what we reconcile against. ADD ONLY: an existing value is this cluster's
-# answer and the repo has no business overwriting it. Placeholders are skipped,
-# because writing REPLACE_ME into a live file is worse than leaving a key out.
-sync_infra_env() {
-  local shipped="$work/repo/master-cloud-init.yaml" added=0 line key value
-  [ -f "$shipped" ] || return 0
-  while IFS= read -r line; do
-    key="${line%%=*}"
-    value="${line#*=}"
-    grep -qE "^${key}=" "$INFRA_ENV" && continue
-    case "$value" in *REPLACE_ME*) log "infra.env: $key is new but ships as a placeholder — set it in the panel"; continue ;; esac
-    printf '%s=%s\n' "$key" "$value" >> "$INFRA_ENV"
-    log "infra.env: added $key=$value"
-    added=$((added + 1))
-  done < <(awk '
-    /^[[:space:]]*-[[:space:]]*path:[[:space:]]*\/etc\/infra\/infra\.env[[:space:]]*$/ { inside = 1; next }
-    inside && /^[[:space:]]*-[[:space:]]*path:/ { inside = 0 }
-    inside && /^      [A-Z][A-Z0-9_]*=/ {
-      line = substr($0, 7)
-      sub(/[[:space:]]*#.*$/, "", line)
-      sub(/[[:space:]]+$/, "", line)
-      print line
-    }
-  ' "$shipped")
-  # A new key can be read by anything, and which stack reads it is knowledge
-  # that lives in the panel rather than here. Both stacks that take their
-  # environment from this file are therefore re-applied — only on the one tick
-  # that actually gained a key, which is once per new setting, ever.
-  if [ "$added" -gt 0 ]; then
-    log "infra.env gained $added setting(s) — re-applying the stacks that read it"
-    deploy_monitoring=true
-    deploy_admin=true
-  fi
-}
-
-sync_infra_env
-
 # --- rebuild and redeploy only what moved ------------------------------------
 if [ "$rebuild_autoscaler" = true ]; then
   log "building autoscaler image"
@@ -333,6 +285,39 @@ if [ "$rebuild_admin" = true ]; then
     -t "${APP_NAME}/admin:latest" "$INFRA_DIR/admin" >/dev/null \
     || die "admin image build failed — the files are updated but the old image is still running"
 fi
+
+# --- run the suite against the image just built, before anything is deployed --
+# The tests existed and passed on a laptop; nothing ran them here, and a commit
+# that crashlooped the autoscaler on import went straight into production
+# because of it. A suite that is only a manual step is not a gate, so this is
+# where it becomes one: the image is built, its own tests run INSIDE it, and a
+# failure stops before any `docker stack deploy`.
+#
+# The repo is mounted rather than baked in: the panel's suite reaches the repo
+# ROOT — stacks/monitoring.yml, master-cloud-init.yaml — to pin the three copies
+# of every setting's default against each other, and the image only carries
+# `admin/`. Read-only, because a test that needs to write to /opt/infra is a
+# test that would corrupt the cluster it is checking; the panel's own tests
+# point INFRA_DIR at a temp directory of their own.
+#
+# On failure the commit has already been recorded, so the panel says "update
+# failing" with the reason and the PREVIOUS containers keep serving. The next
+# push changes `remote` and the tick runs again — a fix is a push, which is the
+# same motion that got you here.
+run_suite() {
+  local area="$1" image="$2"
+  [ -d "$INFRA_DIR/$area/tests" ] || return 0
+  log "running $area tests against the image just built"
+  docker run --rm \
+    -v "$INFRA_DIR:/repo:ro" -w "/repo/$area" \
+    -e PYTHONDONTWRITEBYTECODE=1 \
+    --entrypoint python "$image" -m unittest discover -s tests >"$work/$area-tests.log" 2>&1 \
+    || { log "--- $area tests ---"; tail -30 "$work/$area-tests.log" | while IFS= read -r l; do log "  $l"; done
+         die "$area tests failed against the newly built image — refusing to deploy it"; }
+}
+
+[ "$rebuild_autoscaler" = true ] && run_suite autoscaler "${APP_NAME}/autoscaler:latest"
+[ "$rebuild_admin" = true ] && run_suite admin "${APP_NAME}/admin:latest"
 
 # A LOCALLY-BUILT IMAGE IS INVISIBLE TO SWARM'S SPEC DIFF, and this is the whole
 # reason a pushed commit could land, record itself, and change nothing you could

@@ -127,7 +127,7 @@ def main():
 
     labels = {"overview": "Overview", "components": "Components", "cluster": "Cluster",
               "autoscaler": "Autoscaler", "alerts": "Alerts", "settings": "Settings",
-              "login": "Sign in"}
+              "autoscaler-silent": "Autoscaler, no metrics", "login": "Sign in"}
     for d in details:
         labels[f"component-{d['component'].name}"] = d["component"].name
     for type_name, cls in components.TYPES.items():
@@ -171,6 +171,10 @@ def main():
             topo=fixtures.topology(),
             infra=fixtures.infra_version(),
             a=fixtures.autoscaler_state(),
+            # The degraded half of the same page. Rendered here so the artefact
+            # people review shows the state the live panel is in when they go
+            # looking, rather than only the one where everything answered.
+            a_silent=fixtures.autoscaler_state_silent(),
             # Two disjoint sets, exactly as the live routes pass them — one
             # shared `groups` here would put the whole form on both pages.
             groups=panel._settings_groups(skip=panel.AUTOSCALER_GROUPS),

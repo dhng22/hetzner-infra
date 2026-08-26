@@ -186,7 +186,24 @@ from prometheus_client import Counter, Gauge, start_http_server
 
 
 def _env(key, default=None, cast=str):
-    raw = os.environ.get(key, default)
+    """
+    A setting, resolved default-first.
+
+    AN EMPTY VALUE IS AN ABSENT ONE. `stacks/monitoring.yml` passes each setting
+    as "${KEY}", and `docker stack deploy` substitutes a variable that infra.env
+    does not carry with the empty string rather than leaving it unset — so the
+    container always receives the key, and `os.environ.get` never sees its
+    default. Every cluster built before a setting existed therefore delivers ""
+    to a reader expecting a number: `int("")` raises at import, the process
+    exits 1, and Swarm restarts it forever. That is exactly how adding the
+    vertical-scaling ceilings crashlooped a running autoscaler, and it is why
+    the repo's default has to win over an empty string rather than the other way
+    round. `SCHEDULE_FLOOR` is deliberately blank and its default is blank too,
+    so treating the two as the same thing costs nothing.
+    """
+    raw = os.environ.get(key)
+    if raw is None or str(raw).strip() == "":
+        raw = default
     if raw is None:
         raise RuntimeError(f"missing required env var {key}")
     if cast is bool:

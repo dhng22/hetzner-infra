@@ -333,7 +333,33 @@ def autoscaler_state():
         "current_workers": 3, "hosts": 4, "desired_workers": 4,
         "max_workers": 5, "min_workers": 0,
         "last_loop": 1_770_000_000.0,
+        "live": True,
     }
+
+
+def autoscaler_state_silent(_healthy=autoscaler_state):
+    """
+    The same page with nothing reporting — the autoscaler down, or its metrics
+    not scraped yet.
+
+    Every gauge is None, which is the state the live panel is in at the exact
+    moment you go looking, and the state the fixtures never had: the tiles are
+    individually guarded, one comparison between two of them was not, and the
+    page 500'd in production while the preview of the same template looked
+    perfect. A fixture that only ever describes a healthy cluster cannot catch
+    that, so this one describes the other half.
+    """
+    # Bound at definition, because the caller that wants this state gets it by
+    # replacing the module attribute — reading the name here would recurse.
+    state = _healthy()
+    for key, value in list(state.items()):
+        if key in ("services", "signals"):
+            continue
+        state[key] = None
+    state["services"] = []
+    state["signals"] = [dict(s, value=None) for s in state["signals"]]
+    state["live"] = False
+    return state
 
 
 def alert_destination():

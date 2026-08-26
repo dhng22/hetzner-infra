@@ -638,40 +638,229 @@ class PanelTest(unittest.TestCase):
                 f"the preview shows {key}={self.panel.PREVIEW_INFRA.get(key)!r} but "
                 f"the cloud-init ships {shipped[key]!r}")
 
-    def test_every_fleet_setting_reaches_the_autoscaler(self):
+    def test_the_autoscaler_gets_every_setting_the_panel_offers_it(self):
         """
-        A setting is only real once it arrives in the container that reads it.
-        The panel offering a key, the cloud-init shipping it and the stack
-        passing it are three separate edits, and the third has no visible
-        consequence when it is forgotten: `docker stack deploy` substitutes an
-        unset variable with the empty string, `_env` falls back to its
-        compiled-in default, and the feature is simply off while every page and
-        every log line says the update succeeded. Hard vertical scaling shipped
-        that way — two of the three edits made, on a cluster whose panel
-        reported the right commit.
+        The panel offering a knob and the autoscaler reading it are useless if
+        the value never travels between them. It used to travel by being listed
+        a third time in stacks/monitoring.yml, which is an edit with no visible
+        consequence when it is missed: the row renders, the save succeeds, and
+        the autoscaler goes on using its own default. The stack now names
+        /etc/infra/fleet.env instead, and that file is generated from this list.
         """
         import pathlib
+        import re
         import settings_def
 
         root = pathlib.Path(__file__).resolve().parents[2]
-        stack = (root / "stacks" / "monitoring.yml").read_text()
-        fleet = next(keys for title, keys in settings_def.GROUPS if title == "Fleet")
-        for key in fleet:
-            self.assertIn(
-                "${%s}" % key, stack,
-                f"{key} is offered by the panel but stacks/monitoring.yml never "
-                f"passes it to the autoscaler, so setting it does nothing")
+        code = (root / "autoscaler" / "autoscaler.py").read_text()
+        reads = set(re.findall(r'_env\(\s*"([A-Z][A-Z0-9_]*)"', code))
+
+        delivered = settings_def.autoscaler_env({})
+        offered = [k for k in settings_def.DEFAULTS if k in reads]
+        self.assertIn("MIN_WORKERS", offered, "nothing parsed — the assertion below is vacuous")
+        for key in offered:
+            self.assertIn(key, delivered,
+                          f"{key} is offered by the panel and read by the autoscaler, "
+                          f"but it is in no group fleet.env is built from")
+            self.assertEqual(delivered[key], settings_def.DEFAULTS[key])
+
+    def test_the_autoscaler_env_never_carries_a_credential(self):
+        """
+        fleet.env is an ALLOW-list — whole groups, minus SECRET — so a
+        credential added to Access later cannot reach the autoscaler by having
+        been overlooked. It is a root console's worth of secrets in that file:
+        the admin password, the Cloudflare tunnel token, the alert bot token.
+        HCLOUD_TOKEN is the one credential the autoscaler needs, and it arrives
+        as a docker secret rather than through here.
+        """
+        import settings_def
+
+        # A fully-populated infra.env, so nothing is missing merely by accident.
+        every = {key: f"value-of-{key}" for key in settings_def.FIELDS}
+        delivered = settings_def.autoscaler_env(every)
+
+        for key in delivered:
+            self.assertNotEqual(settings_def.describe(key)[0], settings_def.SECRET, key)
+        for key in ("HCLOUD_TOKEN", "ADMIN_PASSWORD", "ADMIN_USER",
+                    "GRAFANA_ADMIN_PASSWORD", "CF_TUNNEL_TOKEN",
+                    "ALERT_TELEGRAM_BOT_TOKEN", "GHCR_TOKEN"):
+            self.assertNotIn(key, delivered, f"{key} would reach the autoscaler's environment")
+
+    def test_the_autoscaler_env_is_free_of_the_documentation(self):
+        """
+        infra.env is a documented file — nearly every line carries a trailing
+        comment — and fleet.env is machine input. A parser that keeps the
+        comment gives WORKER_TYPE the value "cpx22   # shared worker pool" and
+        MAX_WORKERS the value "5   # a BUDGET cap", and the second of those is
+        an int() that raises at import: the autoscaler crashloops on a config
+        file that looks perfectly fine when you cat it. bin/render-fleet-env
+        therefore reads through envstore, which already implements the shell
+        rule, instead of splitting on "=" itself.
+        """
+        import envstore
+        import settings_def
+
+        path = os.path.join(self.tmp, "commented.env")
+        with open(path, "w") as fh:
+            fh.write("# a header comment\n"
+                     "WORKER_TYPE=cpx22              # shared worker pool\n"
+                     "MAX_WORKERS=5                  # a BUDGET cap\n"
+                     "SCHEDULE_FLOOR=                # UTC; \"HH:MM-HH:MM=N\"\n"
+                     "HCLOUD_SSH_KEY_NAME=me@host#1\n")
+        real = envstore.INFRA_ENV
+        envstore.INFRA_ENV = path
+        try:
+            delivered = settings_def.autoscaler_env(envstore.load_infra())
+        finally:
+            envstore.INFRA_ENV = real
+
+        self.assertEqual(delivered["WORKER_TYPE"], "cpx22")
+        self.assertEqual(delivered["MAX_WORKERS"], "5")
+        self.assertEqual(delivered["SCHEDULE_FLOOR"], "")
+        # No whitespace before the '#', so it is part of the value, not a comment.
+        self.assertEqual(delivered["HCLOUD_SSH_KEY_NAME"], "me@host#1")
+
+    def test_saving_a_setting_the_file_predates_appends_it(self):
+        """
+        The panel now offers a setting whose default lives in the repo, so the
+        save path has to be able to write a key infra.env has never carried.
+        Dropping it silently is the same failure one layer down: the row
+        renders, the form submits, the flash says saved, and nothing changed.
+        """
+        import envstore
+
+        path = os.path.join(self.tmp, "sparse.env")
+        with open(path, "w") as fh:
+            fh.write("MIN_WORKERS=0                  # the free floor\n")
+        real = envstore.INFRA_ENV
+        envstore.INFRA_ENV = path
+        try:
+            changed = envstore.save_infra({"MIN_WORKERS": "1", "WORKER_MAX_CORES": "4"})
+            after = envstore.load_infra()
+        finally:
+            envstore.INFRA_ENV = real
+
+        self.assertEqual(sorted(changed), ["MIN_WORKERS", "WORKER_MAX_CORES"])
+        self.assertEqual(after["WORKER_MAX_CORES"], "4")
+        self.assertEqual(after["MIN_WORKERS"], "1")
+        # The documentation on the line that already existed survives.
+        with open(path) as fh:
+            self.assertIn("# the free floor", fh.read())
+
+    def test_the_stack_and_the_renderer_agree_on_one_path(self):
+        """
+        bin/stack-deploy writes the file and stacks/monitoring.yml reads it. Two
+        spellings of the path is an autoscaler deployed with an empty
+        environment and no error anywhere.
+        """
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parents[2]
+        path = "/etc/infra/fleet.env"
+        self.assertIn(path, (root / "stacks" / "monitoring.yml").read_text())
+        self.assertIn(path, (root / "bin" / "stack-deploy").read_text())
+        self.assertIn(path, (root / "bin" / "render-fleet-env").read_text())
+
+    def test_every_page_survives_an_autoscaler_that_is_not_reporting(self):
+        """
+        Every gauge on the Autoscaler page is None when the autoscaler is down
+        or has not been scraped yet — which is precisely when somebody opens it.
+        The tiles were guarded one by one, the meter's comparison was not, and
+        `None >= None` took the page down in production while the preview of the
+        same template rendered perfectly, because the fixtures only ever
+        described a healthy cluster.
+        """
+        import fixtures
+
+        self.login()
+        real = fixtures.autoscaler_state
+        fixtures.autoscaler_state = fixtures.autoscaler_state_silent
+        try:
+            for path in ("/", "/components", "/cluster", "/autoscaler", "/alerts",
+                         "/settings", "/api/topology"):
+                r = self.client.get(path)
+                self.assertEqual(r.status_code, 200, f"{path} broke with no metrics")
+            page = self.client.get("/autoscaler").get_data(as_text=True)
+            self.assertIn("not reporting", page)
+        finally:
+            fixtures.autoscaler_state = real
+
+    def test_a_setting_the_cluster_has_never_heard_of_is_still_offered(self):
+        """
+        infra.env is written once by cloud-init and never gains a key, so a knob
+        added later reached new clusters and no existing one. Skipping it made
+        it invisible AND unsettable — the form is built from these rows — which
+        is how the vertical-scaling ceilings could not be turned on from the
+        panel of the cluster they were written for.
+        """
+        import envstore
+        import settings_def
+
+        real = envstore.load_infra
+        envstore.load_infra = lambda: {"MIN_WORKERS": "2"}
+        try:
+            rows = {r["key"]: r["value"]
+                    for group in self.panel._settings_groups() + \
+                                 self.panel._settings_groups(only=self.panel.AUTOSCALER_GROUPS)
+                    for r in group["rows"]}
+        finally:
+            envstore.load_infra = real
+        # The cluster's own answer wins.
+        self.assertEqual(rows["MIN_WORKERS"], "2")
+        # Everything else the repo ships a default for is still offered.
+        for key, default in settings_def.DEFAULTS.items():
+            if key == "MIN_WORKERS":
+                continue
+            self.assertIn(key, rows, f"{key} is not offered on a cluster whose infra.env predates it")
+            self.assertEqual(rows[key], default)
+
+    def test_defaults_agree_everywhere(self):
+        """
+        A setting's default is written down three times — the panel's DEFAULTS,
+        the autoscaler's own `_env` call and the cloud-init's infra.env block —
+        because each is read by a different process and none can import the
+        others. Three copies of one number is drift waiting to happen, so it is
+        drift the test suite refuses rather than a convention.
+        """
+        import pathlib
+        import re
+        import settings_def
+
+        root = pathlib.Path(__file__).resolve().parents[2]
+
+        code = (root / "autoscaler" / "autoscaler.py").read_text()
+        reader = dict(re.findall(r'_env\(\s*"([A-Z][A-Z0-9_]*)"\s*,\s*"([^"]*)"', code))
+
+        block = (root / "master-cloud-init.yaml").read_text()
+        block = block[block.index("/etc/infra/infra.env"):block.index("bootstrap.sh")]
+        shipped = {}
+        for line in block.splitlines():
+            match = re.match(r"^\s{6}([A-Z][A-Z0-9_]*)=(.*)$", line)
+            if match:
+                shipped[match.group(1)] = match.group(2).split("#")[0].strip()
+
+        self.assertIn("MIN_WORKERS", reader, "the autoscaler's config block did not parse")
+        for key, default in settings_def.DEFAULTS.items():
+            self.assertIn(key, reader, f"{key} is offered by the panel but the autoscaler never reads it")
+            self.assertEqual(reader[key], default,
+                             f"{key}: panel defaults to {default!r}, autoscaler to {reader[key]!r}")
+            self.assertEqual(shipped.get(key), default,
+                             f"{key}: panel defaults to {default!r}, cloud-init ships {shipped.get(key)!r}")
 
     def test_settings_refuses_a_key_it_does_not_manage(self):
         csrf = self.login()
         import envstore
+        saved = (envstore.load_infra, envstore.save_infra, envstore.deploy_stack)
         envstore.load_infra = lambda: {"MIN_WORKERS": "1", "APP_NAME": "aichat"}
         written = {}
         envstore.save_infra = lambda updates: written.update(updates) or list(updates)
         envstore.deploy_stack = lambda name: (True, f"{name} redeployed")
-        self.client.post("/settings", follow_redirects=True, data={
-            "csrf": csrf, "key": ["MIN_WORKERS", "APP_NAME"],
-            "value__MIN_WORKERS": "3", "value__APP_NAME": "hijacked"})
+        try:
+            self.client.post("/settings", follow_redirects=True, data={
+                "csrf": csrf, "key": ["MIN_WORKERS", "APP_NAME"],
+                "value__MIN_WORKERS": "3", "value__APP_NAME": "hijacked"})
+        finally:
+            envstore.load_infra, envstore.save_infra, envstore.deploy_stack = saved
         # APP_NAME is BOOT-mode, so it must be ignored even when posted.
         self.assertEqual(written, {"MIN_WORKERS": "3"})
 

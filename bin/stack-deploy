@@ -25,6 +25,9 @@ set -euo pipefail
 
 INFRA_DIR="${INFRA_DIR:-/opt/infra}"
 INFRA_ENV="${INFRA_ENV:-/etc/infra/infra.env}"
+# Generated from infra.env on every monitoring deploy; the path is shared with
+# stacks/monitoring.yml, which mounts it as the autoscaler's env_file.
+FLEET_ENV="${FLEET_ENV:-/etc/infra/fleet.env}"
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -51,6 +54,14 @@ set -a; . "$INFRA_ENV"; set +a
 # meant an edit appeared to save and changed nothing until the next rebuild.
 if [ "$stack" = "monitoring" ]; then
   envsubst < "$INFRA_DIR/config/vmagent.yml.tpl" > "$INFRA_DIR/config/vmagent.yml"
+
+  # The autoscaler's settings, as a file the stack can point `env_file` at.
+  # Generated rather than stored for the same reason as the two configs around
+  # it: infra.env is written once at boot and never gains a key, so a setting
+  # added later has to be filled in from the repo's defaults here. This is also
+  # what keeps the stack file out of it — it names fleet.env, not variables.
+  "$INFRA_DIR/bin/render-fleet-env" "$FLEET_ENV" >/dev/null \
+    || die "could not render $FLEET_ENV"
 
   case "${ALERT_TELEGRAM_BOT_TOKEN:-}${ALERT_TELEGRAM_CHAT_ID:-}" in
     ""|*REPLACE_ME*)

@@ -936,11 +936,19 @@ def _settings_groups(only=None, skip=None):
             continue
         rows = []
         for key in keys:
-            if key not in values:
+            # infra.env carries this cluster's ANSWERS; the repo carries the
+            # defaults. Skipping a key the file happens not to have is what made
+            # every setting added after a cluster was built invisible on it —
+            # and unsettable, since the form is built from these rows.
+            if key in values:
+                value = values[key]
+            elif key in settings_def.DEFAULTS:
+                value = settings_def.DEFAULTS[key]
+            else:
                 continue
             mode, stack, why = settings_def.describe(key)
             rows.append({
-                "key": key, "value": values[key], "mode": mode, "stack": stack, "why": why,
+                "key": key, "value": value, "mode": mode, "stack": stack, "why": why,
                 "masked": any(m in key for m in settings_def.MASK_HINT),
                 "editable": mode == settings_def.EDIT,
             })

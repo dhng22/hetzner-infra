@@ -38,6 +38,7 @@
 
     <div class="nav-label">Preview</div>
     <a class="nav-item" href="#view-login"><span class="dot" aria-hidden="true"></span>Sign-in screen</a>
+    <a class="nav-item" href="#view-autoscaler-silent"><span class="dot" aria-hidden="true"></span>Autoscaler, no metrics</a>
 
     <div class="rail-foot">
       <button class="btn btn-sm" type="button" data-theme-toggle style="width:100%">Switch theme</button>
@@ -90,6 +91,16 @@
       {% endfor %}
 
       <section data-view="autoscaler" hidden>{% include "_autoscaler.html" %}</section>
+
+      {# The same page with nothing reporting. It is a separate screen rather
+         than a note because the preview's job is to be the production panel on
+         dummy data, and a fixture that only ever describes a healthy cluster
+         cannot show the state the page is opened in: every gauge None, one
+         unguarded comparison between two of them, a 500 in production and a
+         perfect preview of the identical template. #}
+      <section data-view="autoscaler-silent" hidden>
+        {% with a = a_silent %}{% include "_autoscaler.html" %}{% endwith %}
+      </section>
       <section data-view="alerts" hidden>{% include "_alerts.html" %}</section>
       <section data-view="settings" hidden>{% include "_settings.html" %}</section>
 

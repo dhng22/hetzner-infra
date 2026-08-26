@@ -140,6 +140,68 @@ GROUPS = [
     #   Redis password  -> Apps > Redis > <env> > Credentials
 ]
 
+# What a setting is worth when infra.env does not carry it.
+#
+# `/etc/infra/infra.env` is written ONCE, by cloud-init, and nothing adds a key
+# to it afterwards. Before this mapping existed the settings page skipped any
+# key that file did not already have, so a knob introduced after a cluster was
+# built was not merely unset on it — it was invisible, and there was no way to
+# set it from the panel at all. The repo therefore carries the default and the
+# file carries only this cluster's ANSWERS, which is the same split the reader
+# side makes: `_env()` in the autoscaler resolves default-first and treats an
+# empty value as an absent one.
+#
+# Only settings that HAVE a sane default belong here. A password or a token does
+# not, and showing an invented value for one would be worse than leaving the row
+# out, so a key with neither a live value nor a default is still skipped.
+#
+# Pinned against the cloud-init and against the autoscaler's own `_env` defaults
+# by test_defaults_agree_everywhere — three readers of one number is exactly the
+# drift this project keeps getting bitten by.
+DEFAULTS = {
+    "MIN_WORKERS": "0",
+    "MAX_WORKERS": "5",
+    "WORKER_MAX_CORES": "8",
+    "WORKER_MAX_MEMORY_GB": "16",
+    "NODE_RESIZE_COOLDOWN_SECONDS": "900",
+    "NODE_PRESSURE_PCT": "80",
+    "COOLDOWN_UP_SECONDS": "300",
+    "COOLDOWN_DOWN_SECONDS": "900",
+    "SCHEDULE_FLOOR": "",
+    "DRY_RUN": "false",
+}
+
+# Which settings the autoscaler's container is allowed to receive.
+#
+# `bin/render-fleet-env` turns this into /etc/infra/fleet.env and
+# stacks/monitoring.yml hands that file to the autoscaler with `env_file`. That
+# is why adding a fleet setting no longer means editing the stack: the stack
+# names a FILE, and the file is generated from this list.
+#
+# Stated as GROUPS and a mode filter rather than as a list of key names, because
+# a hand-kept list is one more place to forget. Everything in these groups goes
+# except SECRET-mode keys — an ALLOW-list, so a credential added to Access later
+# cannot reach the autoscaler by having been overlooked. HCLOUD_TOKEN is the one
+# credential it does need and it arrives as a docker secret, not through here.
+AUTOSCALER_ENV_GROUPS = ("Identity", "Hetzner", "Fleet")
+
+
+def autoscaler_env(values):
+    """The settings the autoscaler gets, resolved default-first, in group order."""
+    out = {}
+    for title, keys in GROUPS:
+        if title not in AUTOSCALER_ENV_GROUPS:
+            continue
+        for key in keys:
+            if describe(key)[0] == SECRET:
+                continue
+            if key in values:
+                out[key] = values[key]
+            elif key in DEFAULTS:
+                out[key] = DEFAULTS[key]
+    return out
+
+
 MASK_HINT = ("TOKEN", "PASSWORD", "SECRET", "KEY", "URI")
 
 

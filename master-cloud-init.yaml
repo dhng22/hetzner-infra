@@ -227,7 +227,8 @@ write_files:
                       config/vmagent.yml.tpl config/alertmanager.yml.tpl \
                       config/alertmanager-none.yml config/alerts.yml \
                       autoscaler/Dockerfile admin/Dockerfile \
-                      bin/component bin/stack-deploy bin/panel-hostops; do
+                      bin/component bin/stack-deploy bin/panel-hostops \
+                      bin/render-fleet-env; do
         if [ ! -e "/opt/infra/$required" ]; then
           echo "FATAL: /opt/infra/$required is missing." >&2
           echo "The bundle was never copied to the master. Uncomment the clone line" >&2

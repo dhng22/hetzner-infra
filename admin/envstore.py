@@ -100,9 +100,15 @@ def load_infra():
 
 def save_infra(updates):
     """
-    Apply {key: value} to infra.env. Only keys already present are rewritten —
-    the panel must not invent configuration the cloud-init does not document.
+    Apply {key: value} to infra.env, in place, comments and ordering preserved.
     Returns the keys that actually changed.
+
+    A key the file has never carried is APPENDED rather than dropped. infra.env
+    is written once by cloud-init and never gains a key, so every setting added
+    to the panel afterwards is missing from it — and silently discarding those
+    saves means the row renders, the form submits, the flash says saved, and the
+    value is gone. Callers pass only settings the panel manages (`app.py` filters
+    on EDIT mode first), which is what makes appending safe here.
     """
     try:
         with open(INFRA_ENV) as fh:
@@ -128,6 +134,16 @@ def save_infra(updates):
                 out.append(f"{indent}{key}={new}{comment}")
                 continue
         out.append(raw)
+
+    missing = [k for k in updates if k not in {
+        line.strip().split("=", 1)[0].strip() for line in lines
+        if line.strip() and not line.strip().startswith("#") and "=" in line}]
+    if missing:
+        out.append("")
+        out.append("# Added by the panel — settings this cluster's cloud-init predates.")
+        for key in missing:
+            out.append(f"{key}={updates[key]}")
+            changed.append(key)
 
     if changed:
         tmp = f"{INFRA_ENV}.tmp"

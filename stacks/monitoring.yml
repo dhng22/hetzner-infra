@@ -42,22 +42,22 @@ x-manager-only: &manager-only
   placement:
     constraints: [node.role == manager]
 
+# WIRING ONLY. Every SETTING the autoscaler reads arrives through the env_file
+# below instead of being listed here.
+#
+# Listing them was a third edit nobody could see the need for: the panel offered
+# a knob, the autoscaler read it, and if the pipe between them was missing the
+# panel saved a value the autoscaler silently ignored in favour of its default.
+# `env_file` names a FILE, so the list lives in admin/settings_def.py — beside
+# the descriptions and defaults — and bin/render-fleet-env turns it into
+# /etc/infra/fleet.env on every monitoring deploy.
+#
+# What is left here is not configuration: an address inside the overlay, a grace
+# period nobody tunes, and a path into a bind mount. `environment` also wins over
+# `env_file`, so anything that must not be overridable belongs here.
 x-autoscaler-env: &autoscaler-env
   VM_URL: "http://victoriametrics:8428"
-  APP_NAME: "${APP_NAME}"
-  HCLOUD_LOCATION: "${HCLOUD_LOCATION}"
-  HCLOUD_NETWORK_NAME: "${HCLOUD_NETWORK_NAME}"
-  HCLOUD_SSH_KEY_NAME: "${HCLOUD_SSH_KEY_NAME}"
-  WORKER_IMAGE: "${WORKER_IMAGE}"
-  # Nothing per-application here any more. Every scaling policy — SLO, replica
-  # bounds, sustain windows, the CPU thresholds — is carried as deploy labels on
-  # the service it applies to, and the autoscaler discovers services rather than
-  # being told about them. What is left is the fleet.
-  NODE_PRESSURE_PCT: "${NODE_PRESSURE_PCT}"
-  COOLDOWN_UP_SECONDS: "${COOLDOWN_UP_SECONDS}"
-  COOLDOWN_DOWN_SECONDS: "${COOLDOWN_DOWN_SECONDS}"
   POST_DRAIN_GRACE_SECONDS: "45"
-  DRY_RUN: "${DRY_RUN}"
   WORKER_USERDATA_PATH: "/etc/infra/worker-cloud-init.yaml"
 
 x-autoscaler-base: &autoscaler-base
@@ -249,19 +249,13 @@ services:
   # capped replica, so there is nothing separate to scale.
   autoscaler:
     <<: *autoscaler-base
+    # Rendered by bin/stack-deploy immediately before this file is deployed, and
+    # read by the docker CLI here rather than mounted — the values end up in the
+    # service spec, so changing a setting is a spec change Swarm actually acts on.
+    env_file:
+      - /etc/infra/fleet.env
     environment:
       <<: *autoscaler-env
-      MIN_WORKERS: "${MIN_WORKERS}"
-      MAX_WORKERS: "${MAX_WORKERS}"
-      WORKER_TYPE: "${WORKER_TYPE}"
-      # The vertical ceiling. It sits next to WORKER_TYPE because it is the top
-      # of the ladder that starts there, and all three travel together: with
-      # either ceiling missing the feature turns itself off, so passing two of
-      # the three is the same as passing none.
-      WORKER_MAX_CORES: "${WORKER_MAX_CORES}"
-      WORKER_MAX_MEMORY_GB: "${WORKER_MAX_MEMORY_GB}"
-      NODE_RESIZE_COOLDOWN_SECONDS: "${NODE_RESIZE_COOLDOWN_SECONDS}"
-      SCHEDULE_FLOOR: "${SCHEDULE_FLOOR}"
 
 networks:
   monitoring:

@@ -1354,3 +1354,56 @@ class PackerPropertyTest(unittest.TestCase):
             for idx, key in assignment.items():
                 if items[idx].workers_only:
                     self.assertFalse(by_key[key].is_manager)
+
+
+class ConfigTest(unittest.TestCase):
+    """
+    An empty environment variable is an ABSENT setting, not a value.
+
+    `stacks/monitoring.yml` passes every setting as "${KEY}", and
+    `docker stack deploy` substitutes a key that infra.env does not carry with
+    the empty string rather than leaving it unset. So the container receives
+    KEY="" and `os.environ.get(key, default)` never reaches its default: every
+    cluster built before a setting existed hands "" to a reader expecting a
+    number. `int("")` raises during import, the process exits 1, and Swarm
+    restarts it forever — which is what adding the vertical-scaling ceilings did
+    to a running autoscaler, taking scaling down and the panel's Autoscaler tab
+    with it.
+    """
+
+    def setUp(self):
+        self.saved = {k: os.environ.get(k) for k in ("PROBE_INT", "PROBE_STR", "PROBE_BOOL")}
+
+    def tearDown(self):
+        for key, value in self.saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def test_an_empty_value_falls_back_to_the_default(self):
+        os.environ["PROBE_INT"] = ""
+        self.assertEqual(A._env("PROBE_INT", "8", int), 8)
+        os.environ["PROBE_INT"] = "   "
+        self.assertEqual(A._env("PROBE_INT", "8", int), 8)
+
+    def test_an_absent_value_falls_back_to_the_default(self):
+        os.environ.pop("PROBE_INT", None)
+        self.assertEqual(A._env("PROBE_INT", "8", int), 8)
+
+    def test_a_real_value_still_wins(self):
+        os.environ["PROBE_INT"] = "3"
+        self.assertEqual(A._env("PROBE_INT", "8", int), 3)
+        os.environ["PROBE_BOOL"] = "true"
+        self.assertTrue(A._env("PROBE_BOOL", "false", bool))
+
+    def test_a_blank_default_is_still_a_default(self):
+        # SCHEDULE_FLOOR ships blank and means "no floor". Empty-as-absent must
+        # resolve it to the blank default rather than raising.
+        os.environ["PROBE_STR"] = ""
+        self.assertEqual(A._env("PROBE_STR", ""), "")
+
+    def test_no_value_and_no_default_is_still_loud(self):
+        os.environ["PROBE_INT"] = ""
+        with self.assertRaises(RuntimeError):
+            A._env("PROBE_INT")
