@@ -298,6 +298,25 @@ class MongoComponent(Component):
         return int(self.spec.get("replica_pool") or 3) + 1
 
     def member_key(self, index):
+        """
+        The service key for a member. UNSUFFIXED when nothing manages this one.
+
+        The same rule, and the same reason, as RedisComponent.member_key: the
+        Dataguard panel says "with this off the topology is yours: one server,
+        one volume", and the renderer emitted a whole replica set regardless.
+        Components deploy with `--prune`, so a component created before the
+        switch existed would have had `<name>_mongo` DELETED on its next
+        redeploy and four members rendered in its place, with a connection
+        string nothing was using.
+
+        §6.1 of the design says this migration "makes this an explicit confirmed
+        action showing the old and new strings side by side, never a silent
+        consequence of saving a form". This is what makes it possible to keep
+        that promise: unmanaged is the old single service, and the switch is the
+        migration.
+        """
+        if not self.managed:
+            return self.TYPE
         return f"{self.TYPE}-{index}"
 
     def member_service(self, index):
@@ -308,7 +327,8 @@ class MongoComponent(Component):
         return self.member_key(1)
 
     def services(self):
-        names = [self.member_service(i) for i in range(1, self.pool + 1)]
+        names = [self.member_service(i)
+                 for i in range(1, (self.pool if self.managed else 1) + 1)]
         if self.spec.get("exporter"):
             names.append(f"{self.stack}_mongo-exporter")
         if self.managed:
@@ -324,7 +344,11 @@ class MongoComponent(Component):
     # --- addressing ---------------------------------------------------------
 
     def seed_hosts(self, port=27017):
-        return [f"{self.member_service(i)}:{port}" for i in range(1, self.pool + 1)]
+        # An unmanaged component is ONE server, so the seed list is that server.
+        # Naming members 2..n would put hosts in the connection string that are
+        # not merely absent-for-now — nothing will ever render them.
+        last = self.pool if self.managed else 1
+        return [f"{self.member_service(i)}:{port}" for i in range(1, last + 1)]
 
     def connection_url(self, host=None, port=None):
         """
@@ -717,12 +741,12 @@ class MongoComponent(Component):
         self.ensure_password()
         self.ensure_tls()
 
-        services = {self.member_key(i): self._member(i)
-                    for i in range(1, self.pool + 1)}
+        members = range(1, (self.pool if self.managed else 1) + 1)
+        services = {self.member_key(i): self._member(i) for i in members}
         secrets = {self.secret_name("tls-ca"): {"external": True}}
-        for i in range(1, self.pool + 1):
+        for i in members:
             secrets[self.secret_name(f"tls-{i}")] = {"external": True}
-        volumes = {f"{self.name}-{i}-data": {} for i in range(1, self.pool + 1)}
+        volumes = {f"{self.name}-{i}-data": {} for i in members}
         networks = [base.EDGE_NETWORK]
 
         if s.get("exporter"):

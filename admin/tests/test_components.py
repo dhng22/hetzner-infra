@@ -436,8 +436,15 @@ class ComponentTest(unittest.TestCase):
         Discovered either way, managed only when asked — the same shape as an
         application that is discovered but not autoscaled.
         """
-        labels = (self.make_mongo("unmanaged", dataguard=False)
-                  .render()["services"]["mongo-1"]["deploy"]["labels"])
+        rendered = self.make_mongo("unmanaged", dataguard=False).render()
+        # ONE service, and the unsuffixed name. With the switch off the panel
+        # promises "one server, one volume", and `--prune` means the difference
+        # between `mongo` and `mongo-1` is the difference between keeping a live
+        # database and deleting it on the next redeploy.
+        self.assertEqual(["mongo"], [k for k in rendered["services"]
+                                     if k.startswith("mongo")
+                                     and "exporter" not in k])
+        labels = rendered["services"]["mongo"]["deploy"]["labels"]
         self.assertEqual(labels["dataguard.enabled"], "false")
 
     def test_redis_says_it_cannot_hide_a_replica_rather_than_pretending(self):

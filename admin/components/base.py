@@ -241,7 +241,30 @@ class Component:
         self.name = store.check_name(name)
         data = dict(data or {})
         self.created_at = data.get("created_at")
-        self.spec = dict(self.defaults(), **(data.get("spec") or {}))
+        stored = data.get("spec") or {}
+        self.spec = dict(self.defaults(), **stored)
+        # A COMPONENT THAT PREDATES THE MANAGER SWITCH IS NOT MANAGED.
+        #
+        # Every other field can take its class default when an old spec does not
+        # mention it: the default is what a sensible new component would have
+        # said, and applying it changes a number. This one changes the SHAPE.
+        # `dataguard` defaults to on, which is right for something created
+        # through the form, where the switch and its help text are in front of
+        # you. Inherited by a spec written before the field existed, it silently
+        # reclassifies a running single-instance database as a replica set — and
+        # the next redeploy of any kind, a password rotation included, renders
+        # members and sentinels in place of the one service that is actually
+        # holding the data. Components deploy with `--prune`, so the old service
+        # is not left behind alongside the new ones; it is deleted. The
+        # connection string every application uses changes at the same moment.
+        #
+        # `create()` always writes the key, so ABSENT means "older than the
+        # feature", never "a new component that declined it". Turning it on is
+        # then something an operator does deliberately, on a component whose
+        # migration they have read about, which is exactly what the plan
+        # promised for MongoDB and what nothing was enforcing for either engine.
+        if self.MANAGER_FIELD and self.MANAGER_FIELD not in stored and stored:
+            self.spec[self.MANAGER_FIELD] = False
 
     # --- schema -------------------------------------------------------------
 

@@ -205,6 +205,25 @@ class RedisComponent(Component):
         return bool(self.spec.get("dataguard"))
 
     def member_key(self, index):
+        """
+        The service key for a member. UNSUFFIXED when nothing manages this one.
+
+        The Dataguard panel on this page promises, in as many words, "with this
+        off you get one Redis, one volume and no failover" — and the renderer did
+        not keep it: it emitted four members and three sentinels either way, and
+        the switch only decided whether dataguard would then touch them. For a
+        component created before the switch existed that was a silent migration
+        with teeth. Components deploy with `--prune`, so `<name>_redis` is not
+        left running beside the new `<name>_redis-1`; it is deleted, along with
+        the only copy of the data, while every client's connection string
+        changes underneath it. A password rotation was enough to trigger it.
+
+        So the suffix belongs to the managed shape, and the single unsuffixed
+        service is what an unmanaged Redis has always been called. Turning the
+        switch ON is then the migration, done deliberately, once.
+        """
+        if not self.managed:
+            return self.TYPE
         return f"{self.TYPE}-{index}"
 
     def member_service(self, index):
@@ -217,8 +236,12 @@ class RedisComponent(Component):
         return self.member_key(1)
 
     def services(self):
-        names = [self.member_service(i) for i in range(1, self.pool + 1)]
-        names += [self.sentinel_service(i) for i in range(1, SENTINEL_COUNT + 1)]
+        if self.managed:
+            names = [self.member_service(i) for i in range(1, self.pool + 1)]
+            names += [self.sentinel_service(i)
+                      for i in range(1, SENTINEL_COUNT + 1)]
+        else:
+            names = [self.member_service(1)]
         if self.spec.get("exporter"):
             names.append(f"{self.stack}_redis-exporter")
         if self.spec.get("visualizer"):
@@ -245,6 +268,10 @@ class RedisComponent(Component):
             return (f"redis://default:{quote(self.password(), safe='')}@"
                     f"{host}:{port or 6379}")
         secret = quote(self.password(), safe="")
+        if not self.managed:
+            # No sentinels exist to ask, so naming them would hand out an
+            # address that resolves to nothing.
+            return f"redis://default:{secret}@{self.member_service(1)}:6379/0"
         hosts = ",".join(self.sentinel_hosts())
         return f"redis+sentinel://default:{secret}@{hosts}/{self.stack}/0"
 
@@ -476,12 +503,13 @@ class RedisComponent(Component):
         s = self.spec
         self.ensure_password()
 
-        services = {self.member_key(i): self._member(i)
-                    for i in range(1, self.pool + 1)}
-        volumes = {f"{self.name}-{i}-data": {} for i in range(1, self.pool + 1)}
-        for i in range(1, SENTINEL_COUNT + 1):
-            services[f"sentinel-{i}"] = self._sentinel(i)
-            volumes[f"{self.name}-sentinel-{i}"] = {}
+        members = range(1, self.pool + 1) if self.managed else range(1, 2)
+        services = {self.member_key(i): self._member(i) for i in members}
+        volumes = {f"{self.name}-{i}-data": {} for i in members}
+        if self.managed:
+            for i in range(1, SENTINEL_COUNT + 1):
+                services[f"sentinel-{i}"] = self._sentinel(i)
+                volumes[f"{self.name}-sentinel-{i}"] = {}
         networks = [base.EDGE_NETWORK]
 
         if s.get("exporter"):

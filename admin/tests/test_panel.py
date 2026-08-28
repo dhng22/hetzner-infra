@@ -1055,6 +1055,42 @@ class DatabasePanelTest(PanelTest):
         from components import base
         base.run, base.docker_out = self._shells
 
+    def test_a_spec_written_before_dataguard_existed_is_not_managed(self):
+        """
+        The most expensive default in the codebase, caught on a live cluster.
+
+        `dataguard` defaults to ON, which is right for a component created
+        through the form where the switch is in front of you. Inherited by a
+        component.json written before the field existed, it reclassified a
+        running single-instance redis as a replica set — and because components
+        deploy with `--prune`, the next redeploy of ANY kind would have rendered
+        members and sentinels while deleting the one service holding the data,
+        changing the connection string in the same breath. A password rotation
+        would have done it.
+
+        Absent means older than the feature: `create()` always writes the key.
+        """
+        old = self.components.redis.RedisComponent("legacy", {"spec": {
+            "version": "7.4", "port": 6379, "memory_mb": 512}})
+        self.assertFalse(old.spec["dataguard"])
+        # One server, one volume, the name it has always had -- and no sentinels
+        # to point a connection string at.
+        self.assertIn("legacy_redis", old.services())
+        self.assertEqual([], [s for s in old.services() if "sentinel" in s])
+        self.assertEqual([], [s for s in old.services()
+                              if s.startswith("legacy_redis-") and "exporter" not in s])
+        self.assertIn("legacy_redis:6379", old.connection_url())
+
+    def test_a_new_component_still_defaults_to_managed(self):
+        """The fix must not turn the feature off for everything."""
+        fresh = self.components.redis.RedisComponent("fresh")
+        self.assertTrue(fresh.spec["dataguard"])
+
+    def test_a_spec_that_says_managed_is_still_believed(self):
+        on = self.components.redis.RedisComponent("kept", {"spec": {
+            "version": "7.4", "dataguard": True}})
+        self.assertTrue(on.spec["dataguard"])
+
     def test_max_members_cannot_exceed_what_the_pool_can_hold(self):
         """
         The master's slot is not one a grown set can fill.
