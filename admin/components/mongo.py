@@ -202,6 +202,17 @@ class MongoComponent(Component):
                   minimum=1, maximum=720, group="dataguard",
                   help="Full snapshots. Between them PITR keeps a continuous oplog, "
                        "so you can restore to any second, not just to a snapshot."),
+            Field("max_snapshots", "Keep at most (snapshots)", "number", 7,
+                  minimum=1, maximum=365, group="dataguard",
+                  help="Once there are more full snapshots than this, the oldest are "
+                       "deleted after each new one completes — oldest first, and only "
+                       "ever after the new one has succeeded, so a failed backup "
+                       "cannot leave you with fewer than you had. Storage is billed "
+                       "by the gigabyte-month and a snapshot every day forever is a "
+                       "bill that only goes one way. Note this bounds the SNAPSHOTS, "
+                       "not the PITR oplog between them: restoring to an arbitrary "
+                       "second only works back as far as the oldest snapshot you "
+                       "still have, so this is also how far back you can go."),
         ]
 
     # --- credentials --------------------------------------------------------
@@ -684,6 +695,7 @@ class MongoComponent(Component):
             "dataguard.lag_budget_seconds": str(s.get("lag_budget_seconds") or 10),
             "dataguard.secondary_reads": "true" if s.get("secondary_reads") else "false",
             "dataguard.backup_target": str(s.get("backup_target") or ""),
+            "dataguard.max_snapshots": str(s.get("max_snapshots") or 7),
             "dataguard.viewer": "true" if s.get("visualizer") else "false",
         }
         return labels

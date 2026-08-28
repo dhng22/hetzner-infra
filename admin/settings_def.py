@@ -66,6 +66,16 @@ FIELDS = {
                          "member is replaced by a bigger one that has already synced. A "
                          "capacity rather than a plan name, for the same reason as the "
                          "worker ceiling — the ladder is read from the Hetzner API."),
+    "DB_MAX_STORAGE_MB": (EDIT, "monitoring",
+                          "The third dimension of the database ceiling, in MB. Disk is not "
+                          "like the other two: too little CPU or memory makes a database "
+                          "slow, too little disk stops it — and on a plan ladder the disk "
+                          "arrives welded to the plan, so it cannot be topped up "
+                          "afterwards. Dataguard will not move a member onto a plan whose "
+                          "disk exceeds this, which is what stops an upgrade path bounded "
+                          "only by cores and memory from quietly buying storage nobody "
+                          "asked for. In MB rather than GB because that is how storage is "
+                          "quoted everywhere else in the panel; the default is 320 GB."),
     "DATAGUARD_DRY_RUN": (EDIT, "monitoring",
                           "Every decision is logged and nothing is applied. A rehearsal, and "
                           "the honest way to find out what it wants to do to a live database."),
@@ -152,7 +162,7 @@ GROUPS = [
                "NODE_PRESSURE_PCT", "COOLDOWN_UP_SECONDS",
                "COOLDOWN_DOWN_SECONDS", "SCHEDULE_FLOOR", "DRY_RUN"]),
     ("Dataguard", ["DATAGUARD_DRY_RUN", "DB_MAX_CORES", "DB_MAX_MEMORY_GB",
-                   "TOPOLOGY_COOLDOWN_SECONDS",
+                   "DB_MAX_STORAGE_MB", "TOPOLOGY_COOLDOWN_SECONDS",
                    "PRESSURE_SUSTAIN_SECONDS", "BACKUP_MAX_AGE_SECONDS",
                    "VIEWER_IDLE_SECONDS"]),
     ("Access", ["ADMIN_USER", "ADMIN_PASSWORD", "GRAFANA_ADMIN_USER", "GRAFANA_ADMIN_PASSWORD",
@@ -204,6 +214,7 @@ DEFAULTS = {
     "DATAGUARD_DRY_RUN": "false",
     "DB_MAX_CORES": "16",
     "DB_MAX_MEMORY_GB": "32",
+    "DB_MAX_STORAGE_MB": "327680",
     "TOPOLOGY_COOLDOWN_SECONDS": "14400",
     "PRESSURE_SUSTAIN_SECONDS": "3600",
     "BACKUP_MAX_AGE_SECONDS": "86400",

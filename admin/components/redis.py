@@ -147,6 +147,13 @@ class RedisComponent(Component):
                        "the difference is worth knowing before you need it."),
             Field("backup_interval_hours", "Backup every (hours)", "number", 24,
                   minimum=1, maximum=720, group="dataguard"),
+            Field("max_snapshots", "Keep at most (snapshots)", "number", 7,
+                  minimum=1, maximum=365, group="dataguard",
+                  help="Once there are more snapshots than this, the oldest are "
+                       "deleted after each new one completes — oldest first, and "
+                       "only after the new one has succeeded. Storage is billed by "
+                       "the gigabyte-month, and a snapshot a day forever is a bill "
+                       "that only goes one way."),
         ]
 
     # --- credentials --------------------------------------------------------
@@ -402,6 +409,7 @@ class RedisComponent(Component):
             # this says false rather than claiming a control that does not exist.
             "dataguard.secondary_reads": "false",
             "dataguard.backup_target": str(s.get("backup_target") or ""),
+            "dataguard.max_snapshots": str(s.get("max_snapshots") or 7),
             "dataguard.viewer": "true" if s.get("visualizer") else "false",
         }
         return labels

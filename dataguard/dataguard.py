@@ -137,6 +137,7 @@ L_MAX_MEMBERS = DG + "max_members"
 L_LAG_BUDGET = DG + "lag_budget_seconds"
 L_SECONDARY_READS = DG + "secondary_reads"
 L_BACKUP_TARGET = DG + "backup_target"
+L_MAX_SNAPSHOTS = DG + "max_snapshots"
 L_SET_NAME = DG + "set"
 L_VIEWER = DG + "viewer"
 
@@ -384,6 +385,7 @@ class Component:
         self.lag_budget_seconds = _num(labels, L_LAG_BUDGET, LAG_BUDGET_SECONDS)
         self.secondary_reads = _flag(labels, L_SECONDARY_READS, True)
         self.backup_target = labels.get(L_BACKUP_TARGET) or ""
+        self.max_snapshots = int(_num(labels, L_MAX_SNAPSHOTS, 7, int))
         # NOT A PLAN NAME, on either side. The overseer picks the smallest
         # shared x86 type in the location that meets the base requirement, and
         # `bigger` asks it for the next rung up from there — because Hetzner
@@ -965,9 +967,80 @@ def run_backup(component):
         _backup_state.setdefault(component.name, {})["last"] = time.time()
         G_BACKUP_OK.labels(component=component.name).set(time.time())
         C_ACTIONS.labels(action="backup").inc()
+        # ONLY on success, and only after. Evicting first would mean a failed
+        # backup leaves fewer snapshots than there were before it ran, which is
+        # the one moment you least want to be short of them.
+        prune_snapshots(component, container)
     else:
         C_ERRORS.labels(stage="backup").inc()
         log.error("%s: backup failed: %s", component.name, out[:300])
+
+
+def list_snapshots(component, container):
+    """
+    [(name, taken_at)] oldest first, or None if the controller cannot answer.
+
+    None and [] mean different things and the caller acts on the difference: []
+    is "there are no snapshots", None is "nobody knows", and deleting on the
+    strength of a list you failed to read is how retention removes the only copy.
+    """
+    ok, out = _exec(container, ["pbm", "list", "--out=json"])
+    if not ok:
+        return None
+    try:
+        data = json.loads(out)
+    except ValueError:
+        return None
+    found = []
+    for snap in data.get("snapshots") or []:
+        name = snap.get("name")
+        if not name:
+            continue
+        # `restoreTo` is the authority; the name is an ISO timestamp and sorts
+        # the same way, so it is a safe fallback when a build omits the field.
+        found.append((name, snap.get("restoreTo") or name))
+    found.sort(key=lambda row: (row[1], row[0]))
+    return found
+
+
+def prune_snapshots(component, container):
+    """
+    Delete the oldest snapshots once there are more than the component allows.
+
+    Storage is billed by the gigabyte-month, so a daily snapshot kept forever is
+    a bill with no ceiling — but retention is also the only thing here that
+    deletes a backup, so every step refuses rather than guesses: an unreadable
+    list prunes nothing, a limit of zero or less prunes nothing, and a failed
+    delete stops the run instead of moving on to the next one.
+
+    Mongo only. Redis's backup controller is not rendered yet, and inventing a
+    prune for a service that does not exist would be inventing its interface too.
+    """
+    keep = getattr(component, "max_snapshots", 0)
+    if component.kind != "mongo" or keep <= 0:
+        return
+    snapshots = list_snapshots(component, container)
+    if snapshots is None:
+        say_once((component.name, "nosnaplist"),
+                 "%s: cannot read the snapshot list, so nothing is being pruned. "
+                 "Retention is not running for this component.", component.name)
+        return
+    excess = len(snapshots) - keep
+    if excess <= 0:
+        return
+    for name, _when in snapshots[:excess]:
+        if DRY_RUN:
+            log.info("[dry-run] would delete snapshot %s of %s", name, component.name)
+            continue
+        ok, out = _exec(container, ["pbm", "delete-backup", "--force", name])
+        if not ok:
+            C_ERRORS.labels(stage="prune").inc()
+            log.error("%s: could not delete snapshot %s: %s",
+                      component.name, name, out[:300])
+            return
+        C_ACTIONS.labels(action="prune").inc()
+        log.info("%s: deleted snapshot %s (keeping %d)",
+                 component.name, name, keep)
 
 
 def _local_container(service_name):

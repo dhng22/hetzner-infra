@@ -2129,7 +2129,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-27T17:03:07Z" data-localtime>2026-08-27T17:03:07Z</time>
+          <time datetime="2026-08-28T06:33:57Z" data-localtime>2026-08-28T06:33:57Z</time>
           
         </div>
       </div>
@@ -3454,7 +3454,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-27T17:03:07Z" data-localtime>2026-08-27T17:03:07Z</time>
+          <time datetime="2026-08-28T06:33:57Z" data-localtime>2026-08-28T06:33:57Z</time>
           
         </div>
       </div>
@@ -4692,7 +4692,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-27T17:03:07Z" data-localtime>2026-08-27T17:03:07Z</time>
+          <time datetime="2026-08-28T06:33:57Z" data-localtime>2026-08-28T06:33:57Z</time>
           
         </div>
       </div>
@@ -4889,9 +4889,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis+sentinel://default:53d83504ff528cd8f1243616eb4e921fbb4da831f4dff867@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
+              <code>redis+sentinel://default:493d13dbb71a8f6e3997f37270a4d20f9d53d5dba211df45@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis+sentinel://default:53d83504ff528cd8f1243616eb4e921fbb4da831f4dff867@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
+                      data-copy-text="redis+sentinel://default:493d13dbb71a8f6e3997f37270a4d20f9d53d5dba211df45@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -4902,7 +4902,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="53d83504ff528cd8f1243616eb4e921fbb4da831f4dff867">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="493d13dbb71a8f6e3997f37270a4d20f9d53d5dba211df45">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -4928,9 +4928,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="panel-body stack">
           
           <div class="conn">
-            <code>redis://default:53d83504ff528cd8f1243616eb4e921fbb4da831f4dff867@10.0.0.2:46379</code>
+            <code>redis://default:493d13dbb71a8f6e3997f37270a4d20f9d53d5dba211df45@10.0.0.2:46379</code>
             <button class="btn btn-sm" type="button" data-copy
-                    data-copy-text="redis://default:53d83504ff528cd8f1243616eb4e921fbb4da831f4dff867@10.0.0.2:46379">Copy</button>
+                    data-copy-text="redis://default:493d13dbb71a8f6e3997f37270a4d20f9d53d5dba211df45@10.0.0.2:46379">Copy</button>
           </div>
           <div class="table-wrap">
             <table>
@@ -5538,6 +5538,25 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   
 </div>
       
+        
+        
+<div class="field">
+  <label for="f-max_snapshots">Keep at most (snapshots)</label>
+
+  
+    <input id="f-max_snapshots" name="max_snapshots"
+           type="number"
+           
+           min="1"
+           max="365"
+           
+           
+           value="7">
+  
+
+  <p class="hint">Once there are more snapshots than this, the oldest are deleted after each new one completes — oldest first, and only after the new one has succeeded. Storage is billed by the gigabyte-month, and a snapshot a day forever is a bill that only goes one way.</p>
+</div>
+      
     </div>
   </div>
   <div class="panel-note">With this off you get one Redis, one volume and no failover. Dataguard still measures this component either way.</div>
@@ -5704,7 +5723,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-27T17:03:07Z" data-localtime>2026-08-27T17:03:07Z</time>
+          <time datetime="2026-08-28T06:33:57Z" data-localtime>2026-08-28T06:33:57Z</time>
           
         </div>
       </div>
@@ -5889,9 +5908,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>mongodb://root:5c330e6e204116a5e72fbc685638dd3415ba82007eafb689@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
+              <code>mongodb://root:a852fe657519d10eebb4b3adc7c4908e2b72241dea32a39a@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:5c330e6e204116a5e72fbc685638dd3415ba82007eafb689@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
+                      data-copy-text="mongodb://root:a852fe657519d10eebb4b3adc7c4908e2b72241dea32a39a@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -5902,7 +5921,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="5c330e6e204116a5e72fbc685638dd3415ba82007eafb689">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="a852fe657519d10eebb4b3adc7c4908e2b72241dea32a39a">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -6542,6 +6561,25 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   
 
   <p class="hint">Full snapshots. Between them PITR keeps a continuous oplog, so you can restore to any second, not just to a snapshot.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-max_snapshots">Keep at most (snapshots)</label>
+
+  
+    <input id="f-max_snapshots" name="max_snapshots"
+           type="number"
+           
+           min="1"
+           max="365"
+           
+           
+           value="7">
+  
+
+  <p class="hint">Once there are more full snapshots than this, the oldest are deleted after each new one completes — oldest first, and only ever after the new one has succeeded, so a failed backup cannot leave you with fewer than you had. Storage is billed by the gigabyte-month and a snapshot every day forever is a bill that only goes one way. Note this bounds the SNAPSHOTS, not the PITR oplog between them: restoring to an arbitrary second only works back as far as the oldest snapshot you still have, so this is also how far back you can go.</p>
 </div>
       
     </div>
@@ -7725,6 +7763,25 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   
 </div>
       
+        
+        
+<div class="field">
+  <label for="f-max_snapshots">Keep at most (snapshots)</label>
+
+  
+    <input id="f-max_snapshots" name="max_snapshots"
+           type="number"
+           
+           min="1"
+           max="365"
+           
+           
+           value="7">
+  
+
+  <p class="hint">Once there are more snapshots than this, the oldest are deleted after each new one completes — oldest first, and only after the new one has succeeded. Storage is billed by the gigabyte-month, and a snapshot a day forever is a bill that only goes one way.</p>
+</div>
+      
     </div>
   </div>
   <div class="panel-note">With this off you get one Redis, one volume and no failover. Dataguard still measures this component either way.</div>
@@ -8205,6 +8262,25 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   
 
   <p class="hint">Full snapshots. Between them PITR keeps a continuous oplog, so you can restore to any second, not just to a snapshot.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-max_snapshots">Keep at most (snapshots)</label>
+
+  
+    <input id="f-max_snapshots" name="max_snapshots"
+           type="number"
+           
+           min="1"
+           max="365"
+           
+           
+           value="7">
+  
+
+  <p class="hint">Once there are more full snapshots than this, the oldest are deleted after each new one completes — oldest first, and only ever after the new one has succeeded, so a failed backup cannot leave you with fewer than you had. Storage is billed by the gigabyte-month and a snapshot every day forever is a bill that only goes one way. Note this bounds the SNAPSHOTS, not the PITR oplog between them: restoring to an arbitrary second only works back as far as the oldest snapshot you still have, so this is also how far back you can go.</p>
 </div>
       
     </div>
@@ -9907,7 +9983,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1787846587.628623" data-localtime-epoch>1787846587</time>
+              <time datetime="1787895237.953383" data-localtime-epoch>1787895237</time>
             
           </td>
           <td>
@@ -9998,7 +10074,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
       <h2>Dataguard</h2>
       <span class="spacer"></span>
       
-      <span class="eyebrow">5 of 5 editable</span>
+      <span class="eyebrow">8 of 8 editable</span>
     </div>
 
     
@@ -10015,6 +10091,63 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
       <p class="why">
         
         Every decision is logged and nothing is applied. A rehearsal, and the honest way to find out what it wants to do to a live database.
+        
+          <em>Saving redeploys the monitoring stack.</em>
+        
+      </p>
+    </div>
+    
+    <div class="setting-row">
+      <label for="set-DB_MAX_CORES">
+        <span class="mono">DB_MAX_CORES</span>
+      </label>
+
+      
+        <input id="set-DB_MAX_CORES" type="text" name="value__DB_MAX_CORES" value="16">
+        <input type="hidden" name="key" value="DB_MAX_CORES">
+      
+
+      <p class="why">
+        
+        The biggest machine a database member may end up on, in cores. This is the ceiling the whole upgrade path is bounded by: under sustained write or capacity pressure dataguard starts a member on the next plan up, promotes it and drops the old one, and it stops when the next plan up would exceed this. Without it that loop has no end.
+        
+          <em>Saving redeploys the monitoring stack.</em>
+        
+      </p>
+    </div>
+    
+    <div class="setting-row">
+      <label for="set-DB_MAX_MEMORY_GB">
+        <span class="mono">DB_MAX_MEMORY_GB</span>
+      </label>
+
+      
+        <input id="set-DB_MAX_MEMORY_GB" type="text" name="value__DB_MAX_MEMORY_GB" value="32">
+        <input type="hidden" name="key" value="DB_MAX_MEMORY_GB">
+      
+
+      <p class="why">
+        
+        The other half of the database ceiling, in GB. Separate from the worker ceiling because the mechanisms differ: a worker is grown by power-cycling it, which is why that is opt-in, while a database member is replaced by a bigger one that has already synced. A capacity rather than a plan name, for the same reason as the worker ceiling — the ladder is read from the Hetzner API.
+        
+          <em>Saving redeploys the monitoring stack.</em>
+        
+      </p>
+    </div>
+    
+    <div class="setting-row">
+      <label for="set-DB_MAX_STORAGE_MB">
+        <span class="mono">DB_MAX_STORAGE_MB</span>
+      </label>
+
+      
+        <input id="set-DB_MAX_STORAGE_MB" type="text" name="value__DB_MAX_STORAGE_MB" value="327680">
+        <input type="hidden" name="key" value="DB_MAX_STORAGE_MB">
+      
+
+      <p class="why">
+        
+        The third dimension of the database ceiling, in MB. Disk is not like the other two: too little CPU or memory makes a database slow, too little disk stops it — and on a plan ladder the disk arrives welded to the plan, so it cannot be topped up afterwards. Dataguard will not move a member onto a plan whose disk exceeds this, which is what stops an upgrade path bounded only by cores and memory from quietly buying storage nobody asked for. In MB rather than GB because that is how storage is quoted everywhere else in the panel; the default is 320 GB.
         
           <em>Saving redeploys the monitoring stack.</em>
         
@@ -10534,7 +10667,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1787846587.628623" data-localtime-epoch>1787846587</time>
+              <time datetime="1787895237.953383" data-localtime-epoch>1787895237</time>
             
           </td>
           <td>
@@ -10625,7 +10758,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
       <h2>Dataguard</h2>
       <span class="spacer"></span>
       
-      <span class="eyebrow">5 of 5 editable</span>
+      <span class="eyebrow">8 of 8 editable</span>
     </div>
 
     
@@ -10642,6 +10775,63 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
       <p class="why">
         
         Every decision is logged and nothing is applied. A rehearsal, and the honest way to find out what it wants to do to a live database.
+        
+          <em>Saving redeploys the monitoring stack.</em>
+        
+      </p>
+    </div>
+    
+    <div class="setting-row">
+      <label for="set-DB_MAX_CORES">
+        <span class="mono">DB_MAX_CORES</span>
+      </label>
+
+      
+        <input id="set-DB_MAX_CORES" type="text" name="value__DB_MAX_CORES" value="16">
+        <input type="hidden" name="key" value="DB_MAX_CORES">
+      
+
+      <p class="why">
+        
+        The biggest machine a database member may end up on, in cores. This is the ceiling the whole upgrade path is bounded by: under sustained write or capacity pressure dataguard starts a member on the next plan up, promotes it and drops the old one, and it stops when the next plan up would exceed this. Without it that loop has no end.
+        
+          <em>Saving redeploys the monitoring stack.</em>
+        
+      </p>
+    </div>
+    
+    <div class="setting-row">
+      <label for="set-DB_MAX_MEMORY_GB">
+        <span class="mono">DB_MAX_MEMORY_GB</span>
+      </label>
+
+      
+        <input id="set-DB_MAX_MEMORY_GB" type="text" name="value__DB_MAX_MEMORY_GB" value="32">
+        <input type="hidden" name="key" value="DB_MAX_MEMORY_GB">
+      
+
+      <p class="why">
+        
+        The other half of the database ceiling, in GB. Separate from the worker ceiling because the mechanisms differ: a worker is grown by power-cycling it, which is why that is opt-in, while a database member is replaced by a bigger one that has already synced. A capacity rather than a plan name, for the same reason as the worker ceiling — the ladder is read from the Hetzner API.
+        
+          <em>Saving redeploys the monitoring stack.</em>
+        
+      </p>
+    </div>
+    
+    <div class="setting-row">
+      <label for="set-DB_MAX_STORAGE_MB">
+        <span class="mono">DB_MAX_STORAGE_MB</span>
+      </label>
+
+      
+        <input id="set-DB_MAX_STORAGE_MB" type="text" name="value__DB_MAX_STORAGE_MB" value="327680">
+        <input type="hidden" name="key" value="DB_MAX_STORAGE_MB">
+      
+
+      <p class="why">
+        
+        The third dimension of the database ceiling, in MB. Disk is not like the other two: too little CPU or memory makes a database slow, too little disk stops it — and on a plan ladder the disk arrives welded to the plan, so it cannot be topped up afterwards. Dataguard will not move a member onto a plan whose disk exceeds this, which is what stops an upgrade path bounded only by cores and memory from quietly buying storage nobody asked for. In MB rather than GB because that is how storage is quoted everywhere else in the panel; the default is 320 GB.
         
           <em>Saving redeploys the monitoring stack.</em>
         

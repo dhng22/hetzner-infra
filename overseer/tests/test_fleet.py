@@ -1385,11 +1385,16 @@ class DatabaseCeilingTest(unittest.TestCase):
 
     def setUp(self):
         self._saved = (A.VERTICAL, A.WORKER_MAX_CORES, A.WORKER_MAX_MEMORY_GB,
-                       A.DB_MAX_CORES, A.DB_MAX_MEMORY_GB, A.hcloud, A.LOCATION)
+                       A.DB_MAX_CORES, A.DB_MAX_MEMORY_GB, A.DB_MAX_STORAGE_MB,
+                       A.hcloud, A.LOCATION)
         A.VERTICAL = True
         A.LOCATION = "hel1"
         A.WORKER_MAX_CORES, A.WORKER_MAX_MEMORY_GB = 8, 16
         A.DB_MAX_CORES, A.DB_MAX_MEMORY_GB = 16, 32
+        # Set explicitly and generously here so the CORES/MEMORY cases are about
+        # cores and memory. The storage ceiling has its own tests below, and its
+        # real default is deliberately tighter than this.
+        A.DB_MAX_STORAGE_MB = 1024 * 1024
         A._catalogue.update({"at": time.time(), "types": list(HEL1),
                              "dc": {"types": HEL1_AVAILABLE}})
         byname = {t.name: t for t in HEL1}
@@ -1402,7 +1407,8 @@ class DatabaseCeilingTest(unittest.TestCase):
 
     def tearDown(self):
         (A.VERTICAL, A.WORKER_MAX_CORES, A.WORKER_MAX_MEMORY_GB,
-         A.DB_MAX_CORES, A.DB_MAX_MEMORY_GB, A.hcloud, A.LOCATION) = self._saved
+         A.DB_MAX_CORES, A.DB_MAX_MEMORY_GB, A.DB_MAX_STORAGE_MB,
+         A.hcloud, A.LOCATION) = self._saved
         A._catalogue.update({"at": 0.0, "types": None, "dc": {}})
 
     def hold(self, lease, type_name):
@@ -1438,6 +1444,49 @@ class DatabaseCeilingTest(unittest.TestCase):
     def test_a_ceiling_of_zero_is_a_ladder_of_nothing(self):
         A.DB_MAX_CORES = 0
         self.assertEqual([], A.db_ladder(HEL1_AVAILABLE))
+
+    def test_the_storage_ceiling_cuts_the_ladder_too(self):
+        """
+        Disk is the third dimension and it binds independently of the other two.
+
+        cpx62 is 16 cores and 32GB — exactly at both other ceilings — and 640GB
+        of disk. Without this filter a database with plenty of cores and memory
+        headroom climbs onto storage nobody chose, and a plan's disk cannot be
+        reduced afterwards.
+        """
+        A.DB_MAX_STORAGE_MB = 320 * 1024
+        self.assertEqual(["cpx22", "cpx32", "cpx42"],
+                         [t.name for t in A.db_ladder(HEL1_AVAILABLE)])
+
+    def test_the_shipped_storage_default_is_the_binding_one(self):
+        """
+        With everything at its shipped default the ladder stops at cpx42, and it
+        is DISK that stops it, not cores or memory. Worth pinning: an operator
+        raising DB_MAX_CORES and seeing nothing change should find the reason
+        here rather than in a support thread.
+        """
+        # The literals, not settings_def: this suite runs against the OVERSEER
+        # image, which does not carry admin/. Keeping these three numbers equal
+        # to the panel's and the cloud-init's is `test_defaults_agree_everywhere`
+        # in admin/tests, which scans all three files for exactly this reason.
+        A.DB_MAX_STORAGE_MB, A.DB_MAX_CORES, A.DB_MAX_MEMORY_GB = 327680, 16, 32
+        self.assertEqual(["cpx22", "cpx32", "cpx42"],
+                         [t.name for t in A.db_ladder(HEL1_AVAILABLE)])
+
+    def test_a_storage_ceiling_of_zero_is_a_ladder_of_nothing(self):
+        A.DB_MAX_STORAGE_MB = 0
+        self.assertEqual([], A.db_ladder(HEL1_AVAILABLE))
+
+    def test_the_storage_ceiling_does_not_touch_workers(self):
+        """
+        A worker's disk holds images and logs, not data. It is sized by whatever
+        plan the cpu and memory ceilings land on, and the database's storage
+        budget has no business narrowing it.
+        """
+        A.DB_MAX_STORAGE_MB = 81 * 1024        # barely above the base plan's 80GB
+        self.assertEqual(["cpx22", "cpx32", "cpx42"],
+                         [t.name for t in A.worker_ladder(HEL1_AVAILABLE)])
+        self.assertEqual(["cpx22"], [t.name for t in A.db_ladder(HEL1_AVAILABLE)])
 
     # --- what `bigger` resolves to ------------------------------------------
 

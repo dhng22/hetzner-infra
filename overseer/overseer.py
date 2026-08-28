@@ -276,6 +276,15 @@ HANDOVER_STALL_SECONDS = 900
 # whole thing again next cooldown. Forever, and billed each time.
 DB_MAX_CORES = _env("DB_MAX_CORES", "16", int)
 DB_MAX_MEMORY_GB = _env("DB_MAX_MEMORY_GB", "32", float)
+# The third dimension, and the one that bites differently from the other two.
+# CPU and memory being too small makes a database slow; disk being too small
+# stops it, and on a plan ladder disk is not something you can add afterwards —
+# it arrives welded to the plan. So this is a ceiling on which PLANS a member may
+# be moved onto, expressed in MB to match how storage is quoted everywhere else
+# in the panel, and named for its unit like every other sized setting here
+# because 320 next to `DB_MAX_MEMORY_GB = 32` would be read as gigabytes by
+# anyone in a hurry.
+DB_MAX_STORAGE_MB = _env("DB_MAX_STORAGE_MB", "327680", int)
 
 VERTICAL = WORKER_MAX_CORES > 0 and WORKER_MAX_MEMORY_GB > 0
 if not VERTICAL and (WORKER_MAX_CORES > 0 or WORKER_MAX_MEMORY_GB > 0):
@@ -1139,6 +1148,7 @@ def worker_ladder(available=None):
     return _ladder(WORKER_MAX_CORES, WORKER_MAX_MEMORY_GB, available)
 
 
+
 def db_ladder(available=None):
     """
     Plans a database MEMBER may run on. Same floor as a worker, its own ceiling.
@@ -1151,12 +1161,23 @@ def db_ladder(available=None):
     surprise, and it is the expensive kind: `bigger` still gets asked for, still
     gets granted, and still buys a machine.
     """
-    return _ladder(DB_MAX_CORES, DB_MAX_MEMORY_GB, available)
+    return _ladder(DB_MAX_CORES, DB_MAX_MEMORY_GB, available,
+                   max_disk_gb=DB_MAX_STORAGE_MB / 1024.0)
 
 
-def _ladder(max_cores, max_memory_gb, available=None):
-    """The plans between the inferred floor and the given ceiling, smallest first."""
+def _ladder(max_cores, max_memory_gb, available=None, max_disk_gb=None):
+    """
+    The plans between the inferred floor and the given ceiling, smallest first.
+
+    `max_disk_gb` is optional because only databases have one. A worker's disk
+    holds images and logs and is sized by whatever plan the CPU and memory
+    ceilings landed on; a database's disk holds the data, so it is the dimension
+    an operator most wants a hard cap on and the one they are most likely to
+    exceed by accident.
+    """
     if max_cores <= 0 or max_memory_gb <= 0:
+        return []
+    if max_disk_gb is not None and max_disk_gb <= 0:
         return []
     try:
         catalogue = _catalogue_types()
@@ -1178,6 +1199,8 @@ def _ladder(max_cores, max_memory_gb, available=None):
         if t.cores < base.cores or t.memory < base.memory or t.disk < base.disk:
             continue
         if t.cores > max_cores or t.memory > max_memory_gb:
+            continue
+        if max_disk_gb is not None and t.disk > max_disk_gb:
             continue
         if available is not None and t.name not in available:
             continue

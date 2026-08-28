@@ -978,6 +978,46 @@ class PanelTest(unittest.TestCase):
             self.assertEqual(shipped.get(key), default,
                              f"{key}: panel defaults to {default!r}, cloud-init ships {shipped.get(key)!r}")
 
+    def test_dataguard_labels_agree_across_the_wire(self):
+        """
+        Every `dataguard.*` label a component writes is one dataguard reads, and
+        every one it reads is one some component writes.
+
+        These are two files that cannot import each other, joined by a string.
+        A rename on either side does not fail anything, does not warn, and does
+        not look different in the panel — the setting simply stops arriving, and
+        the component keeps showing whatever the operator typed. Retention is
+        the reason this test exists now: a `max_snapshots` that never reaches
+        dataguard means snapshots accumulate forever while the form says 7.
+
+        Deliberately not asserting a fixed list. A new label added to both sides
+        should pass without editing this, and added to only one should not.
+        """
+        import pathlib
+        import re
+
+        root = pathlib.Path(__file__).resolve().parents[2]
+        code = (root / "dataguard" / "dataguard.py").read_text()
+        prefix = re.search(r'^DG\s*=\s*"([^"]*)"', code, re.M)
+        self.assertTrue(prefix, "could not find dataguard's label prefix")
+        read = {prefix.group(1) + name for name in
+                re.findall(r'^L_[A-Z0-9_]+\s*=\s*DG\s*\+\s*"([^"]+)"', code, re.M)}
+        self.assertIn("dataguard.max_snapshots", read,
+                      "no label constants parsed at all")
+
+        written = set()
+        for source in ("mongo.py", "redis.py"):
+            body = (root / "admin" / "components" / source).read_text()
+            written.update(re.findall(r'"(dataguard\.[a-z0-9_]+)"\s*:', body))
+        self.assertIn("dataguard.max_snapshots", written,
+                      "no component labels parsed at all")
+
+        # `set` and `enabled` are read from the service NAME and the presence of
+        # the stack rather than through an L_ constant, so they are written
+        # without being read here. Nothing may be READ without being written.
+        for label in sorted(read - written):
+            self.fail(f"dataguard reads {label} but no component ever writes it")
+
     def test_settings_refuses_a_key_it_does_not_manage(self):
         csrf = self.login()
         import envstore
