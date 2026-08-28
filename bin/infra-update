@@ -172,11 +172,27 @@ got="$(git -C "$work/repo" rev-parse HEAD)"
 
 # The same preflight bootstrap runs, for the same reason: a bundle missing a
 # stack file deploys most of a cluster and leaves the rest broken.
-for required in stacks/monitoring.yml stacks/ingress.yml stacks/admin.yml \
-                config/vmagent.yml.tpl bin/render-alertmanager \
-                config/alerts.yml bin/component bin/stack-deploy bin/infra-update \
-                bin/render-fleet-env bin/infra-images \
-                pki/__init__.py signals/workloads.py; do
+#
+# THE LIST COMES FROM THE FETCHED TREE, not from this script. A hardcoded list
+# means the running version decides what the incoming version must contain, and
+# then no file can ever be deleted from this repo again: every cluster refuses
+# every future commit, forever, naming a file that was removed on purpose. That
+# is not hypothetical — renaming config/alertmanager.yml.tpl to
+# bin/render-alertmanager stranded a live master for two days, five minutes at a
+# time, while `docker service ls` showed everything healthy.
+#
+# The fallback is this script's own list, for a tree old enough not to carry one.
+# It is deliberately the SHORT list: the fallback exists to keep an old tree
+# deployable, not to second-guess a new one.
+manifest="$work/repo/config/required-files"
+if [ -f "$manifest" ]; then
+  required_files="$(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$manifest")"
+else
+  required_files="stacks/monitoring.yml stacks/ingress.yml stacks/admin.yml
+config/vmagent.yml.tpl config/alerts.yml bin/component bin/stack-deploy
+bin/infra-update bin/infra-images"
+fi
+for required in $required_files; do
   [ -e "$work/repo/$required" ] || die "the fetched tree is missing $required — refusing to apply it"
 done
 

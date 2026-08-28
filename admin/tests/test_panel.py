@@ -1055,7 +1055,25 @@ class DatabasePanelTest(PanelTest):
         from components import base
         base.run, base.docker_out = self._shells
 
-    def make_mongo(self, name="docs", **spec):
+    def test_max_members_cannot_exceed_what_the_pool_can_hold(self):
+        """
+        The master's slot is not one a grown set can fill.
+
+        `pool` counts it; growth never does — dataguard hands out slots 2..pool
+        and keeps slot 1 for the copy on the master. A set that has grown off the
+        master therefore tops out at `pool - 1`, which is exactly `replica_pool`.
+        Accepting one more meant the form promised a member the planner had
+        nowhere to put: it stopped one short, reported `at_ceiling`, and named a
+        limit the operator had never typed. The old DEFAULT was that value, so
+        every managed mongo created from the form carried it.
+        """
+        self.make_mongo("toobig", expect=400, replica_pool="3", max_members="4")
+
+    def test_the_pool_can_be_filled_right_up_to_its_edge(self):
+        """The clamp is off-by-one in neither direction."""
+        self.make_mongo("atedge", replica_pool="4", max_members="4")
+
+    def make_mongo(self, name="docs", expect=200, **spec):
         """
         A managed mongo through the real route.
 
@@ -1071,7 +1089,7 @@ class DatabasePanelTest(PanelTest):
             if key in spec:
                 bools[key] = bool(spec.pop(key))
         form = {"csrf": csrf, "type": "mongo", "name": name,
-                "replica_pool": "3", "max_members": "4", "version": "7.0",
+                "replica_pool": "3", "max_members": "3", "version": "7.0",
                 "username": "root", "cache_mb": "256", "cpu_reservation": "0.3",
                 "memory_reservation_mb": "768", "placement_mode": "auto",
                 "lag_budget_seconds": "10", "max_replica_lag_alert": "60",
@@ -1080,7 +1098,9 @@ class DatabasePanelTest(PanelTest):
         form.update({k: "true" for k, on in bools.items() if on})
         form.update(spec)
         r = self.client.post("/components", data=form, follow_redirects=True)
-        self.assertEqual(r.status_code, 200)
+        # `expect` so a test can assert the form REFUSES something. A helper that
+        # can only express success cannot test a validation rule at all.
+        self.assertEqual(r.status_code, expect)
         return csrf
 
     # --- the invariant ----------------------------------------------------

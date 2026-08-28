@@ -402,7 +402,11 @@ class RedisComponent(Component):
             "dataguard.pool": str(self.pool),
             "dataguard.set": self.stack,
             "dataguard.enabled": "true" if self.managed else "false",
-            "dataguard.max_members": str(self.pool),
+            # `pool - 1`, not `pool`: slot 1 is the copy on the master and is
+            # never handed out for growth, so a set that has grown off the master
+            # can only ever fill the slots beyond it. Telling dataguard `pool`
+            # promises a member it has nowhere to put.
+            "dataguard.max_members": str(self.pool - 1),
             "dataguard.lag_budget_seconds": str(s.get("lag_budget_seconds") or 10),
             # Redis has no per-replica read flag: a sentinel-aware client chooses
             # a replica itself, and nothing here can take one out of rotation. So

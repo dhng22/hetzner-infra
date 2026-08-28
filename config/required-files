@@ -1,0 +1,26 @@
+# Files bin/infra-update must find in a fetched tree before it will apply it.
+#
+# THIS LIST TRAVELS WITH THE TREE IT DESCRIBES, and that is the whole point.
+# It used to be hardcoded in the updater, which meant the RUNNING version
+# decided what the INCOMING version had to contain — so deleting a file from
+# this repo made every existing cluster refuse every future commit, forever,
+# retrying every five minutes and never saying anything except the name of a
+# file that was removed on purpose. Renaming config/alertmanager.yml.tpl to
+# bin/render-alertmanager did exactly that.
+#
+# A tree knows what it needs to deploy itself; the tree that came before it does
+# not. Blank lines and # comments are ignored.
+
+stacks/monitoring.yml
+stacks/ingress.yml
+stacks/admin.yml
+config/vmagent.yml.tpl
+config/alerts.yml
+bin/render-alertmanager
+bin/component
+bin/stack-deploy
+bin/infra-update
+bin/render-fleet-env
+bin/infra-images
+pki/__init__.py
+signals/workloads.py

@@ -290,11 +290,21 @@ write_files:
       # --- preflight ----------------------------------------------------------
       # This script is written by cloud-init, but the rest of the bundle is not.
       # Say so plainly instead of failing later on a missing stack file.
-      for required in stacks/monitoring.yml stacks/ingress.yml stacks/admin.yml \
-                      config/vmagent.yml.tpl config/alerts.yml \
-                      bin/component bin/stack-deploy bin/panel-hostops \
-                      bin/render-fleet-env bin/render-alertmanager bin/infra-images \
-                      pki/__init__.py signals/workloads.py; do
+      # From config/required-files in the bundle, so this list lives in ONE
+      # place. It was a second copy, and a second copy of "what must exist" goes
+      # stale in the same way the updater's did: this file is baked into the VM
+      # at creation and never revised, so a master built from an old cloud-init
+      # against a newer repo would refuse to boot over a file the repo had
+      # deliberately dropped.
+      manifest=/opt/infra/config/required-files
+      if [ -f "$manifest" ]; then
+        required_list="$(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$manifest")"
+      else
+        required_list="stacks/monitoring.yml stacks/ingress.yml stacks/admin.yml
+      config/vmagent.yml.tpl config/alerts.yml bin/component bin/stack-deploy
+      bin/infra-images"
+      fi
+      for required in $required_list bin/panel-hostops; do
         if [ ! -e "/opt/infra/$required" ]; then
           echo "FATAL: /opt/infra/$required is missing." >&2
           echo "The bundle in /opt/infra is incomplete. Delete it and re-run this" >&2

@@ -122,13 +122,16 @@ class MongoComponent(Component):
                        "not, so raising it later is the one change that DOES alter "
                        "the string — pick the ceiling now. Three is the minimum "
                        "that can lose a machine and still elect."),
-            Field("max_members", "Members in use at once", "number", 4,
-                  minimum=3, maximum=7,
+            Field("max_members", "Members in use at once", "number", 3,
+                  minimum=3, maximum=6,
                   help="A budget cap on how many of the pool dataguard may run at "
                        "once. It does not have to be odd — dataguard keeps the "
                        "VOTING members odd underneath it and carries any extra as "
                        "non-voting, which is what lets a fourth member exist to "
-                       "serve reads without making the majority an even number."),
+                       "serve reads without making the majority an even number. "
+                       "Its ceiling is the replica pool, NOT the pool plus the "
+                       "master: a grown set has no member on the master, so the "
+                       "master's slot is not one of the ones this can fill."),
             Field("username", "Root username", "text", "root", required=True,
                   immutable=True,
                   help="Created on the FIRST start only, from an empty volume. "
@@ -434,12 +437,21 @@ class MongoComponent(Component):
         user = (self.spec.get("username") or "").strip()
         if user and not user.replace("_", "").replace("-", "").isalnum():
             problems.append("Root username may only contain letters, digits, - and _.")
-        pool, cap = self.pool, self.spec.get("max_members") or 0
-        if cap and cap > pool:
+        # `self.pool` counts the master's slot; growth never does. Dataguard hands
+        # out slots 2..pool and keeps slot 1 for the copy on the master, so a set
+        # that has grown off the master tops out at `pool - 1` — which is exactly
+        # `replica_pool`, "members BEYOND the one on the master". Comparing
+        # against `pool` accepted a number one higher than anything reachable, so
+        # the default of 4 against the default pool was itself unreachable: the
+        # set stopped at 3, reported `at_ceiling`, and named a limit the form had
+        # said was 4.
+        reachable, cap = self.pool - 1, self.spec.get("max_members") or 0
+        if cap and cap > reachable:
             problems.append(
-                f"Members in use ({cap}) is above the replica pool ({pool}). Only "
-                f"{pool} members are named in the connection string, so nothing "
-                "could ever address the rest.")
+                f"Members in use ({cap}) is above what the replica pool can hold "
+                f"({reachable}). A grown set has no member on the master, so it "
+                f"can only use the {reachable} slots beyond it — raise the replica "
+                "pool if you need more, though that changes the connection string.")
         # Deliberately NOT validated here: an even member count, and a managed
         # set with no backup target. Neither is invalid — an even set is legal
         # because dataguard keeps the VOTING members odd underneath it, using
