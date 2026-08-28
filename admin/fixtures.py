@@ -51,15 +51,53 @@ _SERVICES = {
     "api_app": _svc("api_app", f"{_IMG}:sha-9f3ac21{_DIGEST}", 6, 6),
     "api-staging_app": _svc("api-staging_app", f"{_IMG}:sha-c40e8b7", 1, 1,
                             cpu=0.5, mem=512, cpu_res=0.1, mem_res=128, updated="2h ago"),
-    "cache_redis": _svc("cache_redis", "redis:7.4-alpine", 1, 1, cpu=None, mem=None,
-                        cpu_res=0.2, mem_res=640, placement=["node.role == manager"],
-                        networks=("edge",), updated="6d ago"),
+    # A managed Redis: the replica on the master plus three that exist as
+    # services and DNS names and are not running. That IS the resting state —
+    # the sentinel URL names all of them from the day it was created, so the
+    # address never changes when dataguard starts one.
+    "cache_redis-1": _svc("cache_redis-1", "redis:7.4-alpine", 1, 1, cpu=None, mem=None,
+                          cpu_res=0.2, mem_res=640, placement=["node.role == manager"],
+                          networks=("edge",), updated="6d ago"),
+    "cache_redis-2": _svc("cache_redis-2", "redis:7.4-alpine", 0, 0, cpu=None, mem=None,
+                          cpu_res=0.2, mem_res=640, networks=("edge",), updated="6d ago"),
+    "cache_redis-3": _svc("cache_redis-3", "redis:7.4-alpine", 0, 0, cpu=None, mem=None,
+                          cpu_res=0.2, mem_res=640, networks=("edge",), updated="6d ago"),
+    "cache_redis-4": _svc("cache_redis-4", "redis:7.4-alpine", 0, 0, cpu=None, mem=None,
+                          cpu_res=0.2, mem_res=640, networks=("edge",), updated="6d ago"),
+    "cache_sentinel-1": _svc("cache_sentinel-1", "redis:7.4-alpine", 1, 1, cpu=None,
+                             mem=None, cpu_res=0.01, mem_res=24, networks=("edge",),
+                             updated="6d ago"),
+    "cache_sentinel-2": _svc("cache_sentinel-2", "redis:7.4-alpine", 1, 1, cpu=None,
+                             mem=None, cpu_res=0.01, mem_res=24, networks=("edge",),
+                             updated="6d ago"),
+    "cache_sentinel-3": _svc("cache_sentinel-3", "redis:7.4-alpine", 1, 1, cpu=None,
+                             mem=None, cpu_res=0.01, mem_res=24, networks=("edge",),
+                             updated="6d ago"),
     "cache_redis-exporter": _svc("cache_redis-exporter", "oliver006/redis_exporter:v1.66.0",
                                  1, 1, cpu=None, mem=None, cpu_res=0.05, mem_res=32,
                                  placement=["node.role == manager"], updated="6d ago"),
-    "sessions_redis": _svc("sessions_redis", "redis:7.2-alpine", 1, 1, cpu=None, mem=None,
-                           cpu_res=0.1, mem_res=256, placement=["node.role == manager"],
-                           networks=("edge",), updated="9d ago"),
+    # A managed Mongo that has already grown: member 1 on the master, member 2
+    # on a machine of its own, members 3 and 4 named and not yet running.
+    "documents_mongo-1": _svc("documents_mongo-1", "mongo:7.0", 1, 1, cpu=None, mem=None,
+                              cpu_res=0.3, mem_res=768,
+                              placement=["node.role == manager"],
+                              networks=("edge",), updated="4d ago"),
+    "documents_mongo-2": _svc("documents_mongo-2", "mongo:7.0", 1, 1, cpu=None, mem=None,
+                              cpu_res=0.3, mem_res=768,
+                              placement=["node.hostname == aichat-db-1756"],
+                              networks=("edge",), updated="1d ago"),
+    "documents_mongo-3": _svc("documents_mongo-3", "mongo:7.0", 0, 0, cpu=None, mem=None,
+                              cpu_res=0.3, mem_res=768, networks=("edge",), updated="4d ago"),
+    "documents_mongo-4": _svc("documents_mongo-4", "mongo:7.0", 0, 0, cpu=None, mem=None,
+                              cpu_res=0.3, mem_res=768, networks=("edge",), updated="4d ago"),
+    "documents_mongo-exporter": _svc("documents_mongo-exporter",
+                                     "percona/mongodb_exporter:0.43.1", 1, 1, cpu=None,
+                                     mem=None, cpu_res=0.05, mem_res=64,
+                                     placement=["node.role == manager"], updated="4d ago"),
+    "documents_pbm-ctl": _svc("documents_pbm-ctl",
+                              "percona/percona-backup-mongodb:2.8.0", 1, 1, cpu=None,
+                              mem=None, cpu_res=0.02, mem_res=48,
+                              placement=["node.role == manager"], updated="4d ago"),
     "ingress_cloudflared": _svc("ingress_cloudflared", "cloudflare/cloudflared:2024.10.1",
                                 4, 4, mode="global", cpu=None, mem=None, cpu_res=0.05,
                                 mem_res=32, placement=[], updated="9d ago"),
@@ -75,7 +113,8 @@ for _name, _image, _cpu_res, _mem_res in [
     ("monitoring_loki", "grafana/loki:3.1.1", 0.3, 512),
     ("monitoring_grafana", "grafana/grafana:11.3.0", 0.2, 256),
     ("monitoring_autoscaler", "ghcr.io/dhng22/hetzner-infra/autoscaler:73887dec9c22", 0.1, 96),
-    ("monitoring_dispatcher", "ghcr.io/dhng22/hetzner-infra/dispatcher:73887dec9c22", 0.03, 64),
+    ("monitoring_overseer", "ghcr.io/dhng22/hetzner-infra/overseer:73887dec9c22", 0.04, 96),
+    ("monitoring_dataguard", "ghcr.io/dhng22/hetzner-infra/dataguard:73887dec9c22", 0.03, 64),
     ("monitoring_node-exporter", "prom/node-exporter:v1.8.2", 0.05, 64),
     ("monitoring_cadvisor", "gcr.io/cadvisor/cadvisor:v0.49.1", 0.10, 128),
 ]:
@@ -195,8 +234,8 @@ _BAND_OF = {
 }
 _SERVICE_OF = {
     "api": "api_app", "api-staging": "api-staging_app",
-    "cache": "cache_redis", "sessions": "sessions_redis",
-    "documents": "documents_mongo",
+    "cache": "cache_redis-1",
+    "documents": "documents_mongo-1",
     "cloudflared": "ingress_cloudflared", "ui": "admin_ui",
 }
 
@@ -204,7 +243,7 @@ _SERVICE_OF = {
 _IMAGE_OF = {
     "api": "ghcr.io/acme/aichat-api:sha-9f3ac21",
     "api-staging": "ghcr.io/acme/aichat-api:sha-c40e8b7",
-    "cache": "redis:7.4-alpine", "sessions": "redis:7.2-alpine",
+    "cache": "redis:7.4-alpine",
     "documents": "mongo:7.0",
     "cloudflared": "cloudflare/cloudflared:2024.8.3",
     "ui": "aichat-admin:local",
@@ -256,7 +295,7 @@ def topology():
             ("victoriametrics", 1), ("vmagent", 1), ("vmalert", 1),
             ("alertmanager", 1), ("loki", 1), ("grafana", 1),
             ("node-exporter", 1), ("cadvisor", 1),
-            ("cache", 1), ("sessions", 1), ("redis-exporter", 1), ("documents", 1),
+            ("cache", 1), ("redis-exporter", 1), ("documents", 1),
             ("cloudflared", 1), ("autoscaler", 1), ("ui", 1),
         ]),
         (n["aichat-worker-1754812203"], 64.0, 47.0, [
@@ -271,14 +310,21 @@ def topology():
         ]),
     ]
     out = []
-    for node, cpu, mem, spec in rows:
+    for index, (node, cpu, mem, spec) in enumerate(rows):
         items = _tasks(spec)
         counts = {}
         for it in items:
             counts[it["name"]] = counts.get(it["name"], 0) + 1
+        # A different disk figure per node, including one close to the line, so
+        # the preview shows the warn tone rather than only the calm case.
+        total = 160.0 if index == 0 else 80.0
+        used_pct = (88.0, 41.0, 33.0, 12.0)[index % 4]
         out.append({**node, "tasks_total": len(items), "tasks": items,
                     "by_service": [{"name": k, "count": v} for k, v in sorted(counts.items())],
-                    "cpu_pct": cpu, "mem_pct": mem})
+                    "cpu_pct": cpu, "mem_pct": mem,
+                    "disk_pct": used_pct,
+                    "disk_total_gb": total,
+                    "disk_free_gb": round(total * (100 - used_pct) / 100, 1)})
     return {"nodes": out,
             "bands": [{"band": b, "key": k} for b, k in _BANDS],
             "max_tasks": max(x["tasks_total"] for x in out)}
@@ -296,8 +342,9 @@ def remove_node(node_id):
     return True, "Preview build — nothing was changed."
 
 
-def component_map(services):
-    return shape.component_map(topology(), services)
+def component_map(services, component=None):
+    return shape.component_map(topology(), services,
+                               roles=member_roles(component) if component else None)
 
 
 def summary():
@@ -335,7 +382,54 @@ def autoscaler_state():
         "max_workers": 5, "min_workers": 0,
         "last_loop": 1_770_000_000.0,
         "live": True,
+        "fleet_live": True,
     }
+
+
+def dataguard_state():
+    """A cluster with one managed database, mid-way up the ladder."""
+    import time
+    now = time.time()
+    return {
+        "components": [
+            {"component": "docs", "state": 2,
+             "state_label": "Master + one machine", "lag": 0.4,
+             "backup_at": now - 3600, "verified_at": now - 90000,
+             "verified": True, "changing": False},
+            {"component": "cache", "state": 1, "state_label": "On the master",
+             "lag": None, "backup_at": None, "verified_at": None,
+             "verified": False, "changing": False},
+        ],
+        # The interesting column: what is being held, and by which gate.
+        "refused": [("cooldown", 14.0), ("no_verified_backup", 3.0)],
+        "leases": 1.0,
+        "managed": 2.0,
+        "restore_in_flight": 0.0,
+        "last_loop": now - 12,
+        "live": True,
+    }
+
+
+def by_labels(expr, label):
+    return {}
+
+
+def component_data_gb(component):
+    return 12.4 if component == "documents" else None
+
+
+def member_roles(component):
+    if component != "documents":
+        return None
+    return {"documents_mongo-1": "SECONDARY", "documents_mongo-2": "PRIMARY"}
+
+
+def ensure_viewer(service):
+    return True, ""
+
+
+def touch_viewer(component):
+    pass
 
 
 def autoscaler_state_silent(_healthy=autoscaler_state):

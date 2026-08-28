@@ -787,6 +787,17 @@ def topology():
                       '(rate(node_cpu_seconds_total{mode="idle"}[2m])) * 100)')
     mem = vm_query_by('100 * (1 - node_memory_MemAvailable_bytes '
                       '/ node_memory_MemTotal_bytes)')
+    # DISK, which nothing showed until databases lived on these machines. Swarm
+    # advertises cores and memory and says nothing about the filesystem, so a
+    # node could be four bytes from full and every page in this panel would call
+    # it healthy. It is also the one resource that is not recoverable by
+    # shedding load: a full disk on a database does not get slower, it stops.
+    #
+    # The ROOT filesystem, because that is where docker keeps volumes.
+    disk_used = vm_query_by('100 * (1 - node_filesystem_avail_bytes{mountpoint="/"}'
+                            ' / node_filesystem_size_bytes{mountpoint="/"})')
+    disk_size = vm_query_by('node_filesystem_size_bytes{mountpoint="/"}')
+    disk_avail = vm_query_by('node_filesystem_avail_bytes{mountpoint="/"}')
 
     out = []
     for n in nodes():
@@ -814,12 +825,22 @@ def topology():
             "by_service": [{"name": k, "count": v} for k, v in sorted(counts.items())],
             "cpu_pct": cpu.get(n["hostname"]),
             "mem_pct": mem.get(n["hostname"]),
+            "disk_pct": disk_used.get(n["hostname"]),
+            # Both halves, so a page can say "38 of 80 GB" rather than only a
+            # percentage — a percentage of an unknown size is not actionable when
+            # the question is whether a database will fit.
+            "disk_total_gb": _gb(disk_size.get(n["hostname"])),
+            "disk_free_gb": _gb(disk_avail.get(n["hostname"])),
         })
     return {
         "nodes": out,
         "bands": [{"band": b, "key": _BAND_KEYS[b]} for b in band_order],
         "max_tasks": max([n["tasks_total"] for n in out], default=0),
     }
+
+
+def _gb(value):
+    return round(value / 1024 ** 3, 1) if value else None
 
 
 def node(node_id):
@@ -900,9 +921,40 @@ def remove_node(node_id):
     return True, "Node removed from the swarm."
 
 
-def component_map(services):
-    """The Map tab's data: one live topology, narrowed and coloured by tag."""
-    return shape.component_map(topology(), services)
+def component_map(services, component=None):
+    """
+    The Map tab's data: one live topology, narrowed to one component.
+
+    Coloured by image tag for an application, and by replica-set role for a
+    database — where every member runs the identical image, so the tag would be
+    the same word on every block while the thing you actually came to see, which
+    machine is taking writes, would be nowhere on the page.
+    """
+    roles = member_roles(component) if component else None
+    return shape.component_map(topology(), services, roles=roles)
+
+
+def component_data_gb(component):
+    """How much this database holds, in GB, or None if nothing measured it."""
+    value = vm_query(f'dataguard_data_bytes{{component="{component}"}}')
+    return round(value / 1024 ** 3, 1) if value else None
+
+
+def member_roles(component):
+    """
+    {service name: replica-set state} for one database, or None.
+
+    None means dataguard has not reported — which the map has to be able to say,
+    because "no primary" and "nobody is watching" are different problems and
+    drawing the second as the first would send somebody to the wrong page.
+    """
+    found = {}
+    for state in ("PRIMARY", "SECONDARY", "STARTUP2", "DOWN"):
+        expr = (f'dataguard_member_state{{component="{component}", state="{state}"}}')
+        for member, value in vm_query_by(expr, label="member").items():
+            if value:
+                found[member] = state
+    return found or None
 
 
 def summary():
@@ -924,11 +976,16 @@ def component_views():
 
 def autoscaler_state():
     """
-    What the autoscaler is thinking, cluster-wide and per component.
+    What the cluster is thinking about applications, per component and overall.
+
+    The names have two prefixes now and the split is not arbitrary: `overseer_*`
+    is anything about the FLEET — how many machines, how full, where
+    applications are allowed to run — and `autoscaler_*` is anything about a
+    SERVICE. That is where the two processes were cut, and reading them from one
+    function here keeps the page describing one reality rather than two.
 
     Cluster gauges stay unlabeled and per-service gauges carry a `service`
-    label — the same split the alert rules depend on, so reading them the same
-    way here keeps the panel and the alerts describing one reality.
+    label — the same split the alert rules depend on.
     """
     def g(name):
         return vm_query(name)
@@ -975,33 +1032,33 @@ def autoscaler_state():
     state = {
         "services": services,
         "signals": [
-            {"key": "Node CPU", "value": g("autoscaler_cluster_cpu_percent"), "unit": "%",
+            {"key": "Node CPU", "value": g("overseer_cluster_cpu_percent"), "unit": "%",
              "note": "Placement guard only, never a trigger. Reads the workers, "
                      "or the master when the fleet is empty."},
-            {"key": "Node memory", "value": g("autoscaler_cluster_mem_percent"), "unit": "%",
+            {"key": "Node memory", "value": g("overseer_cluster_mem_percent"), "unit": "%",
              "note": "Placement guard only."},
-            {"key": "Demand", "value": g("autoscaler_demand_cpu_cores"), "unit": "cores",
+            {"key": "Demand", "value": g("overseer_demand_cpu_cores"), "unit": "cores",
              "note": "Reservations of every application replica that has to be placed."},
-            {"key": "Free", "value": g("autoscaler_worker_pool_free_cpu_cores"), "unit": "cores",
+            {"key": "Free", "value": g("overseer_worker_pool_free_cpu_cores"), "unit": "cores",
              "note": "What the eligible nodes have left after everything else on them."},
         ],
         # 1 = at least one application is pinned to the workers.
-        "worker_mode": g("autoscaler_placement_worker_mode"),
-        "mixed_placement": g("autoscaler_placement_mixed"),
+        "worker_mode": g("overseer_placement_worker_mode"),
+        "mixed_placement": g("overseer_placement_mixed"),
         "managed": g("autoscaler_managed_services"),
-        "demand_cpu": g("autoscaler_demand_cpu_cores"),
-        "demand_mem": g("autoscaler_demand_memory_bytes"),
-        "manager_free_cpu": g("autoscaler_manager_free_cpu_cores"),
-        "manager_free_mem": g("autoscaler_manager_free_memory_bytes"),
-        "worker_free_cpu": g("autoscaler_worker_pool_free_cpu_cores"),
-        "new_worker_cpu": g("autoscaler_new_worker_free_cpu_cores"),
+        "demand_cpu": g("overseer_demand_cpu_cores"),
+        "demand_mem": g("overseer_demand_memory_bytes"),
+        "manager_free_cpu": g("overseer_manager_free_cpu_cores"),
+        "manager_free_mem": g("overseer_manager_free_memory_bytes"),
+        "worker_free_cpu": g("overseer_worker_pool_free_cpu_cores"),
+        "new_worker_cpu": g("overseer_new_worker_free_cpu_cores"),
         # Workers are Hetzner servers; the master is not one. `hosts` is kept
         # only as "boxes in the swarm", and nothing keys a threshold on it.
-        "current_workers": g("autoscaler_current_workers"),
-        "hosts": g("autoscaler_current_hosts"),
-        "desired_workers": g("autoscaler_desired_workers"),
-        "max_workers": g("autoscaler_max_workers"),
-        "min_workers": g("autoscaler_effective_min_workers"),
+        "current_workers": g("overseer_current_workers"),
+        "hosts": g("overseer_current_hosts"),
+        "desired_workers": g("overseer_desired_workers"),
+        "max_workers": g("overseer_max_workers"),
+        "min_workers": g("overseer_effective_min_workers"),
         "last_loop": g("autoscaler_last_loop_timestamp_seconds"),
     }
     # Every value above is None when the autoscaler is down or has not been
@@ -1010,7 +1067,139 @@ def autoscaler_state():
     # the first tile that compares two of them. `last_loop` is stamped once per
     # loop, which makes it the honest answer to "is anything reporting".
     state["live"] = state["last_loop"] is not None
+    # The FLEET half comes from a different process, and it can be down while
+    # the autoscaler is perfectly healthy — the split made that a real state
+    # rather than an impossible one, so the page has to be able to say which of
+    # the two is missing instead of blaming whichever it asked first.
+    state["fleet_live"] = g("overseer_last_loop_timestamp_seconds") is not None
     return state
+
+
+def dataguard_state():
+    """
+    What dataguard is doing to each database, and — more usefully — what it is
+    refusing to do.
+
+    `refused` is the number people actually come here for. When nothing is
+    happening the only question is WHICH GATE is holding it, and a log line
+    nobody tails is not an answer, so every gate increments a counter with its
+    own reason and they are shown broken out.
+    """
+    def g(name):
+        return vm_query(name)
+
+    def by(name, label="component"):
+        return vm_query_by(name, label=label)
+
+    states = {}
+    for value in ("1", "2", "3"):
+        for component, on in by_labels(f'dataguard_component_state{{state="{value}"}}',
+                                       "component").items():
+            if on:
+                states[component] = int(value)
+
+    lag = by("dataguard_replication_lag_seconds")
+    backups = by("dataguard_backup_last_success_timestamp")
+    verified = by("dataguard_backup_last_verified_timestamp")
+    changing = by("dataguard_topology_change_in_flight")
+
+    components = []
+    for name in sorted(set().union(states, backups, verified, changing)):
+        components.append({
+            "component": name,
+            "state": states.get(name),
+            "state_label": {1: "On the master", 2: "Master + one machine",
+                            3: "Dedicated machines"}.get(states.get(name), "unknown"),
+            "lag": lag.get(name),
+            "backup_at": backups.get(name),
+            "verified_at": verified.get(name),
+            # A backup nobody has restored is a hypothesis, so the panel says
+            # "never verified" rather than showing a green tick for the date it
+            # was taken.
+            "verified": verified.get(name) is not None,
+            "changing": bool(changing.get(name)),
+        })
+
+    refused = {}
+    for reason, value in by_labels("dataguard_refused_total", "reason").items():
+        refused[reason] = value
+
+    state = {
+        "components": components,
+        "refused": sorted(refused.items(), key=lambda kv: -(kv[1] or 0)),
+        "leases": g("dataguard_node_leases"),
+        "managed": g("dataguard_managed_components"),
+        "restore_in_flight": g("dataguard_restore_in_flight"),
+        "last_loop": g("dataguard_last_loop_timestamp_seconds"),
+    }
+    state["live"] = state["last_loop"] is not None
+    return state
+
+
+def by_labels(expr, label):
+    """{label value: number} for an expression, or {} — used by dataguard_state."""
+    return vm_query_by(expr, label=label)
+
+
+VIEWER_START_TIMEOUT = 60
+
+
+def ensure_viewer(service):
+    """
+    (started, detail) — scale a visualiser 0 -> 1 and wait for a task to run.
+
+    Waits rather than returning immediately, because the alternative is proxying
+    to a name that does not resolve yet and showing the user a connection error
+    for something that is working. One minute is generous for a container that
+    is already pulled and fatal for one that is not, which is the distinction
+    worth surfacing.
+    """
+    import subprocess
+    import time
+    try:
+        live = client().services.get(service)
+    except Exception as exc:                                     # noqa: BLE001
+        return False, f"{service} is not deployed: {exc}"
+    mode = (live.attrs.get("Spec", {}).get("Mode") or {}).get("Replicated") or {}
+    if mode.get("Replicas", 0) < 1:
+        # The CLI rather than docker-py: Service.update() sends what you give it
+        # and RESETS every field you leave out, and this service carries secrets,
+        # networks and labels that must survive being woken up.
+        try:
+            proc = subprocess.run(
+                ["docker", "service", "update", "--detach=true", "--replicas", "1",
+                 service], capture_output=True, text=True, timeout=60)
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            return False, str(exc)
+        if proc.returncode != 0:
+            return False, (proc.stderr or proc.stdout).strip()[:300]
+    deadline = time.time() + VIEWER_START_TIMEOUT
+    while time.time() < deadline:
+        try:
+            live = client().services.get(service)
+            for task in live.tasks(filters={"desired-state": "running"}) or []:
+                if (task.get("Status") or {}).get("State") == "running":
+                    return True, ""
+        except Exception:                                        # noqa: BLE001
+            break
+        time.sleep(1)
+    return False, ("It has not started yet. If this persists, check "
+                   f"`docker service ps {service}` — the image may still be pulling.")
+
+
+def touch_viewer(component):
+    """
+    Record that somebody just looked. Dataguard reads the mtime and stops the
+    visualiser once it has been idle, which is the other half of not leaving a
+    console with full database access running for a month.
+    """
+    path = os.path.join(os.environ.get("INFRA_DIR", "/opt/infra"), "state", "viewer")
+    try:
+        os.makedirs(path, exist_ok=True)
+        with open(os.path.join(path, f"{component}.seen"), "w") as fh:
+            fh.write("")
+    except OSError:
+        pass
 
 
 def alert_destination():

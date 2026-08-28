@@ -87,13 +87,33 @@ SYSTEM = [
         "blurb": "Log storage. Every container ships to it directly through the log driver.",
     },
     {
+        "key": "overseer",
+        "display": "Overseer",
+        "stack": "monitoring",
+        "service": "monitoring_overseer",
+        "category": "Platform",
+        "blurb": "Decides everything: which services are slow and why, how many machines "
+                 "the cluster needs, and which of them may be deleted. It holds the "
+                 "Hetzner token; the other two only apply what it decides.",
+    },
+    {
         "key": "autoscaler",
         "display": "Autoscaler",
         "stack": "monitoring",
         "service": "monitoring_autoscaler",
         "category": "Platform",
-        "blurb": "Discovers components by label, scales their replicas, and buys and "
-                 "sells Hetzner workers to fit them.",
+        "blurb": "Applies the overseer's decisions to application services: replica "
+                 "counts, placement constraints, and reservations measured from real "
+                 "usage.",
+    },
+    {
+        "key": "dataguard",
+        "display": "Dataguard",
+        "stack": "monitoring",
+        "service": "monitoring_dataguard",
+        "category": "Platform",
+        "blurb": "The counterpart for stateful components: replica sets, sentinel "
+                 "quorums, failover, backups and restores.",
     },
     {
         "key": "exporters",

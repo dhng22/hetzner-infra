@@ -50,8 +50,17 @@ write_files:
         --alias loki --grant-all-permissions || true
 
       # retry join — the manager may briefly be busy
+      #
+      # __JOIN_AVAILABILITY__ is `active` for an ordinary worker and `pause` for
+      # a machine bought to hold a database. A paused node accepts no NEW tasks,
+      # which closes the window between joining and being labelled: without it,
+      # Swarm can place an application replica on a database's machine in the
+      # seconds before the overseer stamps `dedicated=true` on it, and the
+      # constraint that keeps applications off it has nothing to match yet.
+      # The overseer labels the node and then sets it active.
       for i in $(seq 1 30); do
         if docker swarm join --advertise-addr "$PRIVATE_IP" \
+             --availability "__JOIN_AVAILABILITY__" \
              --token "__SWARM_TOKEN__" "__MANAGER_IP__:2377"; then
           echo "joined swarm on attempt $i"
           exit 0

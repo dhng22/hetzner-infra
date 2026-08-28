@@ -53,18 +53,26 @@ SEED = [
         "replicas": 1, "cpu_reservation": 0.1, "memory_reservation_mb": 128,
         "cpu_limit": 0.5, "memory_limit_mb": 512, "slo_p95_ms": 800,
     }),
-    ("redis", "cache", {"maxmemory_mb": 512, "external_port": 46379}),
-    ("redis", "sessions", {"maxmemory_mb": 128, "memory_reservation_mb": 256,
-                           "cpu_reservation": 0.1, "exporter": "false",
-                           "version": "7.2-alpine"}),
+    # A managed Redis and a managed Mongo, both with a visualiser, so the
+    # preview exercises the Observability group, the Dataguard group and the
+    # View button rather than only the plain-configuration half.
+    ("redis", "cache", {"maxmemory_mb": 512, "external_port": 46379,
+                        "dataguard": "true", "visualizer": "true",
+                        "backup_target": "s3-main"}),
     ("mongo", "documents", {"cache_mb": 256, "memory_reservation_mb": 768,
-                            "username": "root"}),
+                            "username": "root", "dataguard": "true",
+                            "visualizer": "true", "secondary_reads": "true",
+                            "backup_target": "s3-main"}),
 ]
 
 SEED_ENV = {
     "api": [("LOG_LEVEL", "INFO"), ("FEATURE_NEW_CHECKOUT", "true"),
             ("OPENAI_TIMEOUT_MS", "30000"), ("MAX_UPLOAD_MB", "25"),
-            ("REDIS_URL", "redis://default:8f2b91c4de77a0135be2@cache_redis:6379")],
+            # The SENTINELS, as a real one would be: the client asks them who
+            # the primary is, so a failover changes the answer and not this line.
+            ("REDIS_URL", "redis+sentinel://default:8f2b91c4de77a0135be2"
+                          "@cache_sentinel-1:26379,cache_sentinel-2:26379,"
+                          "cache_sentinel-3:26379/cache/0")],
     "api-staging": [("LOG_LEVEL", "DEBUG"), ("MAX_UPLOAD_MB", "5")],
 }
 
@@ -85,6 +93,8 @@ def detail_contexts():
     out = []
     for component in components.all_components()[0]:
         view = fixtures.component_view(component)
+        if component.MANAGER_FIELD == "dataguard":
+            view["data_gb"] = fixtures.component_data_gb(component.name)
         tabs = component.tabs()
         context = {
             "component": component,
@@ -92,7 +102,7 @@ def detail_contexts():
             "tabs": tabs,
             # Open each component on its most interesting tab, so the preview
             # shows the thing worth looking at rather than a task table.
-            "tab": "environment" if component.TYPE == "app" else "credentials",
+            "tab": "environment" if component.TYPE == "app" else "map",
             "fields": type(component).fields(),
             "env_pairs": components.store.read_env(component.name),
             "logs": fixtures.logs(component.service),
@@ -109,8 +119,16 @@ def detail_contexts():
             context["deployments"] = fixtures.history(component.name)
             context["rollout"] = fixtures.update_status(component.service)
             context["registries"] = fixtures.registry_logins()
+        if "backups" in names:
+            context["snapshots"], context["pitr"] = [], {}
         if "map" in names:
-            context["map"] = fixtures.component_map(component.services())
+            # The component name is passed for a database, exactly as the live
+            # route passes it: its map is coloured by which member is primary,
+            # and that answer is dataguard's rather than the task list's.
+            context["map"] = fixtures.component_map(
+                component.services(),
+                component=(component.name
+                           if component.MANAGER_FIELD == "dataguard" else None))
         # Credentials come from the component, for any type that declares them.
         # The preview used to branch on `TYPE == "redis"` here, which is exactly
         # the drift a second database type turns into a blank tab.
@@ -121,13 +139,21 @@ def detail_contexts():
     return out
 
 
+def _preview_targets():
+    return [
+        {"name": "s3-main", "kind": "s3", "where": "https://fsn1.your-objectstorage.com",
+         "detail": "aichat-backups/prod", "credential": "storage-s3-main-v1"},
+    ]
+
+
 def main():
     seed_components()
     details = detail_contexts()
 
     labels = {"overview": "Overview", "components": "Components", "cluster": "Cluster",
-              "autoscaler": "Autoscaler", "alerts": "Alerts", "settings": "Settings",
-              "autoscaler-silent": "Autoscaler, no metrics", "login": "Sign in"}
+              "manager": "Manager", "alerts": "Alerts", "storage": "Storage",
+              "settings": "Settings",
+              "manager-silent": "Manager, no metrics", "login": "Sign in"}
     for d in details:
         labels[f"component-{d['component'].name}"] = d["component"].name
     for type_name, cls in components.TYPES.items():
@@ -175,11 +201,26 @@ def main():
             # people review shows the state the live panel is in when they go
             # looking, rather than only the one where everything answered.
             a_silent=fixtures.autoscaler_state_silent(),
+            # The Dataguard tab is on the same page and is passed the same way
+            # the live route passes it, so a shape change here fails the build
+            # rather than showing up as an empty panel in the artefact.
+            dg=fixtures.dataguard_state(),
+            dataguard_groups=panel._settings_groups(only=panel.DATAGUARD_GROUPS),
+            tab="fleet",
+            targets=[dict(t, used_by=["documents"]) for t in _preview_targets()],
+            # The Alerts page's own list. Named `targets` there, and Storage's
+            # rows are named `targets` too — they are rendered into different
+            # sections and never at the same time, and the live routes pass each
+            # one on its own page.
+            alert_kinds=("telegram",),
+            alert_targets=[{"name": "team", "kind": "telegram",
+                            "where": "chat -1001234567890", "masked": "…AbCdEf"}],
             # Two disjoint sets, exactly as the live routes pass them — one
             # shared `groups` here would put the whole form on both pages.
-            groups=panel._settings_groups(skip=panel.AUTOSCALER_GROUPS),
+            groups=panel._settings_groups(
+                skip=panel.AUTOSCALER_GROUPS + panel.DATAGUARD_GROUPS),
             scaling_groups=panel._settings_groups(only=panel.AUTOSCALER_GROUPS),
-            elsewhere=panel.AUTOSCALER_GROUPS,
+            elsewhere=panel.AUTOSCALER_GROUPS + panel.DATAGUARD_GROUPS,
             # chrome
             nav=panel.NAV,
             types=components.TYPES,
@@ -209,6 +250,12 @@ def main():
             creds_href=lambda name: "#",
             create_href=lambda: "#",
             settings_href=lambda: "#",
+            storage_href=lambda: "#",
+            alert_target_href=lambda: "#",
+            alert_target_delete_href=lambda name: "#",
+            storage_delete_href=lambda name: "#",
+            viewer_href=lambda name: "#",
+            restore_href=lambda name: "#",
             registry_href=lambda: "#",
             stack_href=lambda: "#",
             logout_href=lambda: "#",

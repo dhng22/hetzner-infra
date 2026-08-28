@@ -82,21 +82,17 @@ if [ "$stack" = "monitoring" ]; then
   "$INFRA_DIR/bin/render-fleet-env" "$FLEET_ENV" >/dev/null \
     || die "could not render $FLEET_ENV"
 
-  case "${ALERT_TELEGRAM_BOT_TOKEN:-}${ALERT_TELEGRAM_CHAT_ID:-}" in
-    ""|*REPLACE_ME*)
-      # No destination. Install the config that drops everything VISIBLY: the
-      # stack still comes up, `smoke-test` fails on it, and the panel says so.
-      # Referencing a docker secret that may not exist would take the whole
-      # monitoring stack down instead, which is a worse answer to "I have not
-      # set up Telegram yet".
-      cp "$INFRA_DIR/config/alertmanager-none.yml" "$INFRA_DIR/config/alertmanager.yml"
-      echo "WARNING: no alert destination configured — alerts will be dropped." >&2
-      ;;
-    *)
-      envsubst < "$INFRA_DIR/config/alertmanager.yml.tpl" \
-        > "$INFRA_DIR/config/alertmanager.yml"
-      ;;
-  esac
+  # GENERATED from the target list, not envsubst'd from a template. The template
+  # had exactly one destination baked into it — two rows on the Settings page —
+  # so you could not have two, could not have none deliberately, and adding
+  # Slack meant hand-editing YAML and widening a check here that nothing would
+  # have reminded you about. Targets are managed under Alerts > Targets now, and
+  # every alert goes to all of them.
+  #
+  # NO TARGETS is a real state and not an error: the file it writes then drops
+  # everything visibly, the stack still comes up, and `smoke-test` reports it.
+  "$INFRA_DIR/bin/render-alertmanager" "$INFRA_DIR/config/alertmanager.yml" \
+    || die "could not render the alertmanager config"
   # It holds a bot token, so it is not world-readable. Not a docker secret,
   # deliberately: a secret cannot be absent and cannot be changed, and this has
   # to be both optional and editable. Same trade as a component's credentials.

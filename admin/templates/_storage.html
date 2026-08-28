@@ -1,0 +1,130 @@
+{#
+  Where backups go. A component names a target; this page is what a name means.
+#}
+<div class="page-head">
+  <div>
+    <h1>Storage</h1>
+    <p>S3-compatible buckets — AWS, Backblaze, Hetzner Object Storage, a MinIO of your
+       own. Defined once for the whole cluster; a database names one on its own Settings
+       tab, so changing an endpoint is one edit here rather than an edit per database
+       and the one you forgot.</p>
+  </div>
+</div>
+
+<section class="panel">
+  <div class="panel-head"><h2>Targets</h2></div>
+  <div class="panel-body">
+    {% if targets %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Name</th><th>Endpoint</th><th>Bucket</th><th>Credentials</th><th>Used by</th><th></th>
+        </tr></thead>
+        <tbody>
+        {% for t in targets %}
+        <tr>
+          <td class="mono">{{ t.name }}</td>
+          <td class="mono small">{{ t.where }}</td>
+          <td class="mono small">{{ t.detail }}</td>
+          <td class="mono small">
+            {% if t.credential %}{{ t.credential }}
+            {% else %}<span class="pill bad plain">missing</span>{% endif %}
+          </td>
+          <td class="mono small">{{ t.used_by|join(', ') or '—' }}</td>
+          <td>
+            <form method="post" action="{{ storage_delete_href(t.name) }}"
+                  {% if preview %}data-preview{% endif %}>
+              <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+              <input type="text" name="confirm" placeholder="{{ t.name }}"
+                     size="10" autocomplete="off" required>
+              <button class="btn btn-sm btn-danger" type="submit">Remove</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="panel-note">
+      Removing a target removes the DEFINITION. Nothing already written to it is deleted,
+      and a target still named by a component is refused rather than orphaned.
+    </div>
+    {% else %}
+    <p class="hint">No targets yet. A managed database with no backup target still runs
+    and still fails over — dataguard simply refuses to change its shape, because a
+    topology change can lose data and there would be nothing to restore from.</p>
+    {% endif %}
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Add a target</h2></div>
+  <form method="post" action="{{ storage_href() }}" {% if preview %}data-preview{% endif %}>
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <div class="panel-body">
+      <div class="grid-2">
+        <div class="field">
+          <label for="st-name">Name</label>
+          <input id="st-name" name="name" type="text" required
+                 pattern="[a-z][a-z0-9-]{1,31}" placeholder="s3-main">
+          <p class="hint">What a database's Settings tab will refer to. Not renameable.</p>
+        </div>
+        <div class="field">
+          <label for="st-endpoint">Endpoint</label>
+          <input id="st-endpoint" name="endpoint" type="text"
+                 placeholder="https://fsn1.your-objectstorage.com">
+          <p class="hint">Blank for AWS. Anything else needs its own URL, and it should be
+          https — what travels over it is the whole database.</p>
+        </div>
+        <div class="field">
+          <label for="st-region">Region</label>
+          <input id="st-region" name="region" type="text" placeholder="eu-central-1">
+        </div>
+        <div class="field">
+          <label for="st-bucket">Bucket</label>
+          <input id="st-bucket" name="bucket" type="text" placeholder="cluster-backups">
+        </div>
+        <div class="field">
+          <label for="st-prefix">Prefix</label>
+          <input id="st-prefix" name="prefix" type="text" placeholder="prod/">
+          <p class="hint">Optional. Each database gets its own folder under this.</p>
+        </div>
+        <div class="field">
+          <label for="st-access">Access key</label>
+          <input id="st-access" name="access_key" type="text" autocomplete="off"
+                 spellcheck="false">
+          <p class="hint">Stored as a Swarm secret, never in a file the panel writes — a
+          backup agent runs on whichever machine holds the database, and Swarm is the only
+          thing that can put a credential there.</p>
+        </div>
+        <div class="field">
+          <label for="st-secret">Secret key</label>
+          <input id="st-secret" name="secret_key" type="password" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="st-sse">Server-side encryption</label>
+          <label class="switch switch-inline">
+            <input id="st-sse" type="checkbox" name="sse" checked>
+            <span class="switch-track" aria-hidden="true"></span>
+            <span class="switch-label">on</span>
+          </label>
+          <p class="hint">On by default. It costs nothing on any implementation that
+          supports it, and what is in the bucket is every row of your database.</p>
+        </div>
+        <div class="field">
+          <label for="st-path">Path-style addressing</label>
+          <label class="check">
+            <input id="st-path" type="checkbox" name="path_style">
+            <span>Needed by MinIO and some self-hosted gateways.</span>
+          </label>
+        </div>
+      </div>
+    </div>
+    <div class="sticky-save">
+      <button class="btn btn-primary" type="submit">Save target</button>
+      <span class="muted">Credentials are written first: a target pointing at a secret
+      that does not exist is a database that fails to deploy with a message about Swarm
+      rather than about storage.</span>
+    </div>
+  </form>
+</section>

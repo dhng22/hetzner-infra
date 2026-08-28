@@ -643,6 +643,12 @@ ul.tight li { margin-bottom: 2px; }
 .sw-data     { background: var(--s-data); }
 .sw-observe  { background: var(--s-observe); }
 .sw-platform { background: var(--s-platform); }
+/* A replica set is not a palette of equals: there is exactly one primary and
+   losing it is the outage, so it gets the alarm colour and everything else gets
+   the calm one. Reusing --ember and --s-prod rather than inventing two more
+   hues keeps the same meanings the rest of the panel already assigns them. */
+.sw-primary   { background: var(--ember); }
+.sw-secondary { background: var(--s-prod); }
 
 /* --- the tree ---------------------------------------------------------------
    Root (cluster) at the top, hosts on the next level, their tasks hanging below
@@ -805,6 +811,10 @@ a.tnode.is-link:focus-visible { outline: 2px solid var(--accent); outline-offset
                  --slot-ring: var(--s-observe); }
 .slot-platform { --slot-bg: color-mix(in srgb, var(--s-platform) 14%, var(--surface));
                  --slot-ring: var(--s-platform); }
+.slot-primary   { --slot-bg: color-mix(in srgb, var(--ember) 14%, var(--surface));
+                  --slot-ring: var(--ember); }
+.slot-secondary { --slot-bg: color-mix(in srgb, var(--s-prod) 14%, var(--surface));
+                  --slot-ring: var(--s-prod); }
 .slot.is-empty { --slot-bg: transparent; }
 
 @media (max-width: 720px) {
@@ -824,6 +834,12 @@ a.tnode.is-link:focus-visible { outline: 2px solid var(--accent); outline-offset
 .switch-track::after { content: ""; position: absolute; top: 2px; inset-inline-start: 2px;
                        width: 14px; height: 14px; border-radius: 50%;
                        background: var(--surface); transition: transform .15s ease; }
+/* Inside a field rather than in a panel title: same control, but it sits under
+   its own label with the help text below, so it needs the field's rhythm rather
+   than the title bar's. */
+.switch-inline { margin-block-start: 2px; }
+/* Bottom of the header's right-hand column: an action, under the facts. */
+.head-view { margin-block-start: var(--s-2); align-self: flex-end; }
 .switch input:checked + .switch-track { background: var(--accent); }
 .switch input:checked + .switch-track::after { transform: translateX(16px); }
 .switch input:focus-visible + .switch-track { outline: 2px solid var(--accent);
@@ -1000,14 +1016,19 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
         <span class="dot" aria-hidden="true"></span>Cluster
       </a>
     
-      <a class="nav-item" href="#view-autoscaler" data-nav="autoscaler"
+      <a class="nav-item" href="#view-manager" data-nav="manager"
          >
-        <span class="dot" aria-hidden="true"></span>Autoscaler
+        <span class="dot" aria-hidden="true"></span>Manager
       </a>
     
       <a class="nav-item" href="#view-alerts" data-nav="alerts"
          >
         <span class="dot" aria-hidden="true"></span>Alerts
+      </a>
+    
+      <a class="nav-item" href="#view-storage" data-nav="storage"
+         >
+        <span class="dot" aria-hidden="true"></span>Storage
       </a>
     
       <a class="nav-item" href="#view-settings" data-nav="settings"
@@ -1018,7 +1039,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
 
     <div class="nav-label">Preview</div>
     <a class="nav-item" href="#view-login"><span class="dot" aria-hidden="true"></span>Sign-in screen</a>
-    <a class="nav-item" href="#view-autoscaler-silent"><span class="dot" aria-hidden="true"></span>Autoscaler, no metrics</a>
+    <a class="nav-item" href="#view-manager-silent"><span class="dot" aria-hidden="true"></span>Manager, no metrics</a>
 
     <div class="rail-foot">
       <button class="btn btn-sm" type="button" data-theme-toggle style="width:100%">Switch theme</button>
@@ -1071,8 +1092,8 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
 <div class="tiles">
   <div class="tile">
     <span class="k">Components</span>
-    <span class="v">4<span class="muted">/5</span></span>
-    <span class="m">healthy · 1 not deployed</span>
+    <span class="v">4<span class="muted">/4</span></span>
+    <span class="m">healthy</span>
   </div>
 
   <div class="tile is-bad">
@@ -1139,7 +1160,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
           <span class="tnode-title">aichat</span>
           <span class="tnode-sub">
             <b data-f="hosts">4</b> hosts
-            · <b data-f="total">30</b> tasks
+            · <b data-f="total">29</b> tasks
           </span>
         </div>
       </div>
@@ -1156,11 +1177,13 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
               </span>
               <span class="tnode-title" title="aichat-master">aichat-master</span>
               <span class="tnode-sub">
-                <b data-f="tasks">15</b> tasks · 4 vCPU · 7.6 GB
+                <b data-f="tasks">14</b> tasks · 4 vCPU · 7.6 GB · 160.0 GB disk
               </span>
               <span class="tnode-meters">
                 <span title="node CPU utilisation — how busy it is right now">cpu <b data-f="cpu">78%</b></span>
                 <span title="node memory utilisation — how much is in use right now">mem <b data-f="mem">61%</b></span>
+                
+                <span title="root filesystem — where docker keeps every volume">disk <b data-f="disk">88%</b></span>
               </span>
 
               
@@ -1173,27 +1196,20 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
             <!-- data-sig matches the signature the poller computes, so the first
                  tick on an unchanged cluster rebuilds nothing at all. -->
             <div class="slots" data-slots
-                 data-sig="cache|data|ok|10.5|16.8;documents|data|ok|1.5|2.5;sessions|data|ok|1.5|2.5;cloudflared|staging|ok|1.5|2.5;alertmanager|observe|ok|1.5|2.5;cadvisor|observe|ok|1.5|2.5;grafana|observe|ok|2.5|3.4;loki|observe|ok|5.0|8.4;node-exporter|observe|ok|1.5|2.5;redis-exporter|observe|ok|1.5|2.5;victoriametrics|observe|ok|7.5|10.1;vmagent|observe|ok|1.5|2.5;vmalert|observe|ok|1.5|2.5;autoscaler|platform|ok|1.5|2.5;ui|platform|ok|1.5|2.5;">
+                 data-sig="cache|data|ok|10.5|16.8;documents|data|ok|1.5|2.5;cloudflared|staging|ok|1.5|2.5;alertmanager|observe|ok|1.5|2.5;cadvisor|observe|ok|1.5|2.5;grafana|observe|ok|2.5|3.4;loki|observe|ok|5.0|8.4;node-exporter|observe|ok|1.5|2.5;redis-exporter|observe|ok|1.5|2.5;victoriametrics|observe|ok|7.5|10.1;vmagent|observe|ok|1.5|2.5;vmalert|observe|ok|1.5|2.5;autoscaler|platform|ok|1.5|2.5;ui|platform|ok|1.5|2.5;">
               
                 
                 <span class="slot slot-data" tabindex="0"
                       style="--cpu:10.5;--mem:16.8"
-                      data-tip="cache_redis — task cache0kd93jf on aichat-master&#10;state: running&#10;reserves 10.5% of this node's CPU, 16.8% of its memory">
+                      data-tip="cache_redis-1 — task cache0kd93jf on aichat-master&#10;state: running&#10;reserves 10.5% of this node's CPU, 16.8% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>cache
                 </span>
               
                 
                 <span class="slot slot-data" tabindex="0"
                       style="--cpu:1.5;--mem:2.5"
-                      data-tip="documents_mongo — task docume0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      data-tip="documents_mongo-1 — task docume0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
                   <i class="dot dot-ok" aria-hidden="true"></i>documents
-                </span>
-              
-                
-                <span class="slot slot-data" tabindex="0"
-                      style="--cpu:1.5;--mem:2.5"
-                      data-tip="sessions_redis — task sessio0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>sessions
                 </span>
               
                 
@@ -1293,11 +1309,13 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
               </span>
               <span class="tnode-title" title="aichat-worker-1754812203">aichat-worker-1754812203</span>
               <span class="tnode-sub">
-                <b data-f="tasks">6</b> tasks · 3 vCPU · 3.8 GB
+                <b data-f="tasks">6</b> tasks · 3 vCPU · 3.8 GB · 80.0 GB disk
               </span>
               <span class="tnode-meters">
                 <span title="node CPU utilisation — how busy it is right now">cpu <b data-f="cpu">64%</b></span>
                 <span title="node memory utilisation — how much is in use right now">mem <b data-f="mem">47%</b></span>
+                
+                <span title="root filesystem — where docker keeps every volume">disk <b data-f="disk">41%</b></span>
               </span>
 
               
@@ -1367,11 +1385,13 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
               </span>
               <span class="tnode-title" title="aichat-worker-1754819114">aichat-worker-1754819114</span>
               <span class="tnode-sub">
-                <b data-f="tasks">6</b> tasks · 3 vCPU · 3.8 GB
+                <b data-f="tasks">6</b> tasks · 3 vCPU · 3.8 GB · 80.0 GB disk
               </span>
               <span class="tnode-meters">
                 <span title="node CPU utilisation — how busy it is right now">cpu <b data-f="cpu">71%</b></span>
                 <span title="node memory utilisation — how much is in use right now">mem <b data-f="mem">52%</b></span>
+                
+                <span title="root filesystem — where docker keeps every volume">disk <b data-f="disk">33%</b></span>
               </span>
 
               
@@ -1441,11 +1461,13 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
               </span>
               <span class="tnode-title" title="aichat-worker-1754823887">aichat-worker-1754823887</span>
               <span class="tnode-sub">
-                <b data-f="tasks">3</b> tasks · 3 vCPU · 3.8 GB
+                <b data-f="tasks">3</b> tasks · 3 vCPU · 3.8 GB · 80.0 GB disk
               </span>
               <span class="tnode-meters">
                 <span title="node CPU utilisation — how busy it is right now">cpu <b data-f="cpu">12%</b></span>
                 <span title="node memory utilisation — how much is in use right now">mem <b data-f="mem">19%</b></span>
+                
+                <span title="root filesystem — where docker keeps every volume">disk <b data-f="disk">12%</b></span>
               </span>
 
               
@@ -1528,7 +1550,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
           <span class="stripe"></span>
           <span>
             <span class="row-title">cache</span>
-            <span class="row-sub">redis:7.4-alpine</span>
+            <span class="row-sub">redis:7.4-alpine · 0/4 replicas</span>
           </span>
           <span class="row-metric hide-sm">
             <span class="k">Tasks</span>
@@ -1537,24 +1559,11 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
           <span class="pill ok">healthy</span>
         </a>
       
-        <a class="row mute" href="#view-component-documents">
+        <a class="row ok" href="#view-component-documents">
           <span class="stripe"></span>
           <span>
             <span class="row-title">documents</span>
-            <span class="row-sub">mongo:7.0</span>
-          </span>
-          <span class="row-metric hide-sm">
-            <span class="k">Tasks</span>
-            <span class="v num">0/0</span>
-          </span>
-          <span class="pill mute">not deployed</span>
-        </a>
-      
-        <a class="row ok" href="#view-component-sessions">
-          <span class="stripe"></span>
-          <span>
-            <span class="row-title">sessions</span>
-            <span class="row-sub">redis:7.2-alpine</span>
+            <span class="row-sub">mongo:7.0 · 0/4 members</span>
           </span>
           <span class="row-metric hide-sm">
             <span class="k">Tasks</span>
@@ -1611,7 +1620,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
       
       <a class="menu-item" role="menuitem" href="#view-new-redis">
         <span class="menu-label">Database</span>
-        <span class="menu-sub">A password-protected Redis, with its own volume.</span>
+        <span class="menu-sub">A password-protected Redis with Sentinel failover.</span>
       </a>
       
     </div>
@@ -1690,7 +1699,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
   <div class="panel-head">
     <h2>Data</h2>
     <span class="spacer"></span>
-    <span class="muted">3</span>
+    <span class="muted">2</span>
   </div>
   <div class="panel-body">
     <div class="cards">
@@ -1700,7 +1709,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
           <span class="card-name">cache</span>
           <span class="pill ok">healthy</span>
         </div>
-        <div class="card-sub mono">redis:7.4-alpine</div>
+        <div class="card-sub mono">redis:7.4-alpine · 0/4 replicas</div>
         <div class="card-foot">
           <span class="muted">Redis</span>
           
@@ -1712,10 +1721,10 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
         <div class="card-foot subtle">
           <span class="muted">reserved of cluster</span>
           <span class="gauge-pair">
-            <span class="gauge gauge-inline gauge-cpu" style="--v:1.9"
-                  data-tip="CPU: 1.9% of the cluster — 0.25 vCPU across 1 replica(s)"></span>
-            <span class="gauge gauge-inline gauge-mem" style="--v:3.5"
-                  data-tip="Memory: 3.5% of the cluster — 672 MB across 1 replica(s)"></span>
+            <span class="gauge gauge-inline gauge-cpu" style="--v:2.2"
+                  data-tip="CPU: 2.2% of the cluster — 0.28 vCPU across 1 replica(s)"></span>
+            <span class="gauge gauge-inline gauge-mem" style="--v:3.8"
+                  data-tip="Memory: 3.8% of the cluster — 744 MB across 1 replica(s)"></span>
           </span>
         </div>
         
@@ -1724,26 +1733,11 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
       <a class="card" href="#view-component-documents">
         <div class="card-head">
           <span class="card-name">documents</span>
-          <span class="pill mute">not deployed</span>
-        </div>
-        <div class="card-sub mono">mongo:7.0</div>
-        <div class="card-foot">
-          <span class="muted">MongoDB</span>
-          
-            <span class="muted">not deployed</span>
-          
-        </div>
-        
-      </a>
-      
-      <a class="card" href="#view-component-sessions">
-        <div class="card-head">
-          <span class="card-name">sessions</span>
           <span class="pill ok">healthy</span>
         </div>
-        <div class="card-sub mono">redis:7.2-alpine</div>
+        <div class="card-sub mono">mongo:7.0 · 0/4 members</div>
         <div class="card-foot">
-          <span class="muted">Redis</span>
+          <span class="muted">MongoDB</span>
           
             <span class="mono">1/1 replicas</span>
           
@@ -1753,10 +1747,10 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
         <div class="card-foot subtle">
           <span class="muted">reserved of cluster</span>
           <span class="gauge-pair">
-            <span class="gauge gauge-inline gauge-cpu" style="--v:0.8"
-                  data-tip="CPU: 0.8% of the cluster — 0.1 vCPU across 1 replica(s)"></span>
-            <span class="gauge gauge-inline gauge-mem" style="--v:1.3"
-                  data-tip="Memory: 1.3% of the cluster — 256 MB across 1 replica(s)"></span>
+            <span class="gauge gauge-inline gauge-cpu" style="--v:5.2"
+                  data-tip="CPU: 5.2% of the cluster — 0.67 vCPU across 1 replica(s)"></span>
+            <span class="gauge gauge-inline gauge-mem" style="--v:8.5"
+                  data-tip="Memory: 8.5% of the cluster — 1648 MB across 1 replica(s)"></span>
           </span>
         </div>
         
@@ -1918,7 +1912,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
   <div class="panel-head">
     <h2>Platform</h2>
     <span class="spacer"></span>
-    <span class="muted">3</span>
+    <span class="muted">5</span>
   </div>
   <div class="rows">
     
@@ -1926,8 +1920,38 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
     <div class="row ok">
       <span class="stripe"></span>
       <span>
+        <span class="row-title">Overseer</span>
+        <span class="row-sub">Decides everything: which services are slow and why, how many machines the cluster needs, and which of them may be deleted. It holds the Hetzner token; the other two only apply what it decides.</span>
+      </span>
+      <span class="row-metric hide-sm">
+        <span class="k">Tasks</span>
+        <span class="v num">1/1</span>
+      </span>
+      
+      <span class="pill ok">healthy</span>
+    </div>
+    
+    
+    <div class="row ok">
+      <span class="stripe"></span>
+      <span>
         <span class="row-title">Autoscaler</span>
-        <span class="row-sub">Discovers components by label, scales their replicas, and buys and sells Hetzner workers to fit them.</span>
+        <span class="row-sub">Applies the overseer&#39;s decisions to application services: replica counts, placement constraints, and reservations measured from real usage.</span>
+      </span>
+      <span class="row-metric hide-sm">
+        <span class="k">Tasks</span>
+        <span class="v num">1/1</span>
+      </span>
+      
+      <span class="pill ok">healthy</span>
+    </div>
+    
+    
+    <div class="row ok">
+      <span class="stripe"></span>
+      <span>
+        <span class="row-title">Dataguard</span>
+        <span class="row-sub">The counterpart for stateful components: replica sets, sentinel quorums, failover, backups and restores.</span>
       </span>
       <span class="row-metric hide-sm">
         <span class="k">Tasks</span>
@@ -2050,6 +2074,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
       3.0 vCPU · 2304 MB
     </span>
     
+    
   </div>
 </div>
 
@@ -2104,7 +2129,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-26T10:38:42Z" data-localtime>2026-08-26T10:38:42Z</time>
+          <time datetime="2026-08-27T17:03:07Z" data-localtime>2026-08-27T17:03:07Z</time>
           
         </div>
       </div>
@@ -2259,7 +2284,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
                     aria-label="Remove MAX_UPLOAD_MB">Remove</button>
             
             <input class="k-in" type="text" name="key" value="REDIS_URL" aria-label="Variable name">
-            <input type="text" name="value" value="redis://default:8f2b91c4de77a0135be2@cache_redis:6379" aria-label="Value for REDIS_URL">
+            <input type="text" name="value" value="redis+sentinel://default:8f2b91c4de77a0135be2@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0" aria-label="Value for REDIS_URL">
             <button class="btn btn-sm btn-danger" type="button" data-remove-var
                     aria-label="Remove REDIS_URL">Remove</button>
             
@@ -2268,7 +2293,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
           <textarea class="bulk-in" name="bulk" rows="14" hidden disabled wrap="off"
                     spellcheck="false" autocapitalize="off" autocorrect="off"
                     aria-label="Environment for api as text"
-                    >LOG_LEVEL=INFO&#10;FEATURE_NEW_CHECKOUT=true&#10;OPENAI_TIMEOUT_MS=30000&#10;MAX_UPLOAD_MB=25&#10;REDIS_URL=redis://default:8f2b91c4de77a0135be2@cache_redis:6379&#10;</textarea>
+                    >LOG_LEVEL=INFO&#10;FEATURE_NEW_CHECKOUT=true&#10;OPENAI_TIMEOUT_MS=30000&#10;MAX_UPLOAD_MB=25&#10;REDIS_URL=redis+sentinel://default:8f2b91c4de77a0135be2@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0&#10;</textarea>
           <p class="hint" data-mode-only="text" hidden>
             One <code>KEY=VALUE</code> per line — paste a whole <code>.env</code> in.
             Blank lines and <code>#</code> comments are dropped, a leading
@@ -2543,11 +2568,13 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
     <span class="pill mute plain mono">6 replicas</span>
   </div>
 
+  
   <p class="panel-intro">
     Every node, and every replica of <strong>api</strong> on it. The label
     on a block is the image tag that replica is running, not the service name — one colour
     means the fleet agrees, two means an update is in flight or a rollback left it split.
   </p>
+  
 
   <div class="legend">
     
@@ -2563,8 +2590,10 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         <div class="tnode tnode-root">
           <span class="tnode-title">api</span>
           <span class="tnode-sub">
+            
             <b>2</b> tags
             · <b>6</b> replicas
+            
           </span>
         </div>
       </div>
@@ -2685,14 +2714,19 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
     </div>
   </div>
 
+  
   <div class="panel-note">
     Replicas are counted from RUNNING tasks. A rollout that is stuck shows the old tag
     holding steady while the new one never grows — Swarm rolls a failing update back, so
     the end state of a bad deploy is one colour again, and the Deployments tab is where
     the verdict is written down.
   </div>
+  
 </section>
   </div>
+  
+
+  <!-- backups --------------------------------------------------------------->
   
 
   
@@ -2824,15 +2858,16 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
 
 
 
+
 <section class="panel" data-toggle-section>
   <div class="panel-head">
     <h2>Autoscale</h2>
     
     
-    <label class="switch" title="Let the autoscaler own the replica count">
+    <label class="switch" title="Let the autoscaler own the replica count, using the policy below.">
       <input type="hidden" name="__bool__" value="autoscale">
       <input type="checkbox" name="autoscale" value="true"
-             data-toggle-master
+             data-toggle-master data-placement-sync
              checked>
       <span class="switch-track" aria-hidden="true"></span>
       <span class="switch-label">on</span>
@@ -3168,12 +3203,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
       
     </div>
   </div>
-  <div class="panel-note">
-    With this off the replica count is yours and nothing below applies. The
-    autoscaler still measures this component and still right-sizes its
-    reservations — it just stops changing how many of it there are.
-  </div>
+  <div class="panel-note">With this off the replica count is yours and nothing below applies. The autoscaler still measures this component and still right-sizes its reservations — it just stops changing how many of it there are, and stops moving it between the master and the workers.</div>
 </section>
+
 
       
 
@@ -3367,6 +3399,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
       0.1 vCPU · 128 MB
     </span>
     
+    
   </div>
 </div>
 
@@ -3421,7 +3454,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-26T10:38:42Z" data-localtime>2026-08-26T10:38:42Z</time>
+          <time datetime="2026-08-27T17:03:07Z" data-localtime>2026-08-27T17:03:07Z</time>
           
         </div>
       </div>
@@ -3803,11 +3836,13 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
     <span class="pill mute plain mono">1 replica</span>
   </div>
 
+  
   <p class="panel-intro">
     Every node, and every replica of <strong>api-staging</strong> on it. The label
     on a block is the image tag that replica is running, not the service name — one colour
     means the fleet agrees, two means an update is in flight or a rollback left it split.
   </p>
+  
 
   <div class="legend">
     
@@ -3821,8 +3856,10 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="tnode tnode-root">
           <span class="tnode-title">api-staging</span>
           <span class="tnode-sub">
+            
             <b>1</b> tag
             · <b>1</b> replica
+            
           </span>
         </div>
       </div>
@@ -3917,14 +3954,19 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
     </div>
   </div>
 
+  
   <div class="panel-note">
     Replicas are counted from RUNNING tasks. A rollout that is stuck shows the old tag
     holding steady while the new one never grows — Swarm rolls a failing update back, so
     the end state of a bad deploy is one colour again, and the Deployments tab is where
     the verdict is written down.
   </div>
+  
 </section>
   </div>
+  
+
+  <!-- backups --------------------------------------------------------------->
   
 
   
@@ -4056,15 +4098,16 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
 
 
+
 <section class="panel" data-toggle-section>
   <div class="panel-head">
     <h2>Autoscale</h2>
     
     
-    <label class="switch" title="Let the autoscaler own the replica count">
+    <label class="switch" title="Let the autoscaler own the replica count, using the policy below.">
       <input type="hidden" name="__bool__" value="autoscale">
       <input type="checkbox" name="autoscale" value="true"
-             data-toggle-master
+             data-toggle-master data-placement-sync
              >
       <span class="switch-track" aria-hidden="true"></span>
       <span class="switch-label">on</span>
@@ -4400,12 +4443,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
       
     </div>
   </div>
-  <div class="panel-note">
-    With this off the replica count is yours and nothing below applies. The
-    autoscaler still measures this component and still right-sizes its
-    reservations — it just stops changing how many of it there are.
-  </div>
+  <div class="panel-note">With this off the replica count is yours and nothing below applies. The autoscaler still measures this component and still right-sizes its reservations — it just stops changing how many of it there are, and stops moving it between the master and the workers.</div>
 </section>
+
 
       
 
@@ -4565,7 +4605,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   <div>
     <div class="eyebrow"><a href="#view-components">Components</a></div>
     <h1>cache</h1>
-    <p class="hint">A password-protected Redis, with its own volume.</p>
+    <p class="hint">A password-protected Redis with Sentinel failover.</p>
     
     
     
@@ -4587,8 +4627,16 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
     
     <span class="head-reserved mono"
           data-tip="Reserved by every replica of every service in cache, across the cluster">
-      0.25 vCPU · 672 MB
+      0.28 vCPU · 744 MB
     </span>
+    
+    
+    
+    <a class="btn btn-sm head-view" href="#"
+       target="_blank" rel="noopener"
+       title="Browse this database. Full access, through your panel session; it starts on demand and stops when idle.">
+      View data
+    </a>
     
   </div>
 </div>
@@ -4603,7 +4651,17 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   
   <a class="tab" role="tab" data-tab="credentials" href="#view-component-cache"
      
-     aria-selected="true">Credentials</a>
+     aria-selected="false">Credentials</a>
+  
+  
+  <a class="tab" role="tab" data-tab="map" href="#view-component-cache"
+     
+     aria-selected="true">Map</a>
+  
+  
+  <a class="tab" role="tab" data-tab="backups" href="#view-component-cache"
+     
+     aria-selected="false">Backups</a>
   
   
   <a class="tab" role="tab" data-tab="settings" href="#view-component-cache"
@@ -4634,7 +4692,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-26T10:38:42Z" data-localtime>2026-08-26T10:38:42Z</time>
+          <time datetime="2026-08-27T17:03:07Z" data-localtime>2026-08-27T17:03:07Z</time>
           
         </div>
       </div>
@@ -4649,11 +4707,11 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
       <div class="panel-head"><h2>How to reach it</h2></div>
       <div class="panel-body stack">
         <div class="conn">
-          <code>cache_redis:6379</code>
+          <code>cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379</code>
           <button class="btn btn-sm" type="button" data-copy
-                  data-copy-text="cache_redis:6379">Copy</button>
+                  data-copy-text="cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379">Copy</button>
         </div>
-        <p class="hint">Reachable from any component on the edge network by this name. Do not put it behind the tunnel — the tunnel speaks HTTP.</p>
+        <p class="hint">These are the SENTINELS, and they are what your client should be given, with master name `cache`. Reachable from any component on the edge network. Do not put this behind the tunnel — the tunnel speaks HTTP.</p>
       </div>
     </section>
     
@@ -4667,7 +4725,49 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
             <tbody>
               
               <tr>
-                <td class="mono">cache_redis</td>
+                <td class="mono">cache_redis-1</td>
+                <td class="mono small">redis:7.4-alpine</td>
+                <td class="num">1/1</td>
+                <td><span class="pill ok">healthy</span></td>
+              </tr>
+              
+              <tr>
+                <td class="mono">cache_redis-2</td>
+                <td class="mono small">redis:7.4-alpine</td>
+                <td class="num">0/0</td>
+                <td><span class="pill ok">healthy</span></td>
+              </tr>
+              
+              <tr>
+                <td class="mono">cache_redis-3</td>
+                <td class="mono small">redis:7.4-alpine</td>
+                <td class="num">0/0</td>
+                <td><span class="pill ok">healthy</span></td>
+              </tr>
+              
+              <tr>
+                <td class="mono">cache_redis-4</td>
+                <td class="mono small">redis:7.4-alpine</td>
+                <td class="num">0/0</td>
+                <td><span class="pill ok">healthy</span></td>
+              </tr>
+              
+              <tr>
+                <td class="mono">cache_sentinel-1</td>
+                <td class="mono small">redis:7.4-alpine</td>
+                <td class="num">1/1</td>
+                <td><span class="pill ok">healthy</span></td>
+              </tr>
+              
+              <tr>
+                <td class="mono">cache_sentinel-2</td>
+                <td class="mono small">redis:7.4-alpine</td>
+                <td class="num">1/1</td>
+                <td><span class="pill ok">healthy</span></td>
+              </tr>
+              
+              <tr>
+                <td class="mono">cache_sentinel-3</td>
                 <td class="mono small">redis:7.4-alpine</td>
                 <td class="num">1/1</td>
                 <td><span class="pill ok">healthy</span></td>
@@ -4678,6 +4778,13 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <td class="mono small">redis_exporter:v1.66.0</td>
                 <td class="num">1/1</td>
                 <td><span class="pill ok">healthy</span></td>
+              </tr>
+              
+              <tr>
+                <td class="mono">cache_viewer</td>
+                <td class="mono small">—</td>
+                <td class="num">0/0</td>
+                <td><span class="pill mute">missing</span></td>
               </tr>
               
             </tbody>
@@ -4731,7 +4838,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           
           <form method="post" action="#"
                 data-preview
-                data-confirm="Drop EVERY key in cache? Persistence is on, so the append-only file is rewritten empty too and nothing comes back on a restart. There is no undo and no backup.">
+                data-confirm="Drop EVERY key in cache? Persistence is on, so the append-only file is rewritten empty too and nothing comes back on a restart. The replicas follow the primary, so it goes everywhere. There is no undo.">
             <input type="hidden" name="csrf" value="preview">
             <input type="hidden" name="action" value="purge">
             <button class="btn btn-danger"
@@ -4742,7 +4849,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           
           <form method="post" action="#"
                 data-preview
-                data-confirm="Generate a new password and restart the server with it? Anything still using the old one will stop being able to authenticate.">
+                data-confirm="Generate a new password and restart every replica and sentinel with it? Anything still using the old one will stop being able to connect.">
             <input type="hidden" name="csrf" value="preview">
             <input type="hidden" name="action" value="rotate">
             <button class="btn btn-danger"
@@ -4770,7 +4877,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   <!-- credentials ----------------------------------------------------------->
   
-  <div data-panel="credentials" >
+  <div data-panel="credentials" hidden>
     <div class="split">
       <section class="panel">
         <div class="panel-head">
@@ -4782,20 +4889,20 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis://default:7eeff64b4ba8cc0f61ab97ceceda6ad86d8713492167cc30@cache_redis:6379</code>
+              <code>redis+sentinel://default:53d83504ff528cd8f1243616eb4e921fbb4da831f4dff867@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis://default:7eeff64b4ba8cc0f61ab97ceceda6ad86d8713492167cc30@cache_redis:6379">Copy</button>
+                      data-copy-text="redis+sentinel://default:53d83504ff528cd8f1243616eb4e921fbb4da831f4dff867@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
             <table>
               <tbody>
-                <tr><th>Host</th><td class="mono">cache_redis</td></tr>
-                <tr><th>Port</th><td class="mono">6379</td></tr>
+                <tr><th>Host</th><td class="mono">cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379</td></tr>
+                <tr><th>Port</th><td class="mono">26379</td></tr>
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="7eeff64b4ba8cc0f61ab97ceceda6ad86d8713492167cc30">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="53d83504ff528cd8f1243616eb4e921fbb4da831f4dff867">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -4821,9 +4928,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="panel-body stack">
           
           <div class="conn">
-            <code>redis://default:7eeff64b4ba8cc0f61ab97ceceda6ad86d8713492167cc30@10.0.0.2:46379</code>
+            <code>redis://default:53d83504ff528cd8f1243616eb4e921fbb4da831f4dff867@10.0.0.2:46379</code>
             <button class="btn btn-sm" type="button" data-copy
-                    data-copy-text="redis://default:7eeff64b4ba8cc0f61ab97ceceda6ad86d8713492167cc30@10.0.0.2:46379">Copy</button>
+                    data-copy-text="redis://default:53d83504ff528cd8f1243616eb4e921fbb4da831f4dff867@10.0.0.2:46379">Copy</button>
           </div>
           <div class="table-wrap">
             <table>
@@ -4912,6 +5019,149 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   <!-- settings -------------------------------------------------------------->
   <!-- map --------------------------------------------------------------->
   
+  
+  <div data-panel="map" 
+       >
+    
+<section class="panel">
+  <div class="panel-head">
+    <h2>Rollout map</h2>
+    <span class="spacer"></span>
+    <span class="pill mute plain mono">1 replica</span>
+  </div>
+
+  
+  <p class="panel-intro">
+    Every node, and every replica of <strong>cache</strong> on it. The label
+    on a block is the image tag that replica is running, not the service name — one colour
+    means the fleet agrees, two means an update is in flight or a rollback left it split.
+  </p>
+  
+
+  <div class="legend">
+    
+      <span class="legend-item"><i class="sw sw-prod"></i>7.4-alpine · 1</span>
+    
+  </div>
+
+  <div class="tree-scroll">
+    <div class="tree">
+      <div class="tree-top">
+        <div class="tnode tnode-root">
+          <span class="tnode-title">cache</span>
+          <span class="tnode-sub">
+            
+            <b>1</b> tag
+            · <b>1</b> replica
+            
+          </span>
+        </div>
+      </div>
+
+      <div class="tree-kids">
+        
+          <div class="tree-branch">
+            <a class="tnode tnode-host is-link is-manager"
+               href="#view-node-k39dl2mzq018">
+              <span class="tnode-head">
+                <span class="pill accent">manager</span>
+                
+              </span>
+              <span class="tnode-title" title="aichat-master">aichat-master</span>
+              <span class="tnode-sub">
+                <b>1</b> here · 4 vCPU · 7.6 GB
+              </span>
+            </a>
+
+            <div class="slots">
+              
+                <span class="slot slot-prod" tabindex="0"
+                      style="--cpu:10.5;--mem:16.8"
+                      data-tip="redis:7.4-alpine&#10;task cache0kd93jf on aichat-master&#10;state: running">
+                  <i class="dot dot-ok" aria-hidden="true"></i>7.4-alpine
+                </span>
+              
+            </div>
+          </div>
+        
+          <div class="tree-branch">
+            <a class="tnode tnode-host is-link "
+               href="#view-node-w1af02c9be47">
+              <span class="tnode-head">
+                <span class="pill ok">worker</span>
+                
+              </span>
+              <span class="tnode-title" title="aichat-worker-1754812203">aichat-worker-1754812203</span>
+              <span class="tnode-sub">
+                <b>0</b> here · 3 vCPU · 3.8 GB
+              </span>
+            </a>
+
+            <div class="slots">
+              
+                <span class="slot is-empty">none here</span>
+              
+            </div>
+          </div>
+        
+          <div class="tree-branch">
+            <a class="tnode tnode-host is-link "
+               href="#view-node-w2bc71d0aa93">
+              <span class="tnode-head">
+                <span class="pill ok">worker</span>
+                
+              </span>
+              <span class="tnode-title" title="aichat-worker-1754819114">aichat-worker-1754819114</span>
+              <span class="tnode-sub">
+                <b>0</b> here · 3 vCPU · 3.8 GB
+              </span>
+            </a>
+
+            <div class="slots">
+              
+                <span class="slot is-empty">none here</span>
+              
+            </div>
+          </div>
+        
+          <div class="tree-branch">
+            <a class="tnode tnode-host is-link "
+               href="#view-node-w3de92f1cc05">
+              <span class="tnode-head">
+                <span class="pill warn">worker</span>
+                <span class="pill warn">drain</span>
+              </span>
+              <span class="tnode-title" title="aichat-worker-1754823887">aichat-worker-1754823887</span>
+              <span class="tnode-sub">
+                <b>0</b> here · 3 vCPU · 3.8 GB
+              </span>
+            </a>
+
+            <div class="slots">
+              
+                <span class="slot is-empty">none here</span>
+              
+            </div>
+          </div>
+        
+      </div>
+    </div>
+  </div>
+
+  
+  <div class="panel-note">
+    Replicas are counted from RUNNING tasks. A rollout that is stuck shows the old tag
+    holding steady while the new one never grows — Swarm rolls a failing update back, so
+    the end state of a bad deploy is one colour again, and the Deployments tab is where
+    the verdict is written down.
+  </div>
+  
+</section>
+  </div>
+  
+
+  <!-- backups --------------------------------------------------------------->
+  
 
   
   <div data-panel="settings" hidden>
@@ -4933,7 +5183,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   
     <select id="f-placement_mode" name="placement_mode">
       
-      <option value="master" selected>master</option>
+      <option value="auto" selected>auto</option>
+      
+      <option value="master" >master</option>
       
       <option value="any" >any</option>
       
@@ -4941,7 +5193,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   
 
-  <p class="hint">This has a VOLUME, and a volume lives on one machine. `master` keeps it on the node that will not be deleted. `any` lets Swarm place it anywhere — including a worker the autoscaler deletes later, taking the data with it. Only useful if you have moved the data yourself.</p>
+  <p class="hint">`auto` lets dataguard decide which machines the replicas run on, which is the only way it can grow this off the master. `master` keeps everything on the node that will not be deleted, and turns dataguard off.</p>
 </div>
       
         
@@ -4981,7 +5233,26 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   
 
-  <p class="hint">Changing this restarts the server. The volume survives.</p>
+  <p class="hint">Changing this restarts the replicas one at a time. The volumes survive.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-replica_pool">Replica pool</label>
+
+  
+    <input id="f-replica_pool" name="replica_pool"
+           type="number"
+           
+           min="3"
+           max="6"
+           required
+           
+           value="3">
+  
+
+  <p class="hint">How many servers BEYOND the one on the master this may ever have. Fixed at creation because the sentinels are named in the connection URL — raising it later is the one change that does alter the string.</p>
 </div>
       
         
@@ -5000,7 +5271,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
            value="512">
   
 
-  <p class="hint">Redis evicts above this. Keep it below the memory limit or the container is OOM-killed before Redis ever starts evicting.</p>
+  <p class="hint">Redis evicts above this. Keep it below the memory limit or the container is OOM-killed before Redis ever starts evicting. Applies to every replica.</p>
 </div>
       
         
@@ -5036,11 +5307,13 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   
     
     <input type="hidden" name="__bool__" value="appendonly">
+    
     <label class="check">
       <input type="checkbox" id="f-appendonly" name="appendonly" value="true"
              checked>
-      <span>Survives a restart. Turn it off for a pure cache.</span>
+      <span>Survives a restart, and is what makes a replica able to resync without a full transfer. Turn it off for a pure cache — and note that with it off there is nothing to back up, so the backup fields below stop meaning anything.</span>
     </label>
+    
 
   
 
@@ -5063,26 +5336,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
            value="46379">
   
 
-  <p class="hint">Optional. Publishes Redis on the master at this port for an external client. The firewall still denies it until you open it on the component&#39;s page.</p>
-</div>
-      
-        
-        
-<div class="field">
-  <label for="f-exporter">Metrics exporter</label>
-
-  
-    
-    <input type="hidden" name="__bool__" value="exporter">
-    <label class="check">
-      <input type="checkbox" id="f-exporter" name="exporter" value="true"
-             checked>
-      <span>Runs redis_exporter alongside it so Grafana has memory, hit rate and connection counts.</span>
-    </label>
-
-  
-
-  
+  <p class="hint">Optional. Publishes the primary&#39;s replica on the master at this port for an external client. The firewall still denies it until you open it on this page, and it reaches ONE server rather than following a failover.</p>
 </div>
       
         
@@ -5120,7 +5374,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
            value="640">
   
 
-  <p class="hint">Must exceed max memory with room for Redis itself and its AOF buffer, or eviction never gets the chance to run.</p>
+  <p class="hint">Must exceed max memory with room for Redis itself and, with AOF on, for its rewrite buffer — or eviction never gets the chance to run.</p>
 </div>
       
 
@@ -5138,6 +5392,156 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   
 </section>
 
+
+
+
+
+<section class="panel" >
+  <div class="panel-head">
+    <h2>Observability</h2>
+    
+    <span class="spacer"></span>
+  </div>
+  <div class="panel-body" >
+    <div class="grid-2">
+      
+        
+        
+<div class="field">
+  <label for="f-exporter">Metrics exporter</label>
+
+  
+    
+    <input type="hidden" name="__bool__" value="exporter">
+    
+      
+      <label class="switch switch-inline">
+        <input type="checkbox" id="f-exporter" name="exporter" value="true"
+               checked>
+        <span class="switch-track" aria-hidden="true"></span>
+        <span class="switch-label">on</span>
+      </label>
+      <p class="hint">Runs redis_exporter so Grafana has memory, hit rate, connection counts and replication offsets.</p>
+    
+
+  
+
+  
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-visualizer">Data visualizer</label>
+
+  
+    
+    <input type="hidden" name="__bool__" value="visualizer">
+    
+      
+      <label class="switch switch-inline">
+        <input type="checkbox" id="f-visualizer" name="visualizer" value="true"
+               checked>
+        <span class="switch-track" aria-hidden="true"></span>
+        <span class="switch-label">on</span>
+      </label>
+      <p class="hint">RedisInsight, in your browser. It is FULL access with no password of its own, so it is never published: the View button proxies it through your panel session, and dataguard stops it again once nobody has looked at it.</p>
+    
+
+  
+
+  
+</div>
+      
+    </div>
+  </div>
+  <div class="panel-note">Two containers you can have alongside the database. The exporter is what Grafana and every Redis alert read it through. The visualiser is a console with full access to your data and no password of its own, so it is never published — the View button proxies it through the panel session you are already signed in to.</div>
+</section>
+
+
+
+
+
+<section class="panel" data-toggle-section>
+  <div class="panel-head">
+    <h2>Dataguard</h2>
+    
+    
+    <label class="switch" title="Let dataguard own the shape: how many replicas there are, which machines they run on, and failover.">
+      <input type="hidden" name="__bool__" value="dataguard">
+      <input type="checkbox" name="dataguard" value="true"
+             data-toggle-master data-placement-sync
+             checked>
+      <span class="switch-track" aria-hidden="true"></span>
+      <span class="switch-label">on</span>
+    </label>
+    
+    <span class="spacer"></span>
+  </div>
+  <div class="panel-body" data-toggle-body>
+    <div class="grid-2">
+      
+        
+        
+<div class="field">
+  <label for="f-lag_budget_seconds">Lag budget (s)</label>
+
+  
+    <input id="f-lag_budget_seconds" name="lag_budget_seconds"
+           type="number"
+           
+           min="1"
+           max="3600"
+           
+           
+           value="10">
+  
+
+  <p class="hint">A replica further behind than this is not promoted and is reported. Redis has no per-replica read flag, so unlike Mongo this cannot take it out of rotation — a sentinel-aware client picks its own.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-backup_target">Backup to</label>
+
+  
+    <input id="f-backup_target" name="backup_target"
+           type="text"
+           
+           
+           
+           
+           placeholder="name from the Storage tab"
+           value="s3-main">
+  
+
+  <p class="hint">Requires AOF. What is shipped is an RDB snapshot plus the append-only file, and a restore replays to the last `everysec` fsync — up to a second of writes lost. That is NOT the arbitrary-timestamp recovery MongoDB gets here, and the difference is worth knowing before you need it.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-backup_interval_hours">Backup every (hours)</label>
+
+  
+    <input id="f-backup_interval_hours" name="backup_interval_hours"
+           type="number"
+           
+           min="1"
+           max="720"
+           
+           
+           value="24">
+  
+
+  
+</div>
+      
+    </div>
+  </div>
+  <div class="panel-note">With this off you get one Redis, one volume and no failover. Dataguard still measures this component either way.</div>
+</section>
 
 
       
@@ -5182,7 +5586,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
       <div class="panel-head">
         <h2>Logs</h2>
         <span class="spacer"></span>
-        <span class="muted mono">cache_redis</span>
+        <span class="muted mono">cache_redis-1</span>
       </div>
       <div class="panel-body">
         <pre class="logs">2026-08-12T14:02:11.881Z INFO  [main] com.acme.aichat.Application - Ktor started on 0.0.0.0:8080
@@ -5213,17 +5617,38 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   <div>
     <div class="eyebrow"><a href="#view-components">Components</a></div>
     <h1>documents</h1>
-    <p class="hint">An authenticated MongoDB, with its own volume.</p>
+    <p class="hint">A MongoDB replica set that grows without changing its address.</p>
     
     
     
+    
+    <p class="head-image">
+      <span class="muted">running</span>
+      <code class="mono" title="mongo:7.0">mongo:7.0</code>
+      <button class="btn btn-ghost btn-xs" type="button"
+              data-copy="mongo:7.0" title="Copy the full reference">copy</button>
+    </p>
     
   </div>
   <div class="head-side">
     <div class="head-pills">
-      <span class="pill mute">not deployed</span>
+      <span class="pill ok">healthy</span>
       <span class="pill mute plain">MongoDB</span>
     </div>
+    
+    
+    <span class="head-reserved mono"
+          data-tip="Reserved by every replica of every service in documents, across the cluster">
+      0.67 vCPU · 1648 MB · 12.4 GB on disk
+    </span>
+    
+    
+    
+    <a class="btn btn-sm head-view" href="#"
+       target="_blank" rel="noopener"
+       title="Browse this database. Full access, through your panel session; it starts on demand and stops when idle.">
+      View data
+    </a>
     
   </div>
 </div>
@@ -5238,7 +5663,17 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   
   <a class="tab" role="tab" data-tab="credentials" href="#view-component-documents"
      
-     aria-selected="true">Credentials</a>
+     aria-selected="false">Credentials</a>
+  
+  
+  <a class="tab" role="tab" data-tab="map" href="#view-component-documents"
+     
+     aria-selected="true">Map</a>
+  
+  
+  <a class="tab" role="tab" data-tab="backups" href="#view-component-documents"
+     
+     aria-selected="false">Backups</a>
   
   
   <a class="tab" role="tab" data-tab="settings" href="#view-component-documents"
@@ -5259,23 +5694,23 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
     <div class="tiles">
       <div class="tile">
         <div class="eyebrow">Replicas</div>
-        <div class="v">0<span class="of">/0</span></div>
+        <div class="v">1<span class="of">/1</span></div>
       </div>
       <div class="tile">
         <div class="eyebrow">State</div>
-        <div class="v"><span class="pill mute">not deployed</span></div>
+        <div class="v"><span class="pill ok">healthy</span></div>
       </div>
       <div class="tile">
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-26T10:38:42Z" data-localtime>2026-08-26T10:38:42Z</time>
+          <time datetime="2026-08-27T17:03:07Z" data-localtime>2026-08-27T17:03:07Z</time>
           
         </div>
       </div>
       <div class="tile">
         <div class="eyebrow">Updated</div>
-        <div class="v small">—</div>
+        <div class="v small">4d ago</div>
       </div>
     </div>
 
@@ -5284,11 +5719,11 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
       <div class="panel-head"><h2>How to reach it</h2></div>
       <div class="panel-body stack">
         <div class="conn">
-          <code>documents_mongo:27017</code>
+          <code>documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017</code>
           <button class="btn btn-sm" type="button" data-copy
-                  data-copy-text="documents_mongo:27017">Copy</button>
+                  data-copy-text="documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017">Copy</button>
         </div>
-        <p class="hint">Reachable from any component on the edge network by this name. Do not put it behind the tunnel — the tunnel speaks HTTP.</p>
+        <p class="hint">Every member is reachable from any component on the edge network by these names, whether it exists yet or not — the driver ignores the ones it cannot resolve. Do not put this behind the tunnel; the tunnel speaks HTTP.</p>
       </div>
     </section>
     
@@ -5302,14 +5737,49 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
             <tbody>
               
               <tr>
-                <td class="mono">documents_mongo</td>
-                <td class="mono small">—</td>
+                <td class="mono">documents_mongo-1</td>
+                <td class="mono small">mongo:7.0</td>
+                <td class="num">1/1</td>
+                <td><span class="pill ok">healthy</span></td>
+              </tr>
+              
+              <tr>
+                <td class="mono">documents_mongo-2</td>
+                <td class="mono small">mongo:7.0</td>
+                <td class="num">1/1</td>
+                <td><span class="pill ok">healthy</span></td>
+              </tr>
+              
+              <tr>
+                <td class="mono">documents_mongo-3</td>
+                <td class="mono small">mongo:7.0</td>
                 <td class="num">0/0</td>
-                <td><span class="pill mute">missing</span></td>
+                <td><span class="pill ok">healthy</span></td>
+              </tr>
+              
+              <tr>
+                <td class="mono">documents_mongo-4</td>
+                <td class="mono small">mongo:7.0</td>
+                <td class="num">0/0</td>
+                <td><span class="pill ok">healthy</span></td>
               </tr>
               
               <tr>
                 <td class="mono">documents_mongo-exporter</td>
+                <td class="mono small">mongodb_exporter:0.43.1</td>
+                <td class="num">1/1</td>
+                <td><span class="pill ok">healthy</span></td>
+              </tr>
+              
+              <tr>
+                <td class="mono">documents_pbm-ctl</td>
+                <td class="mono small">percona-backup-mongodb:2.8.0</td>
+                <td class="num">1/1</td>
+                <td><span class="pill ok">healthy</span></td>
+              </tr>
+              
+              <tr>
+                <td class="mono">documents_viewer</td>
                 <td class="mono small">—</td>
                 <td class="num">0/0</td>
                 <td><span class="pill mute">missing</span></td>
@@ -5329,20 +5799,60 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           
           
           
+          <form method="post" action="#"
+                data-preview
+                data-confirm="Stop documents? Its services leave the cluster; its files, environment, credentials and volumes stay, and Deploy brings it back.">
+            <input type="hidden" name="csrf" value="preview">
+            <input type="hidden" name="action" value="stop">
+            <button class="btn btn-danger"
+                    type="submit">Stop</button>
+          </form>
+          
+          
+          
           
           
           <form method="post" action="#"
                 data-preview
                 >
             <input type="hidden" name="csrf" value="preview">
-            <input type="hidden" name="action" value="start">
+            <input type="hidden" name="action" value="redeploy">
             <button class="btn btn-primary"
-                    type="submit">Deploy</button>
+                    type="submit">Redeploy</button>
           </form>
           
           
           
+          <form method="post" action="#"
+                data-preview
+                >
+            <input type="hidden" name="csrf" value="preview">
+            <input type="hidden" name="action" value="restart">
+            <button class="btn "
+                    type="submit">Rolling restart</button>
+          </form>
           
+          
+          
+          <form method="post" action="#"
+                data-preview
+                data-confirm="Generate a new password, change it in the running set and restart with it? Anything still using the old one will stop being able to authenticate.">
+            <input type="hidden" name="csrf" value="preview">
+            <input type="hidden" name="action" value="rotate">
+            <button class="btn btn-danger"
+                    type="submit">Rotate password</button>
+          </form>
+          
+          
+          
+          <form method="post" action="#"
+                data-preview
+                >
+            <input type="hidden" name="csrf" value="preview">
+            <input type="hidden" name="action" value="backup">
+            <button class="btn "
+                    type="submit">Back up now</button>
+          </form>
           
           
           
@@ -5350,9 +5860,12 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         </div>
         <p class="hint">
           
-          Nothing of this component is running. Its files are still here, so Deploy
-          brings it back exactly as it was; delete it from Settings if you want it
-          gone for good.
+          Redeploy re-applies this component's stack. It reads the live image and
+          replica count back first, so it will not undo the autoscaler or roll back
+          whatever CI last shipped. Nothing outside this component is touched.
+          Stop removes its services from the cluster and keeps everything else —
+          the spec, the environment, the credentials and the volumes are files, not
+          Swarm state.
           
         </p>
       </div>
@@ -5364,7 +5877,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   <!-- credentials ----------------------------------------------------------->
   
-  <div data-panel="credentials" >
+  <div data-panel="credentials" hidden>
     <div class="split">
       <section class="panel">
         <div class="panel-head">
@@ -5376,20 +5889,20 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>mongodb://root:bb7749d9746384c54fed453034e1c3dc2a8f191084cb1b5b@documents_mongo:27017/?authSource=admin</code>
+              <code>mongodb://root:5c330e6e204116a5e72fbc685638dd3415ba82007eafb689@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:bb7749d9746384c54fed453034e1c3dc2a8f191084cb1b5b@documents_mongo:27017/?authSource=admin">Copy</button>
+                      data-copy-text="mongodb://root:5c330e6e204116a5e72fbc685638dd3415ba82007eafb689@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
             <table>
               <tbody>
-                <tr><th>Host</th><td class="mono">documents_mongo</td></tr>
+                <tr><th>Host</th><td class="mono">documents_mongo-1</td></tr>
                 <tr><th>Port</th><td class="mono">27017</td></tr>
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="bb7749d9746384c54fed453034e1c3dc2a8f191084cb1b5b">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="5c330e6e204116a5e72fbc685638dd3415ba82007eafb689">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -5477,6 +5990,152 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   <!-- settings -------------------------------------------------------------->
   <!-- map --------------------------------------------------------------->
   
+  
+  <div data-panel="map" 
+       >
+    
+<section class="panel">
+  <div class="panel-head">
+    <h2>Replica set map</h2>
+    <span class="spacer"></span>
+    <span class="pill mute plain mono">1 replica</span>
+  </div>
+
+  
+  <p class="panel-intro">
+    Every machine, and every member of <strong>documents</strong> on it. The
+    label on a block is what that member IS — every one of them runs the identical image,
+    so a tag would be the same word on all of them while the thing worth seeing, which
+    machine takes writes, would be nowhere on the page. Exactly one block should be
+    <span class="legend-item"><i class="sw sw-primary"></i>PRIMARY</span>; if none is, the
+    database is refusing writes.
+  </p>
+  
+
+  <div class="legend">
+    
+      <span class="legend-item"><i class="sw sw-secondary"></i>SECONDARY · 1</span>
+    
+  </div>
+
+  <div class="tree-scroll">
+    <div class="tree">
+      <div class="tree-top">
+        <div class="tnode tnode-root">
+          <span class="tnode-title">documents</span>
+          <span class="tnode-sub">
+            
+            <b>1</b> member running
+            
+          </span>
+        </div>
+      </div>
+
+      <div class="tree-kids">
+        
+          <div class="tree-branch">
+            <a class="tnode tnode-host is-link is-manager"
+               href="#view-node-k39dl2mzq018">
+              <span class="tnode-head">
+                <span class="pill accent">manager</span>
+                
+              </span>
+              <span class="tnode-title" title="aichat-master">aichat-master</span>
+              <span class="tnode-sub">
+                <b>1</b> here · 4 vCPU · 7.6 GB
+              </span>
+            </a>
+
+            <div class="slots">
+              
+                <span class="slot slot-secondary" tabindex="0"
+                      style="--cpu:1.5;--mem:2.5"
+                      data-tip="mongo:7.0&#10;task docume0kd93j on aichat-master&#10;state: running">
+                  <i class="dot dot-ok" aria-hidden="true"></i>SECONDARY
+                </span>
+              
+            </div>
+          </div>
+        
+          <div class="tree-branch">
+            <a class="tnode tnode-host is-link "
+               href="#view-node-w1af02c9be47">
+              <span class="tnode-head">
+                <span class="pill ok">worker</span>
+                
+              </span>
+              <span class="tnode-title" title="aichat-worker-1754812203">aichat-worker-1754812203</span>
+              <span class="tnode-sub">
+                <b>0</b> here · 3 vCPU · 3.8 GB
+              </span>
+            </a>
+
+            <div class="slots">
+              
+                <span class="slot is-empty">none here</span>
+              
+            </div>
+          </div>
+        
+          <div class="tree-branch">
+            <a class="tnode tnode-host is-link "
+               href="#view-node-w2bc71d0aa93">
+              <span class="tnode-head">
+                <span class="pill ok">worker</span>
+                
+              </span>
+              <span class="tnode-title" title="aichat-worker-1754819114">aichat-worker-1754819114</span>
+              <span class="tnode-sub">
+                <b>0</b> here · 3 vCPU · 3.8 GB
+              </span>
+            </a>
+
+            <div class="slots">
+              
+                <span class="slot is-empty">none here</span>
+              
+            </div>
+          </div>
+        
+          <div class="tree-branch">
+            <a class="tnode tnode-host is-link "
+               href="#view-node-w3de92f1cc05">
+              <span class="tnode-head">
+                <span class="pill warn">worker</span>
+                <span class="pill warn">drain</span>
+              </span>
+              <span class="tnode-title" title="aichat-worker-1754823887">aichat-worker-1754823887</span>
+              <span class="tnode-sub">
+                <b>0</b> here · 3 vCPU · 3.8 GB
+              </span>
+            </a>
+
+            <div class="slots">
+              
+                <span class="slot is-empty">none here</span>
+              
+            </div>
+          </div>
+        
+      </div>
+    </div>
+  </div>
+
+  
+  <div class="panel-note">
+    Members are counted from RUNNING tasks, and their roles come from dataguard. A member
+    of the pool that is not running has no block here at all — that is the resting state
+    for everything above the one on the master, not a fault. <code>unknown</code> means
+    dataguard has not reported on it, which is a different problem from having no primary
+    and is worth telling apart before you go looking.
+  </div>
+  
+</section>
+  </div>
+  
+
+  <!-- backups --------------------------------------------------------------->
+  
 
   
   <div data-panel="settings" hidden>
@@ -5498,7 +6157,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   
     <select id="f-placement_mode" name="placement_mode">
       
-      <option value="master" selected>master</option>
+      <option value="auto" selected>auto</option>
+      
+      <option value="master" >master</option>
       
       <option value="any" >any</option>
       
@@ -5506,7 +6167,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   
 
-  <p class="hint">This has a VOLUME, and a volume lives on one machine. `master` keeps it on the node that will not be deleted. `any` lets Swarm place it anywhere — including a worker the autoscaler deletes later, taking the data with it.</p>
+  <p class="hint">`auto` lets dataguard decide which machines the members run on, which is the only way it can grow this off the master. `master` keeps every member on the node that will not be deleted, and turns dataguard off. `any` lets Swarm place them and is only useful if you are moving the data yourself.</p>
 </div>
       
         
@@ -5546,7 +6207,45 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   
 
-  <p class="hint">Changing this restarts the server. The volume survives, but Mongo only upgrades one major version at a time — go 5 to 6 to 7, never 5 to 7.</p>
+  <p class="hint">Changing this restarts the members one at a time. The volumes survive, but Mongo only upgrades one major version at a time — go 5 to 6 to 7, never 5 to 7.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-replica_pool">Replica pool</label>
+
+  
+    <input id="f-replica_pool" name="replica_pool"
+           type="number"
+           
+           min="3"
+           max="6"
+           required
+           
+           value="3">
+  
+
+  <p class="hint">How many members BEYOND the one on the master this set may ever have. Every one of them is named in the connection string from the day you create this, whether it exists or not, so raising it later is the one change that DOES alter the string — pick the ceiling now. Three is the minimum that can lose a machine and still elect.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-max_members">Members in use at once</label>
+
+  
+    <input id="f-max_members" name="max_members"
+           type="number"
+           
+           min="3"
+           max="7"
+           
+           
+           value="4">
+  
+
+  <p class="hint">A budget cap on how many of the pool dataguard may run at once. It does not have to be odd — dataguard keeps the VOTING members odd underneath it and carries any extra as non-voting, which is what lets a fourth member exist to serve reads without making the majority an even number.</p>
 </div>
       
         
@@ -5565,7 +6264,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
            value="root">
   
 
-  <p class="hint">The initial administrative user. It is created on the FIRST start only, from the empty volume; changing it later does nothing until the data directory is empty again.</p>
+  <p class="hint">Created on the FIRST start only, from an empty volume. Changing it later does nothing until the data directory is empty again.</p>
 </div>
       
         
@@ -5584,7 +6283,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
            value="256">
   
 
-  <p class="hint">Mongo&#39;s own data cache. Left unset it is sized from the HOST&#39;s RAM and ignores this container&#39;s limit entirely, which is how a small Mongo gets OOM-killed on a large machine.</p>
+  <p class="hint">Mongo&#39;s own data cache. Left unset it is sized from the HOST&#39;s RAM and ignores this container&#39;s limit entirely, which is how a small Mongo gets OOM-killed on a large machine. Applies to every member.</p>
 </div>
       
         
@@ -5603,26 +6302,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
            value="">
   
 
-  <p class="hint">Optional. Publishes Mongo on the master at this port for an external client. The firewall still denies it until you open it on the component&#39;s page.</p>
-</div>
-      
-        
-        
-<div class="field">
-  <label for="f-exporter">Metrics exporter</label>
-
-  
-    
-    <input type="hidden" name="__bool__" value="exporter">
-    <label class="check">
-      <input type="checkbox" id="f-exporter" name="exporter" value="true"
-             checked>
-      <span>Runs mongodb_exporter alongside it so Grafana has connections, operation counters and replication lag.</span>
-    </label>
-
-  
-
-  
+  <p class="hint">Optional. Publishes the member on the master at this port for an external client. The firewall still denies it until you open it on this page. It reaches ONE member, not the set — a replica set is discovered, not proxied.</p>
 </div>
       
         
@@ -5680,6 +6360,196 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
 
 
+
+
+<section class="panel" >
+  <div class="panel-head">
+    <h2>Observability</h2>
+    
+    <span class="spacer"></span>
+  </div>
+  <div class="panel-body" >
+    <div class="grid-2">
+      
+        
+        
+<div class="field">
+  <label for="f-exporter">Metrics exporter</label>
+
+  
+    
+    <input type="hidden" name="__bool__" value="exporter">
+    
+      
+      <label class="switch switch-inline">
+        <input type="checkbox" id="f-exporter" name="exporter" value="true"
+               checked>
+        <span class="switch-track" aria-hidden="true"></span>
+        <span class="switch-label">on</span>
+      </label>
+      <p class="hint">Runs mongodb_exporter so Grafana and the replication alerts have connection counts, operation counters and replication lag.</p>
+    
+
+  
+
+  
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-visualizer">Data visualizer</label>
+
+  
+    
+    <input type="hidden" name="__bool__" value="visualizer">
+    
+      
+      <label class="switch switch-inline">
+        <input type="checkbox" id="f-visualizer" name="visualizer" value="true"
+               checked>
+        <span class="switch-track" aria-hidden="true"></span>
+        <span class="switch-label">on</span>
+      </label>
+      <p class="hint">A browser console over this database. It is FULL access with no password of its own, so it is never published: the View button on this page proxies it through your panel session, and dataguard stops it again once nobody has looked at it for fifteen minutes.</p>
+    
+
+  
+
+  
+</div>
+      
+    </div>
+  </div>
+  <div class="panel-note">Two containers you can have alongside the database. The exporter is what Grafana and every database alert read it through. The visualiser is a console with full access to your data and no password of its own, so it is never published — the View button proxies it through the panel session you are already signed in to, and it is stopped again once nobody has looked at it.</div>
+</section>
+
+
+
+
+
+<section class="panel" data-toggle-section>
+  <div class="panel-head">
+    <h2>Dataguard</h2>
+    
+    
+    <label class="switch" title="Let dataguard own this set&#39;s shape: how many members it has, which machines they are on, and which one is primary.">
+      <input type="hidden" name="__bool__" value="dataguard">
+      <input type="checkbox" name="dataguard" value="true"
+             data-toggle-master data-placement-sync
+             checked>
+      <span class="switch-track" aria-hidden="true"></span>
+      <span class="switch-label">on</span>
+    </label>
+    
+    <span class="spacer"></span>
+  </div>
+  <div class="panel-body" data-toggle-body>
+    <div class="grid-2">
+      
+        
+        
+<div class="field">
+  <label for="f-secondary_reads">Reads may go to secondaries</label>
+
+  
+    
+    <input type="hidden" name="__bool__" value="secondary_reads">
+    
+    <label class="check">
+      <input type="checkbox" id="f-secondary_reads" name="secondary_reads" value="true"
+             checked>
+      <span>ON, because read scaling is the point of a replica set — and it is a CONTRACT WITH YOUR APPLICATION, not a setting. A secondary can be behind the write that produced the data you are reading. Your code must use a causally consistent session and carry its operationTime between requests; the Credentials tab has the pattern. Without that, a user can save a row and not see it on the next page load, with no error anywhere. Turn this OFF and every read goes to the primary — correct by construction, and then only a bigger machine can help read latency.</span>
+    </label>
+    
+
+  
+
+  
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-lag_budget_seconds">Lag budget (s)</label>
+
+  
+    <input id="f-lag_budget_seconds" name="lag_budget_seconds"
+           type="number"
+           
+           min="1"
+           max="3600"
+           
+           
+           value="10">
+  
+
+  <p class="hint">A secondary further behind than this is taken out of read rotation entirely — hidden, so no client can be handed it — and put back when it catches up. Much tighter than the driver&#39;s own maxStalenessSeconds, which cannot go below 90.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-max_replica_lag_alert">Alert above lag (s)</label>
+
+  
+    <input id="f-max_replica_lag_alert" name="max_replica_lag_alert"
+           type="number"
+           
+           min="1"
+           max="86400"
+           
+           
+           value="60">
+  
+
+  <p class="hint">Sustained lag above this raises ReplicaLagOverBudget.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-backup_target">Backup to</label>
+
+  
+    <input id="f-backup_target" name="backup_target"
+           type="text"
+           
+           
+           
+           
+           placeholder="name from the Storage tab"
+           value="s3-main">
+  
+
+  <p class="hint">A target from the Storage tab. Blank means NO BACKUPS — and dataguard will then also refuse to change this set&#39;s shape, because a topology change can lose data and doing one with nothing to restore from is betting the database on it going well. The set still runs, fails over and reports; it just will not grow.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-backup_interval_hours">Backup every (hours)</label>
+
+  
+    <input id="f-backup_interval_hours" name="backup_interval_hours"
+           type="number"
+           
+           min="1"
+           max="720"
+           
+           
+           value="24">
+  
+
+  <p class="hint">Full snapshots. Between them PITR keeps a continuous oplog, so you can restore to any second, not just to a snapshot.</p>
+</div>
+      
+    </div>
+  </div>
+  <div class="panel-note">With this off the topology is yours: one server, one volume, no failover and no backups. Dataguard still measures this component either way — it simply stops changing its shape.</div>
+</section>
+
+
       
 
       
@@ -5722,619 +6592,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
       <div class="panel-head">
         <h2>Logs</h2>
         <span class="spacer"></span>
-        <span class="muted mono">documents_mongo</span>
-      </div>
-      <div class="panel-body">
-        <pre class="logs">2026-08-12T14:02:11.881Z INFO  [main] com.acme.aichat.Application - Ktor started on 0.0.0.0:8080
-2026-08-12T14:02:11.902Z INFO  [main] com.acme.aichat.Redis - connected to cache_redis:6379
-2026-08-12T14:04:38.117Z INFO  [eventLoop-3] com.acme.aichat.Chat - completion in 812ms (model=gpt-4o-mini)
-2026-08-12T14:05:02.559Z WARN  [eventLoop-1] com.acme.aichat.RateLimit - throttled tenant=acme-9931
-2026-08-12T14:06:44.230Z INFO  [eventLoop-7] com.acme.aichat.Chat - completion in 1.4s (model=gpt-4o)
-2026-08-12T14:07:19.004Z ERROR [eventLoop-2] com.acme.aichat.Upload - stream closed before EOF
-2026-08-12T14:09:55.771Z INFO  [eventLoop-5] com.acme.aichat.Health - ok
-</pre>
-        <p class="hint">
-          The last 200 lines, straight from the daemon. Everything is also in Loki —
-          use Grafana for search, filters and anything older than this.
-        </p>
-      </div>
-    </section>
-  </div>
-  
-
-</div>
-        
-      </section>
-      
-      <section data-view="component-sessions" hidden>
-        
-          
-<div class="page-head">
-  <div>
-    <div class="eyebrow"><a href="#view-components">Components</a></div>
-    <h1>sessions</h1>
-    <p class="hint">A password-protected Redis, with its own volume.</p>
-    
-    
-    
-    
-    <p class="head-image">
-      <span class="muted">running</span>
-      <code class="mono" title="redis:7.2-alpine">redis:7.2-alpine</code>
-      <button class="btn btn-ghost btn-xs" type="button"
-              data-copy="redis:7.2-alpine" title="Copy the full reference">copy</button>
-    </p>
-    
-  </div>
-  <div class="head-side">
-    <div class="head-pills">
-      <span class="pill ok">healthy</span>
-      <span class="pill mute plain">Redis</span>
-    </div>
-    
-    
-    <span class="head-reserved mono"
-          data-tip="Reserved by every replica of every service in sessions, across the cluster">
-      0.1 vCPU · 256 MB
-    </span>
-    
-  </div>
-</div>
-
-<div class="tabs" data-tabs role="tablist">
-  
-  
-  <a class="tab" role="tab" data-tab="overview" href="#view-component-sessions"
-     
-     aria-selected="false">Overview</a>
-  
-  
-  <a class="tab" role="tab" data-tab="credentials" href="#view-component-sessions"
-     
-     aria-selected="true">Credentials</a>
-  
-  
-  <a class="tab" role="tab" data-tab="settings" href="#view-component-sessions"
-     
-     aria-selected="false">Settings</a>
-  
-  
-  <a class="tab" role="tab" data-tab="logs" href="#view-component-sessions"
-     
-     aria-selected="false">Logs</a>
-  
-</div>
-
-<div data-panels>
-
-  <!-- overview -------------------------------------------------------------->
-  <div data-panel="overview" hidden>
-    <div class="tiles">
-      <div class="tile">
-        <div class="eyebrow">Replicas</div>
-        <div class="v">1<span class="of">/1</span></div>
-      </div>
-      <div class="tile">
-        <div class="eyebrow">State</div>
-        <div class="v"><span class="pill ok">healthy</span></div>
-      </div>
-      <div class="tile">
-        <div class="eyebrow">Created</div>
-        <div class="v small mono">
-          
-          <time datetime="2026-08-26T10:38:42Z" data-localtime>2026-08-26T10:38:42Z</time>
-          
-        </div>
-      </div>
-      <div class="tile">
-        <div class="eyebrow">Updated</div>
-        <div class="v small">9d ago</div>
-      </div>
-    </div>
-
-    
-    <section class="panel">
-      <div class="panel-head"><h2>How to reach it</h2></div>
-      <div class="panel-body stack">
-        <div class="conn">
-          <code>sessions_redis:6379</code>
-          <button class="btn btn-sm" type="button" data-copy
-                  data-copy-text="sessions_redis:6379">Copy</button>
-        </div>
-        <p class="hint">Reachable from any component on the edge network by this name. Do not put it behind the tunnel — the tunnel speaks HTTP.</p>
-      </div>
-    </section>
-    
-
-    <section class="panel">
-      <div class="panel-head"><h2>Services</h2></div>
-      <div class="panel-body">
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Service</th><th>Image</th><th>Running</th><th>State</th></tr></thead>
-            <tbody>
-              
-              <tr>
-                <td class="mono">sessions_redis</td>
-                <td class="mono small">redis:7.2-alpine</td>
-                <td class="num">1/1</td>
-                <td><span class="pill ok">healthy</span></td>
-              </tr>
-              
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-head"><h2>Actions</h2></div>
-      <div class="panel-body">
-        <div class="btn-row">
-          
-          
-          
-          
-          <form method="post" action="#"
-                data-preview
-                data-confirm="Stop sessions? Its services leave the cluster; its files, environment, credentials and volumes stay, and Deploy brings it back.">
-            <input type="hidden" name="csrf" value="preview">
-            <input type="hidden" name="action" value="stop">
-            <button class="btn btn-danger"
-                    type="submit">Stop</button>
-          </form>
-          
-          
-          
-          
-          
-          <form method="post" action="#"
-                data-preview
-                >
-            <input type="hidden" name="csrf" value="preview">
-            <input type="hidden" name="action" value="redeploy">
-            <button class="btn btn-primary"
-                    type="submit">Redeploy</button>
-          </form>
-          
-          
-          
-          <form method="post" action="#"
-                data-preview
-                >
-            <input type="hidden" name="csrf" value="preview">
-            <input type="hidden" name="action" value="restart">
-            <button class="btn "
-                    type="submit">Rolling restart</button>
-          </form>
-          
-          
-          
-          <form method="post" action="#"
-                data-preview
-                data-confirm="Drop EVERY key in sessions? Persistence is on, so the append-only file is rewritten empty too and nothing comes back on a restart. There is no undo and no backup.">
-            <input type="hidden" name="csrf" value="preview">
-            <input type="hidden" name="action" value="purge">
-            <button class="btn btn-danger"
-                    type="submit">Purge data</button>
-          </form>
-          
-          
-          
-          <form method="post" action="#"
-                data-preview
-                data-confirm="Generate a new password and restart the server with it? Anything still using the old one will stop being able to authenticate.">
-            <input type="hidden" name="csrf" value="preview">
-            <input type="hidden" name="action" value="rotate">
-            <button class="btn btn-danger"
-                    type="submit">Rotate password</button>
-          </form>
-          
-          
-        </div>
-        <p class="hint">
-          
-          Redeploy re-applies this component's stack. It reads the live image and
-          replica count back first, so it will not undo the autoscaler or roll back
-          whatever CI last shipped. Nothing outside this component is touched.
-          Stop removes its services from the cluster and keeps everything else —
-          the spec, the environment, the credentials and the volumes are files, not
-          Swarm state.
-          
-        </p>
-      </div>
-    </section>
-  </div>
-
-  <!-- environment ----------------------------------------------------------->
-  
-
-  <!-- credentials ----------------------------------------------------------->
-  
-  <div data-panel="credentials" >
-    <div class="split">
-      <section class="panel">
-        <div class="panel-head">
-          <h2>Internal</h2>
-          <span class="spacer"></span>
-          <span class="pill ok plain">in-cluster</span>
-        </div>
-        <div class="panel-body stack">
-          <div>
-            <div class="eyebrow">Connection URL</div>
-            <div class="conn">
-              <code>redis://default:34f3ff7090e8a3d0b08530d8b51c1cf60b47fb6f44b72fad@sessions_redis:6379</code>
-              <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis://default:34f3ff7090e8a3d0b08530d8b51c1cf60b47fb6f44b72fad@sessions_redis:6379">Copy</button>
-            </div>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <tbody>
-                <tr><th>Host</th><td class="mono">sessions_redis</td></tr>
-                <tr><th>Port</th><td class="mono">6379</td></tr>
-                <tr>
-                  <th>Password</th>
-                  <td class="secret-val">
-                    <code class="masked mono" data-secret-text="34f3ff7090e8a3d0b08530d8b51c1cf60b47fb6f44b72fad">••••••••••••</code>
-                    <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <p class="hint">
-            Reachable from any component on the edge network. This password is stored
-            in <code>components/sessions/secret.env</code> and injected into
-            this service alone — nothing else in the cluster holds a copy, and nothing
-            is written into any application's environment for you.
-          </p>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h2>External</h2>
-          <span class="spacer"></span>
-          <span class="pill mute plain">
-            not published</span>
-        </div>
-        <div class="panel-body stack">
-          
-          <p class="muted">
-            Not published. Set a port in Settings to expose it on the master's private
-            address — then open the firewall below, deliberately.
-          </p>
-          
-
-          
-        </div>
-      </section>
-    </div>
-
-    <section class="panel">
-      <div class="panel-head"><h2>Change the password</h2></div>
-      <form method="post" action="#"
-            data-preview>
-        <input type="hidden" name="csrf" value="preview">
-        <div class="panel-body">
-          
-          <div class="field">
-            <label for="s-REDIS_PASSWORD">Password</label>
-            <input id="s-REDIS_PASSWORD" type="text" name="REDIS_PASSWORD"
-                   autocomplete="off" spellcheck="false"
-                   placeholder="leave blank to keep the current one">
-            <p class="hint">Leave blank to generate a strong one. Set it yourself if you are moving an existing database and its clients already know the password.</p>
-          </div>
-          
-          <div class="btn-row">
-            <button class="btn btn-primary" type="submit">Save and restart</button>
-          </div>
-        </div>
-      </form>
-      <div class="panel-note">
-        Saving restarts this component with the new password and touches nothing
-        else. Your own clients need the new URL — nothing in the cluster holds a
-        copy to update.
-      </div>
-    </section>
-
-    <section class="panel danger-zone">
-      <div class="panel-head"><h2>Rotate</h2></div>
-      <div class="panel-body">
-        <form method="post" action="#"
-              data-preview
-              data-confirm="Generate a new password and restart sessions with it? Anything still using the old one will stop being able to authenticate.">
-          <input type="hidden" name="csrf" value="preview">
-          <input type="hidden" name="regenerate" value="1">
-          <button class="btn btn-danger" type="submit">Generate a new password</button>
-        </form>
-        <p class="hint">
-          The same thing as the form above with a random value — there when you do
-          not want to think of one.
-        </p>
-      </div>
-    </section>
-  </div>
-  
-
-  <!-- deployments ----------------------------------------------------------->
-  
-
-  <!-- settings -------------------------------------------------------------->
-  <!-- map --------------------------------------------------------------->
-  
-
-  
-  <div data-panel="settings" hidden>
-    <form method="post" action="#" data-preview>
-      <input type="hidden" name="csrf" value="preview">
-      
-        
-<section class="panel">
-  <div class="panel-head"><h2>Configuration</h2></div>
-  <div class="panel-body">
-    <div class="grid-2">
-      
-      
-        
-        
-<div class="field">
-  <label for="f-placement_mode">Placement</label>
-
-  
-    <select id="f-placement_mode" name="placement_mode">
-      
-      <option value="master" selected>master</option>
-      
-      <option value="any" >any</option>
-      
-    </select>
-
-  
-
-  <p class="hint">This has a VOLUME, and a volume lives on one machine. `master` keeps it on the node that will not be deleted. `any` lets Swarm place it anywhere — including a worker the autoscaler deletes later, taking the data with it. Only useful if you have moved the data yourself.</p>
-</div>
-      
-        
-        
-<div class="field">
-  <label for="f-placement_extra">Extra constraints</label>
-
-  
-    <input id="f-placement_extra" name="placement_extra"
-           type="text"
-           
-           
-           
-           
-           placeholder="node.labels.disk == ssd"
-           value="">
-  
-
-  <p class="hint">Comma separated, added to whatever the mode implies.</p>
-</div>
-      
-        
-        
-<div class="field">
-  <label for="f-version">Version</label>
-
-  
-    <select id="f-version" name="version">
-      
-      <option value="7.4-alpine" >7.4-alpine</option>
-      
-      <option value="7.2-alpine" selected>7.2-alpine</option>
-      
-      <option value="6.2-alpine" >6.2-alpine</option>
-      
-    </select>
-
-  
-
-  <p class="hint">Changing this restarts the server. The volume survives.</p>
-</div>
-      
-        
-        
-<div class="field">
-  <label for="f-maxmemory_mb">Max memory (MB)</label>
-
-  
-    <input id="f-maxmemory_mb" name="maxmemory_mb"
-           type="number"
-           
-           min="16"
-           max="65536"
-           required
-           
-           value="128">
-  
-
-  <p class="hint">Redis evicts above this. Keep it below the memory limit or the container is OOM-killed before Redis ever starts evicting.</p>
-</div>
-      
-        
-        
-<div class="field">
-  <label for="f-maxmemory_policy">Eviction policy</label>
-
-  
-    <select id="f-maxmemory_policy" name="maxmemory_policy">
-      
-      <option value="allkeys-lru" selected>allkeys-lru</option>
-      
-      <option value="allkeys-lfu" >allkeys-lfu</option>
-      
-      <option value="volatile-lru" >volatile-lru</option>
-      
-      <option value="volatile-ttl" >volatile-ttl</option>
-      
-      <option value="noeviction" >noeviction</option>
-      
-    </select>
-
-  
-
-  <p class="hint">`noeviction` turns a full cache into write errors — correct for a queue, wrong for a cache.</p>
-</div>
-      
-        
-        
-<div class="field">
-  <label for="f-appendonly">Persist to disk (AOF)</label>
-
-  
-    
-    <input type="hidden" name="__bool__" value="appendonly">
-    <label class="check">
-      <input type="checkbox" id="f-appendonly" name="appendonly" value="true"
-             checked>
-      <span>Survives a restart. Turn it off for a pure cache.</span>
-    </label>
-
-  
-
-  
-</div>
-      
-        
-        
-<div class="field">
-  <label for="f-external_port">Published port</label>
-
-  
-    <input id="f-external_port" name="external_port"
-           type="number"
-           
-           min="1024"
-           max="65535"
-           
-           
-           value="">
-  
-
-  <p class="hint">Optional. Publishes Redis on the master at this port for an external client. The firewall still denies it until you open it on the component&#39;s page.</p>
-</div>
-      
-        
-        
-<div class="field">
-  <label for="f-exporter">Metrics exporter</label>
-
-  
-    
-    <input type="hidden" name="__bool__" value="exporter">
-    <label class="check">
-      <input type="checkbox" id="f-exporter" name="exporter" value="true"
-             >
-      <span>Runs redis_exporter alongside it so Grafana has memory, hit rate and connection counts.</span>
-    </label>
-
-  
-
-  
-</div>
-      
-        
-        
-<div class="field">
-  <label for="f-cpu_reservation">CPU reserved</label>
-
-  
-    <input id="f-cpu_reservation" name="cpu_reservation"
-           type="number"
-           step="0.05"
-           min="0.01"
-           max="32"
-           required
-           
-           value="0.1">
-  
-
-  
-</div>
-      
-        
-        
-<div class="field">
-  <label for="f-memory_reservation_mb">Memory reserved (MB)</label>
-
-  
-    <input id="f-memory_reservation_mb" name="memory_reservation_mb"
-           type="number"
-           
-           min="32"
-           max="131072"
-           required
-           
-           value="256">
-  
-
-  <p class="hint">Must exceed max memory with room for Redis itself and its AOF buffer, or eviction never gets the chance to run.</p>
-</div>
-      
-
-      
-      
-    </div>
-  </div>
-  
-  
-  <div class="panel-note">
-    Saving redeploys this component. The live image, replica count, placement
-    and resource sizing are read back first and preserved, so changing a
-    setting here will not roll back your last deploy or undo the autoscaler.
-  </div>
-  
-</section>
-
-
-
-      
-
-      
-      
-      
-
-      <div class="sticky-save">
-        <button class="btn btn-primary" type="submit">Save and deploy</button>
-        <a class="btn" href="#view-component-sessions">Cancel</a>
-      </div>
-    </form>
-
-    <section class="panel danger-zone">
-      <div class="panel-head"><h2>Delete</h2></div>
-      <div class="panel-body stack">
-        <p class="hint">
-          Removes the stack and this component's files. Other components, the
-          infrastructure and the tunnel are untouched.
-          
-          The volume <code>sessions-data</code> is <strong>kept</strong> —
-          a mistyped delete should cost you a redeploy, not your data.
-          
-        </p>
-        <form method="post" action="#" class="inline"
-              data-preview>
-          <input type="hidden" name="csrf" value="preview">
-          <input type="text" name="confirm" placeholder="type sessions to confirm"
-                 aria-label="Type the component name to confirm" autocomplete="off">
-          <button class="btn btn-danger" type="submit">Delete sessions</button>
-        </form>
-      </div>
-    </section>
-  </div>
-  
-
-  <!-- logs ------------------------------------------------------------------>
-  
-  <div data-panel="logs" hidden>
-    <section class="panel">
-      <div class="panel-head">
-        <h2>Logs</h2>
-        <span class="spacer"></span>
-        <span class="muted mono">sessions_redis</span>
+        <span class="muted mono">documents_mongo-1</span>
       </div>
       <div class="panel-body">
         <pre class="logs">2026-08-12T14:02:11.881Z INFO  [main] com.acme.aichat.Application - Ktor started on 0.0.0.0:8080
@@ -6665,11 +6923,12 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   
   <div class="panel-note">
     Reservations are not optional. Swarm subtracts them when it places a task, and
-    they are the only thing the autoscaler measures node capacity with — a component
+    they are the only thing the overseer measures node capacity with — a component
     with none looks free and gets packed on top of the metrics database.
   </div>
   
 </section>
+
 
 
 
@@ -6679,10 +6938,10 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
     <h2>Autoscale</h2>
     
     
-    <label class="switch" title="Let the autoscaler own the replica count">
+    <label class="switch" title="Let the autoscaler own the replica count, using the policy below.">
       <input type="hidden" name="__bool__" value="autoscale">
       <input type="checkbox" name="autoscale" value="true"
-             data-toggle-master
+             data-toggle-master data-placement-sync
              >
       <span class="switch-track" aria-hidden="true"></span>
       <span class="switch-label">on</span>
@@ -7018,12 +7277,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
       
     </div>
   </div>
-  <div class="panel-note">
-    With this off the replica count is yours and nothing below applies. The
-    autoscaler still measures this component and still right-sizes its
-    reservations — it just stops changing how many of it there are.
-  </div>
+  <div class="panel-note">With this off the replica count is yours and nothing below applies. The autoscaler still measures this component and still right-sizes its reservations — it just stops changing how many of it there are, and stops moving it between the master and the workers.</div>
 </section>
+
 
   
 
@@ -7046,7 +7302,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   <div>
     <div class="eyebrow"><a href="#view-components">Components</a></div>
     <h1>New database</h1>
-    <p class="hint">A password-protected Redis, with its own volume.</p>
+    <p class="hint">A password-protected Redis with Sentinel failover.</p>
   </div>
   
   
@@ -7100,7 +7356,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   
     <select id="f-placement_mode" name="placement_mode">
       
-      <option value="master" selected>master</option>
+      <option value="auto" selected>auto</option>
+      
+      <option value="master" >master</option>
       
       <option value="any" >any</option>
       
@@ -7108,7 +7366,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   
 
-  <p class="hint">This has a VOLUME, and a volume lives on one machine. `master` keeps it on the node that will not be deleted. `any` lets Swarm place it anywhere — including a worker the autoscaler deletes later, taking the data with it. Only useful if you have moved the data yourself.</p>
+  <p class="hint">`auto` lets dataguard decide which machines the replicas run on, which is the only way it can grow this off the master. `master` keeps everything on the node that will not be deleted, and turns dataguard off.</p>
 </div>
       
         
@@ -7148,7 +7406,26 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   
 
-  <p class="hint">Changing this restarts the server. The volume survives.</p>
+  <p class="hint">Changing this restarts the replicas one at a time. The volumes survive.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-replica_pool">Replica pool</label>
+
+  
+    <input id="f-replica_pool" name="replica_pool"
+           type="number"
+           
+           min="3"
+           max="6"
+           required
+           
+           value="3">
+  
+
+  <p class="hint">How many servers BEYOND the one on the master this may ever have. Fixed at creation because the sentinels are named in the connection URL — raising it later is the one change that does alter the string.</p>
 </div>
       
         
@@ -7167,7 +7444,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
            value="512">
   
 
-  <p class="hint">Redis evicts above this. Keep it below the memory limit or the container is OOM-killed before Redis ever starts evicting.</p>
+  <p class="hint">Redis evicts above this. Keep it below the memory limit or the container is OOM-killed before Redis ever starts evicting. Applies to every replica.</p>
 </div>
       
         
@@ -7203,11 +7480,13 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   
     
     <input type="hidden" name="__bool__" value="appendonly">
+    
     <label class="check">
       <input type="checkbox" id="f-appendonly" name="appendonly" value="true"
              checked>
-      <span>Survives a restart. Turn it off for a pure cache.</span>
+      <span>Survives a restart, and is what makes a replica able to resync without a full transfer. Turn it off for a pure cache — and note that with it off there is nothing to back up, so the backup fields below stop meaning anything.</span>
     </label>
+    
 
   
 
@@ -7230,26 +7509,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
            value="">
   
 
-  <p class="hint">Optional. Publishes Redis on the master at this port for an external client. The firewall still denies it until you open it on the component&#39;s page.</p>
-</div>
-      
-        
-        
-<div class="field">
-  <label for="f-exporter">Metrics exporter</label>
-
-  
-    
-    <input type="hidden" name="__bool__" value="exporter">
-    <label class="check">
-      <input type="checkbox" id="f-exporter" name="exporter" value="true"
-             checked>
-      <span>Runs redis_exporter alongside it so Grafana has memory, hit rate and connection counts.</span>
-    </label>
-
-  
-
-  
+  <p class="hint">Optional. Publishes the primary&#39;s replica on the master at this port for an external client. The firewall still denies it until you open it on this page, and it reaches ONE server rather than following a failover.</p>
 </div>
       
         
@@ -7287,7 +7547,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
            value="640">
   
 
-  <p class="hint">Must exceed max memory with room for Redis itself and its AOF buffer, or eviction never gets the chance to run.</p>
+  <p class="hint">Must exceed max memory with room for Redis itself and, with AOF on, for its rewrite buffer — or eviction never gets the chance to run.</p>
 </div>
       
 
@@ -7313,12 +7573,162 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   
   <div class="panel-note">
     Reservations are not optional. Swarm subtracts them when it places a task, and
-    they are the only thing the autoscaler measures node capacity with — a component
+    they are the only thing the overseer measures node capacity with — a component
     with none looks free and gets packed on top of the metrics database.
   </div>
   
 </section>
 
+
+
+
+
+<section class="panel" >
+  <div class="panel-head">
+    <h2>Observability</h2>
+    
+    <span class="spacer"></span>
+  </div>
+  <div class="panel-body" >
+    <div class="grid-2">
+      
+        
+        
+<div class="field">
+  <label for="f-exporter">Metrics exporter</label>
+
+  
+    
+    <input type="hidden" name="__bool__" value="exporter">
+    
+      
+      <label class="switch switch-inline">
+        <input type="checkbox" id="f-exporter" name="exporter" value="true"
+               checked>
+        <span class="switch-track" aria-hidden="true"></span>
+        <span class="switch-label">on</span>
+      </label>
+      <p class="hint">Runs redis_exporter so Grafana has memory, hit rate, connection counts and replication offsets.</p>
+    
+
+  
+
+  
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-visualizer">Data visualizer</label>
+
+  
+    
+    <input type="hidden" name="__bool__" value="visualizer">
+    
+      
+      <label class="switch switch-inline">
+        <input type="checkbox" id="f-visualizer" name="visualizer" value="true"
+               >
+        <span class="switch-track" aria-hidden="true"></span>
+        <span class="switch-label">on</span>
+      </label>
+      <p class="hint">RedisInsight, in your browser. It is FULL access with no password of its own, so it is never published: the View button proxies it through your panel session, and dataguard stops it again once nobody has looked at it.</p>
+    
+
+  
+
+  
+</div>
+      
+    </div>
+  </div>
+  <div class="panel-note">Two containers you can have alongside the database. The exporter is what Grafana and every Redis alert read it through. The visualiser is a console with full access to your data and no password of its own, so it is never published — the View button proxies it through the panel session you are already signed in to.</div>
+</section>
+
+
+
+
+
+<section class="panel" data-toggle-section>
+  <div class="panel-head">
+    <h2>Dataguard</h2>
+    
+    
+    <label class="switch" title="Let dataguard own the shape: how many replicas there are, which machines they run on, and failover.">
+      <input type="hidden" name="__bool__" value="dataguard">
+      <input type="checkbox" name="dataguard" value="true"
+             data-toggle-master data-placement-sync
+             checked>
+      <span class="switch-track" aria-hidden="true"></span>
+      <span class="switch-label">on</span>
+    </label>
+    
+    <span class="spacer"></span>
+  </div>
+  <div class="panel-body" data-toggle-body>
+    <div class="grid-2">
+      
+        
+        
+<div class="field">
+  <label for="f-lag_budget_seconds">Lag budget (s)</label>
+
+  
+    <input id="f-lag_budget_seconds" name="lag_budget_seconds"
+           type="number"
+           
+           min="1"
+           max="3600"
+           
+           
+           value="10">
+  
+
+  <p class="hint">A replica further behind than this is not promoted and is reported. Redis has no per-replica read flag, so unlike Mongo this cannot take it out of rotation — a sentinel-aware client picks its own.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-backup_target">Backup to</label>
+
+  
+    <input id="f-backup_target" name="backup_target"
+           type="text"
+           
+           
+           
+           
+           placeholder="name from the Storage tab"
+           value="">
+  
+
+  <p class="hint">Requires AOF. What is shipped is an RDB snapshot plus the append-only file, and a restore replays to the last `everysec` fsync — up to a second of writes lost. That is NOT the arbitrary-timestamp recovery MongoDB gets here, and the difference is worth knowing before you need it.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-backup_interval_hours">Backup every (hours)</label>
+
+  
+    <input id="f-backup_interval_hours" name="backup_interval_hours"
+           type="number"
+           
+           min="1"
+           max="720"
+           
+           
+           value="24">
+  
+
+  
+</div>
+      
+    </div>
+  </div>
+  <div class="panel-note">With this off you get one Redis, one volume and no failover. Dataguard still measures this component either way.</div>
+</section>
 
 
   
@@ -7342,7 +7752,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   <div>
     <div class="eyebrow"><a href="#view-components">Components</a></div>
     <h1>New database</h1>
-    <p class="hint">An authenticated MongoDB, with its own volume.</p>
+    <p class="hint">A MongoDB replica set that grows without changing its address.</p>
   </div>
   
   
@@ -7396,7 +7806,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   
     <select id="f-placement_mode" name="placement_mode">
       
-      <option value="master" selected>master</option>
+      <option value="auto" selected>auto</option>
+      
+      <option value="master" >master</option>
       
       <option value="any" >any</option>
       
@@ -7404,7 +7816,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   
 
-  <p class="hint">This has a VOLUME, and a volume lives on one machine. `master` keeps it on the node that will not be deleted. `any` lets Swarm place it anywhere — including a worker the autoscaler deletes later, taking the data with it.</p>
+  <p class="hint">`auto` lets dataguard decide which machines the members run on, which is the only way it can grow this off the master. `master` keeps every member on the node that will not be deleted, and turns dataguard off. `any` lets Swarm place them and is only useful if you are moving the data yourself.</p>
 </div>
       
         
@@ -7444,7 +7856,45 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
   
 
-  <p class="hint">Changing this restarts the server. The volume survives, but Mongo only upgrades one major version at a time — go 5 to 6 to 7, never 5 to 7.</p>
+  <p class="hint">Changing this restarts the members one at a time. The volumes survive, but Mongo only upgrades one major version at a time — go 5 to 6 to 7, never 5 to 7.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-replica_pool">Replica pool</label>
+
+  
+    <input id="f-replica_pool" name="replica_pool"
+           type="number"
+           
+           min="3"
+           max="6"
+           required
+           
+           value="3">
+  
+
+  <p class="hint">How many members BEYOND the one on the master this set may ever have. Every one of them is named in the connection string from the day you create this, whether it exists or not, so raising it later is the one change that DOES alter the string — pick the ceiling now. Three is the minimum that can lose a machine and still elect.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-max_members">Members in use at once</label>
+
+  
+    <input id="f-max_members" name="max_members"
+           type="number"
+           
+           min="3"
+           max="7"
+           
+           
+           value="4">
+  
+
+  <p class="hint">A budget cap on how many of the pool dataguard may run at once. It does not have to be odd — dataguard keeps the VOTING members odd underneath it and carries any extra as non-voting, which is what lets a fourth member exist to serve reads without making the majority an even number.</p>
 </div>
       
         
@@ -7463,7 +7913,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
            value="root">
   
 
-  <p class="hint">The initial administrative user. It is created on the FIRST start only, from the empty volume; changing it later does nothing until the data directory is empty again.</p>
+  <p class="hint">Created on the FIRST start only, from an empty volume. Changing it later does nothing until the data directory is empty again.</p>
 </div>
       
         
@@ -7482,7 +7932,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
            value="256">
   
 
-  <p class="hint">Mongo&#39;s own data cache. Left unset it is sized from the HOST&#39;s RAM and ignores this container&#39;s limit entirely, which is how a small Mongo gets OOM-killed on a large machine.</p>
+  <p class="hint">Mongo&#39;s own data cache. Left unset it is sized from the HOST&#39;s RAM and ignores this container&#39;s limit entirely, which is how a small Mongo gets OOM-killed on a large machine. Applies to every member.</p>
 </div>
       
         
@@ -7501,26 +7951,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
            value="">
   
 
-  <p class="hint">Optional. Publishes Mongo on the master at this port for an external client. The firewall still denies it until you open it on the component&#39;s page.</p>
-</div>
-      
-        
-        
-<div class="field">
-  <label for="f-exporter">Metrics exporter</label>
-
-  
-    
-    <input type="hidden" name="__bool__" value="exporter">
-    <label class="check">
-      <input type="checkbox" id="f-exporter" name="exporter" value="true"
-             checked>
-      <span>Runs mongodb_exporter alongside it so Grafana has connections, operation counters and replication lag.</span>
-    </label>
-
-  
-
-  
+  <p class="hint">Optional. Publishes the member on the master at this port for an external client. The firewall still denies it until you open it on this page. It reaches ONE member, not the set — a replica set is discovered, not proxied.</p>
 </div>
       
         
@@ -7584,12 +8015,202 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   
   <div class="panel-note">
     Reservations are not optional. Swarm subtracts them when it places a task, and
-    they are the only thing the autoscaler measures node capacity with — a component
+    they are the only thing the overseer measures node capacity with — a component
     with none looks free and gets packed on top of the metrics database.
   </div>
   
 </section>
 
+
+
+
+
+<section class="panel" >
+  <div class="panel-head">
+    <h2>Observability</h2>
+    
+    <span class="spacer"></span>
+  </div>
+  <div class="panel-body" >
+    <div class="grid-2">
+      
+        
+        
+<div class="field">
+  <label for="f-exporter">Metrics exporter</label>
+
+  
+    
+    <input type="hidden" name="__bool__" value="exporter">
+    
+      
+      <label class="switch switch-inline">
+        <input type="checkbox" id="f-exporter" name="exporter" value="true"
+               checked>
+        <span class="switch-track" aria-hidden="true"></span>
+        <span class="switch-label">on</span>
+      </label>
+      <p class="hint">Runs mongodb_exporter so Grafana and the replication alerts have connection counts, operation counters and replication lag.</p>
+    
+
+  
+
+  
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-visualizer">Data visualizer</label>
+
+  
+    
+    <input type="hidden" name="__bool__" value="visualizer">
+    
+      
+      <label class="switch switch-inline">
+        <input type="checkbox" id="f-visualizer" name="visualizer" value="true"
+               >
+        <span class="switch-track" aria-hidden="true"></span>
+        <span class="switch-label">on</span>
+      </label>
+      <p class="hint">A browser console over this database. It is FULL access with no password of its own, so it is never published: the View button on this page proxies it through your panel session, and dataguard stops it again once nobody has looked at it for fifteen minutes.</p>
+    
+
+  
+
+  
+</div>
+      
+    </div>
+  </div>
+  <div class="panel-note">Two containers you can have alongside the database. The exporter is what Grafana and every database alert read it through. The visualiser is a console with full access to your data and no password of its own, so it is never published — the View button proxies it through the panel session you are already signed in to, and it is stopped again once nobody has looked at it.</div>
+</section>
+
+
+
+
+
+<section class="panel" data-toggle-section>
+  <div class="panel-head">
+    <h2>Dataguard</h2>
+    
+    
+    <label class="switch" title="Let dataguard own this set&#39;s shape: how many members it has, which machines they are on, and which one is primary.">
+      <input type="hidden" name="__bool__" value="dataguard">
+      <input type="checkbox" name="dataguard" value="true"
+             data-toggle-master data-placement-sync
+             checked>
+      <span class="switch-track" aria-hidden="true"></span>
+      <span class="switch-label">on</span>
+    </label>
+    
+    <span class="spacer"></span>
+  </div>
+  <div class="panel-body" data-toggle-body>
+    <div class="grid-2">
+      
+        
+        
+<div class="field">
+  <label for="f-secondary_reads">Reads may go to secondaries</label>
+
+  
+    
+    <input type="hidden" name="__bool__" value="secondary_reads">
+    
+    <label class="check">
+      <input type="checkbox" id="f-secondary_reads" name="secondary_reads" value="true"
+             checked>
+      <span>ON, because read scaling is the point of a replica set — and it is a CONTRACT WITH YOUR APPLICATION, not a setting. A secondary can be behind the write that produced the data you are reading. Your code must use a causally consistent session and carry its operationTime between requests; the Credentials tab has the pattern. Without that, a user can save a row and not see it on the next page load, with no error anywhere. Turn this OFF and every read goes to the primary — correct by construction, and then only a bigger machine can help read latency.</span>
+    </label>
+    
+
+  
+
+  
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-lag_budget_seconds">Lag budget (s)</label>
+
+  
+    <input id="f-lag_budget_seconds" name="lag_budget_seconds"
+           type="number"
+           
+           min="1"
+           max="3600"
+           
+           
+           value="10">
+  
+
+  <p class="hint">A secondary further behind than this is taken out of read rotation entirely — hidden, so no client can be handed it — and put back when it catches up. Much tighter than the driver&#39;s own maxStalenessSeconds, which cannot go below 90.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-max_replica_lag_alert">Alert above lag (s)</label>
+
+  
+    <input id="f-max_replica_lag_alert" name="max_replica_lag_alert"
+           type="number"
+           
+           min="1"
+           max="86400"
+           
+           
+           value="60">
+  
+
+  <p class="hint">Sustained lag above this raises ReplicaLagOverBudget.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-backup_target">Backup to</label>
+
+  
+    <input id="f-backup_target" name="backup_target"
+           type="text"
+           
+           
+           
+           
+           placeholder="name from the Storage tab"
+           value="">
+  
+
+  <p class="hint">A target from the Storage tab. Blank means NO BACKUPS — and dataguard will then also refuse to change this set&#39;s shape, because a topology change can lose data and doing one with nothing to restore from is betting the database on it going well. The set still runs, fails over and reports; it just will not grow.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-backup_interval_hours">Backup every (hours)</label>
+
+  
+    <input id="f-backup_interval_hours" name="backup_interval_hours"
+           type="number"
+           
+           min="1"
+           max="720"
+           
+           
+           value="24">
+  
+
+  <p class="hint">Full snapshots. Between them PITR keeps a continuous oplog, so you can restore to any second, not just to a snapshot.</p>
+</div>
+      
+    </div>
+  </div>
+  <div class="panel-note">With this off the topology is yours: one server, one volume, no failover and no backups. Dataguard still measures this component either way — it simply stops changing its shape.</div>
+</section>
 
 
   
@@ -7662,6 +8283,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
             <b>4</b> nodes
             · <b>13</b> vCPU
             · <b>19.0</b> GB
+            · <b>400.0</b> GB disk
           </span>
         </div>
       </div>
@@ -7678,14 +8300,15 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
               
             </span>
             <span class="tnode-title" title="aichat-master">aichat-master</span>
-            <span class="tnode-sub mono">10.0.0.2 · 4 vCPU · 7.6 GB</span>
-            <span class="tnode-sub muted">15 tasks · engine 27.3.1</span>
+            <span class="tnode-sub mono">10.0.0.2 · 4 vCPU · 7.6 GB · 160.0 GB disk</span>
+            <span class="tnode-sub muted">14 tasks · engine 27.3.1</span>
             
             <span class="tnode-sub mono">disk=ssd</span>
             
             <span class="tnode-meters">
               <span title="node CPU utilisation">used cpu <b>78%</b></span>
               <span title="node memory utilisation">used mem <b>61%</b></span>
+              <span title="root filesystem — where docker keeps every volume">used disk <b>88%</b> <span class="muted">(19.2 GB free)</span></span>
             </span>
 
             
@@ -7706,7 +8329,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
               
             </span>
             <span class="tnode-title" title="aichat-worker-1754812203">aichat-worker-1754812203</span>
-            <span class="tnode-sub mono">10.0.0.5 · 3 vCPU · 3.8 GB</span>
+            <span class="tnode-sub mono">10.0.0.5 · 3 vCPU · 3.8 GB · 80.0 GB disk</span>
             <span class="tnode-sub muted">6 tasks · engine 27.3.1</span>
             
             <span class="tnode-sub mono">managedby=autoscaler</span>
@@ -7714,6 +8337,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
             <span class="tnode-meters">
               <span title="node CPU utilisation">used cpu <b>64%</b></span>
               <span title="node memory utilisation">used mem <b>47%</b></span>
+              <span title="root filesystem — where docker keeps every volume">used disk <b>41%</b> <span class="muted">(47.2 GB free)</span></span>
             </span>
 
             
@@ -7734,7 +8358,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
               
             </span>
             <span class="tnode-title" title="aichat-worker-1754819114">aichat-worker-1754819114</span>
-            <span class="tnode-sub mono">10.0.0.6 · 3 vCPU · 3.8 GB</span>
+            <span class="tnode-sub mono">10.0.0.6 · 3 vCPU · 3.8 GB · 80.0 GB disk</span>
             <span class="tnode-sub muted">6 tasks · engine 27.3.1</span>
             
             <span class="tnode-sub mono">zone=eu · managedby=autoscaler</span>
@@ -7742,6 +8366,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
             <span class="tnode-meters">
               <span title="node CPU utilisation">used cpu <b>71%</b></span>
               <span title="node memory utilisation">used mem <b>52%</b></span>
+              <span title="root filesystem — where docker keeps every volume">used disk <b>33%</b> <span class="muted">(53.6 GB free)</span></span>
             </span>
 
             
@@ -7762,7 +8387,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
               <span class="pill warn">drain</span>
             </span>
             <span class="tnode-title" title="aichat-worker-1754823887">aichat-worker-1754823887</span>
-            <span class="tnode-sub mono">10.0.0.7 · 3 vCPU · 3.8 GB</span>
+            <span class="tnode-sub mono">10.0.0.7 · 3 vCPU · 3.8 GB · 80.0 GB disk</span>
             <span class="tnode-sub muted">3 tasks · engine 27.3.1</span>
             
             <span class="tnode-sub mono">managedby=autoscaler</span>
@@ -7770,6 +8395,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
             <span class="tnode-meters">
               <span title="node CPU utilisation">used cpu <b>12%</b></span>
               <span title="node memory utilisation">used mem <b>19%</b></span>
+              <span title="root filesystem — where docker keeps every volume">used disk <b>12%</b> <span class="muted">(70.4 GB free)</span></span>
             </span>
 
             
@@ -7821,7 +8447,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 <div class="tiles">
   <div class="tile">
     <span class="k">Tasks</span>
-    <span class="v">15</span>
+    <span class="v">14</span>
     <span class="m">running here right now</span>
   </div>
   <div class="tile">
@@ -7838,6 +8464,12 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
     <span class="k">In use</span>
     <span class="v">78<small>%</small></span>
     <span class="m">cpu · mem 61%</span>
+  </div>
+  <div class="tile is-bad">
+    <span class="k">Disk in use</span>
+    <span class="v">88<small>%</small></span>
+    
+    <span class="m">19.2 GB free of 160.0</span>
   </div>
 </div>
 
@@ -7856,7 +8488,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <tbody>
             <tr><td>Address</td><td class="mono">10.0.0.2</td></tr>
             <tr><td>Role</td><td>manager · reachable</td></tr>
-            <tr><td>Capacity</td><td class="mono">4 vCPU · 7.6 GB</td></tr>
+            <tr><td>Capacity</td><td class="mono">4 vCPU · 7.6 GB · 160.0 GB disk</td></tr>
             <tr><td>Platform</td><td class="mono">linux/x86_64</td></tr>
             <tr><td>Docker engine</td><td class="mono">27.3.1</td></tr>
             <tr><td>Joined</td><td class="mono small">
@@ -7953,7 +8585,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   <div class="panel-head">
     <h2>Tasks here</h2>
     <span class="spacer"></span>
-    <span class="pill mute plain mono">15</span>
+    <span class="pill mute plain mono">14</span>
   </div>
   <div class="panel-body">
     <div class="table-wrap">
@@ -7962,7 +8594,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <tbody>
           
           <tr>
-            <td class="mono">cache_redis</td>
+            <td class="mono">cache_redis-1</td>
             <td class="mono small" title="redis:7.4-alpine">7.4-alpine</td>
             <td class="mono small">cache0kd93jf</td>
             <td><span class="pill ok">running</span></td>
@@ -7970,17 +8602,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           </tr>
           
           <tr>
-            <td class="mono">documents_mongo</td>
+            <td class="mono">documents_mongo-1</td>
             <td class="mono small" title="mongo:7.0">7.0</td>
             <td class="mono small">docume0kd93j</td>
-            <td><span class="pill ok">running</span></td>
-            <td class="mono small num">1.5% cpu · 2.5% mem</td>
-          </tr>
-          
-          <tr>
-            <td class="mono">sessions_redis</td>
-            <td class="mono small" title="redis:7.2-alpine">7.2-alpine</td>
-            <td class="mono small">sessio0kd93j</td>
             <td><span class="pill ok">running</span></td>
             <td class="mono small num">1.5% cpu · 2.5% mem</td>
           </tr>
@@ -8139,6 +8763,12 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
     <span class="v">64<small>%</small></span>
     <span class="m">cpu · mem 47%</span>
   </div>
+  <div class="tile">
+    <span class="k">Disk in use</span>
+    <span class="v">41<small>%</small></span>
+    
+    <span class="m">47.2 GB free of 80.0</span>
+  </div>
 </div>
 
 <p class="panel-intro">
@@ -8156,7 +8786,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <tbody>
             <tr><td>Address</td><td class="mono">10.0.0.5</td></tr>
             <tr><td>Role</td><td>worker</td></tr>
-            <tr><td>Capacity</td><td class="mono">3 vCPU · 3.8 GB</td></tr>
+            <tr><td>Capacity</td><td class="mono">3 vCPU · 3.8 GB · 80.0 GB disk</td></tr>
             <tr><td>Platform</td><td class="mono">linux/x86_64</td></tr>
             <tr><td>Docker engine</td><td class="mono">27.3.1</td></tr>
             <tr><td>Joined</td><td class="mono small">
@@ -8384,6 +9014,12 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
     <span class="v">71<small>%</small></span>
     <span class="m">cpu · mem 52%</span>
   </div>
+  <div class="tile">
+    <span class="k">Disk in use</span>
+    <span class="v">33<small>%</small></span>
+    
+    <span class="m">53.6 GB free of 80.0</span>
+  </div>
 </div>
 
 <p class="panel-intro">
@@ -8401,7 +9037,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <tbody>
             <tr><td>Address</td><td class="mono">10.0.0.6</td></tr>
             <tr><td>Role</td><td>worker</td></tr>
-            <tr><td>Capacity</td><td class="mono">3 vCPU · 3.8 GB</td></tr>
+            <tr><td>Capacity</td><td class="mono">3 vCPU · 3.8 GB · 80.0 GB disk</td></tr>
             <tr><td>Platform</td><td class="mono">linux/x86_64</td></tr>
             <tr><td>Docker engine</td><td class="mono">27.3.1</td></tr>
             <tr><td>Joined</td><td class="mono small">
@@ -8634,6 +9270,12 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
     <span class="v">12<small>%</small></span>
     <span class="m">cpu · mem 19%</span>
   </div>
+  <div class="tile">
+    <span class="k">Disk in use</span>
+    <span class="v">12<small>%</small></span>
+    
+    <span class="m">70.4 GB free of 80.0</span>
+  </div>
 </div>
 
 <p class="panel-intro">
@@ -8651,7 +9293,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <tbody>
             <tr><td>Address</td><td class="mono">10.0.0.7</td></tr>
             <tr><td>Role</td><td>worker</td></tr>
-            <tr><td>Capacity</td><td class="mono">3 vCPU · 3.8 GB</td></tr>
+            <tr><td>Capacity</td><td class="mono">3 vCPU · 3.8 GB · 80.0 GB disk</td></tr>
             <tr><td>Platform</td><td class="mono">linux/x86_64</td></tr>
             <tr><td>Docker engine</td><td class="mono">27.3.1</td></tr>
             <tr><td>Joined</td><td class="mono small">
@@ -8810,17 +9452,27 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 </section>
       
 
-      <section data-view="autoscaler" hidden><div class="page-head">
+      <section data-view="manager" hidden><div class="page-head">
   <div>
-    <h1>Autoscaler</h1>
-    <p>Load is absorbed cheapest first: replicas in seconds, nodes in about two minutes.
-       Coming down the order reverses — shed replicas first, remove the node later.
-       The master is not a worker: it is the control plane, and while no worker
-       exists it carries your components itself and nothing is billed. Capacity is measured from real CPU and memory, never configured,
-       and each component's scaling policy travels with it as labels on its own service.</p>
+    <h1>Manager</h1>
+    <p>One process decides — what is slow, how many machines the cluster needs, which
+       may be deleted — and two apply it: the autoscaler to services, dataguard to
+       databases. The master is the control plane, not a worker, so the resting state
+       is one box and nothing billed.</p>
   </div>
 </div>
 
+
+
+<div class="tabs" data-tabs role="tablist">
+  <a class="tab" role="tab" data-tab="fleet" href="/manager?tab=fleet"
+     aria-selected="true">Autoscaler</a>
+  <a class="tab" role="tab" data-tab="dataguard" href="/manager?tab=dataguard"
+     aria-selected="false">Dataguard</a>
+</div>
+
+<div data-panels>
+<div data-panel="fleet" >
 
 
 <div class="tiles">
@@ -9203,21 +9855,285 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
       the app stack always goes through the safe path that preserves replicas and image.
     </span>
   </div>
-</form></section>
+</form>
 
-      
-      <section data-view="autoscaler-silent" hidden>
-        <div class="page-head">
+</div>
+
+<div data-panel="dataguard" hidden>
+
+<div class="page-head">
   <div>
-    <h1>Autoscaler</h1>
-    <p>Load is absorbed cheapest first: replicas in seconds, nodes in about two minutes.
-       Coming down the order reverses — shed replicas first, remove the node later.
-       The master is not a worker: it is the control plane, and while no worker
-       exists it carries your components itself and nothing is billed. Capacity is measured from real CPU and memory, never configured,
-       and each component's scaling policy travels with it as labels on its own service.</p>
+    <h2>Dataguard</h2>
+    <p>Owns the shape of a database: how many members it has, which machines they run on,
+       which one is primary, and its backups. Timings are in hours because an initial sync
+       reads the whole dataset off a live member.</p>
   </div>
 </div>
 
+
+
+
+
+<div class="tiles">
+  <div class="tile">
+    <span class="k">Managed</span>
+    <span class="v">2</span>
+    <span class="m">databases carrying <code>infra.managed_by=dataguard</code></span>
+  </div>
+  <div class="tile">
+    <span class="k">Machines held</span>
+    <span class="v">1</span>
+    <span class="m">leased from the overseer for database members</span>
+  </div>
+</div>
+
+<section class="panel">
+  <div class="panel-head"><h2>Databases</h2></div>
+  <div class="panel-body">
+    
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Component</th><th>Shape</th><th>Lag</th><th>Backup</th><th>Verified</th>
+        </tr></thead>
+        <tbody>
+        
+        <tr>
+          <td><a href="#view-component-docs">docs</a></td>
+          <td>
+            Master + one machine
+            
+          </td>
+          <td class="mono">0.4s</td>
+          <td class="mono">
+            
+              <time datetime="1787846587.628623" data-localtime-epoch>1787846587</time>
+            
+          </td>
+          <td>
+            
+              <span class="pill ok plain">restores</span>
+            
+          </td>
+        </tr>
+        
+        <tr>
+          <td><a href="#view-component-cache">cache</a></td>
+          <td>
+            On the master
+            
+          </td>
+          <td class="mono">—</td>
+          <td class="mono">
+            <span class="pill mute plain">none</span>
+          </td>
+          <td>
+            
+              
+              <span class="pill warn plain">never verified</span>
+            
+          </td>
+        </tr>
+        
+        </tbody>
+      </table>
+    </div>
+    
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>What is being held back</h2>
+    <span class="spacer"></span>
+    <span class="eyebrow">counted since dataguard last restarted</span>
+  </div>
+  <div class="panel-body">
+    
+    <div class="rows">
+      
+      <div class="row">
+        <span class="mono">cooldown</span>
+        <span class="spacer"></span>
+        <span class="mono">14</span>
+      </div>
+      
+      <div class="row">
+        <span class="mono">no_verified_backup</span>
+        <span class="spacer"></span>
+        <span class="mono">3</span>
+      </div>
+      
+    </div>
+    <p class="hint">When nothing is happening, this is the answer to why. Every gate a
+    topology change has to pass increments its own counter, so a database that is not
+    growing names the reason rather than leaving you to read a log — <code>cooldown</code>
+    is waiting out the hours since the last change, <code>no_backup</code> is a backup
+    target that has never produced one, <code>backup_stale</code> is one that has stopped,
+    <code>no_majority</code> is a set that has lost members, <code>member_syncing</code> is
+    a copy in progress, and <code>another_sync_in_flight</code> is another database being
+    copied right now — only one may run at a time, because a sync reads the whole dataset
+    off a live member.</p>
+    
+  </div>
+</section>
+
+<div class="page-head section-gap">
+  <div>
+    <h2>Policy</h2>
+    <p>Cluster-wide. Everything about ONE database — how many members, its lag budget,
+       whether reads may go to secondaries, where its backups go — is not here: it belongs
+       to that component, travels as labels on its own services, and is edited on its page.
+       A copy here would be a copy that goes stale.</p>
+  </div>
+</div>
+
+
+<form method="post" action="#" data-preview>
+  <input type="hidden" name="csrf" value="preview">
+
+  
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Dataguard</h2>
+      <span class="spacer"></span>
+      
+      <span class="eyebrow">5 of 5 editable</span>
+    </div>
+
+    
+    <div class="setting-row">
+      <label for="set-DATAGUARD_DRY_RUN">
+        <span class="mono">DATAGUARD_DRY_RUN</span>
+      </label>
+
+      
+        <input id="set-DATAGUARD_DRY_RUN" type="text" name="value__DATAGUARD_DRY_RUN" value="false">
+        <input type="hidden" name="key" value="DATAGUARD_DRY_RUN">
+      
+
+      <p class="why">
+        
+        Every decision is logged and nothing is applied. A rehearsal, and the honest way to find out what it wants to do to a live database.
+        
+          <em>Saving redeploys the monitoring stack.</em>
+        
+      </p>
+    </div>
+    
+    <div class="setting-row">
+      <label for="set-TOPOLOGY_COOLDOWN_SECONDS">
+        <span class="mono">TOPOLOGY_COOLDOWN_SECONDS</span>
+      </label>
+
+      
+        <input id="set-TOPOLOGY_COOLDOWN_SECONDS" type="text" name="value__TOPOLOGY_COOLDOWN_SECONDS" value="14400">
+        <input type="hidden" name="key" value="TOPOLOGY_COOLDOWN_SECONDS">
+      
+
+      <p class="why">
+        
+        How long after one topology change before another may start. HOURS, not the autoscaler&#39;s ninety seconds: an initial sync reads the whole dataset off a live member, and a loop that reacts faster than the thing it controls oscillates.
+        
+          <em>Saving redeploys the monitoring stack.</em>
+        
+      </p>
+    </div>
+    
+    <div class="setting-row">
+      <label for="set-PRESSURE_SUSTAIN_SECONDS">
+        <span class="mono">PRESSURE_SUSTAIN_SECONDS</span>
+      </label>
+
+      
+        <input id="set-PRESSURE_SUSTAIN_SECONDS" type="text" name="value__PRESSURE_SUSTAIN_SECONDS" value="3600">
+        <input type="hidden" name="key" value="PRESSURE_SUSTAIN_SECONDS">
+      
+
+      <p class="why">
+        
+        How long pressure must hold before it counts. Long, because the cheapest response to a database being busy costs an hour.
+        
+          <em>Saving redeploys the monitoring stack.</em>
+        
+      </p>
+    </div>
+    
+    <div class="setting-row">
+      <label for="set-BACKUP_MAX_AGE_SECONDS">
+        <span class="mono">BACKUP_MAX_AGE_SECONDS</span>
+      </label>
+
+      
+        <input id="set-BACKUP_MAX_AGE_SECONDS" type="text" name="value__BACKUP_MAX_AGE_SECONDS" value="86400">
+        <input type="hidden" name="key" value="BACKUP_MAX_AGE_SECONDS">
+      
+
+      <p class="why">
+        
+        How old a VERIFIED backup may be before dataguard refuses to change a database&#39;s shape. A topology change can lose data.
+        
+          <em>Saving redeploys the monitoring stack.</em>
+        
+      </p>
+    </div>
+    
+    <div class="setting-row">
+      <label for="set-VIEWER_IDLE_SECONDS">
+        <span class="mono">VIEWER_IDLE_SECONDS</span>
+      </label>
+
+      
+        <input id="set-VIEWER_IDLE_SECONDS" type="text" name="value__VIEWER_IDLE_SECONDS" value="900">
+        <input type="hidden" name="key" value="VIEWER_IDLE_SECONDS">
+      
+
+      <p class="why">
+        
+        How long a data visualiser stays up after the last time somebody looked at it. It is full access to your data, so the shorter it exists the smaller that surface is.
+        
+          <em>Saving redeploys the monitoring stack.</em>
+        
+      </p>
+    </div>
+    
+  </section>
+  
+
+  <div class="sticky-save">
+    <button class="btn btn-primary" type="submit">Save and apply</button>
+    <span class="muted">
+      Only changed values are written. The stacks they affect are redeployed for you;
+      the app stack always goes through the safe path that preserves replicas and image.
+    </span>
+  </div>
+</form>
+</div>
+</div></section>
+
+      
+      <section data-view="manager-silent" hidden>
+        <div class="page-head">
+  <div>
+    <h1>Manager</h1>
+    <p>One process decides — what is slow, how many machines the cluster needs, which
+       may be deleted — and two apply it: the autoscaler to services, dataguard to
+       databases. The master is the control plane, not a worker, so the resting state
+       is one box and nothing billed.</p>
+  </div>
+</div>
+
+
+
+<div class="tabs" data-tabs role="tablist">
+  <a class="tab" role="tab" data-tab="fleet" href="/manager?tab=fleet"
+     aria-selected="true">Autoscaler</a>
+  <a class="tab" role="tab" data-tab="dataguard" href="/manager?tab=dataguard"
+     aria-selected="false">Dataguard</a>
+</div>
+
+<div data-panels>
+<div data-panel="fleet" >
 
 <div class="banner bad">
   <div><strong>The autoscaler is not reporting.</strong> Every number below is unknown, not zero —
@@ -9567,16 +10483,345 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
     </span>
   </div>
 </form>
-      </section>
-      <section data-view="alerts" hidden><div class="page-head">
+
+</div>
+
+<div data-panel="dataguard" hidden>
+
+<div class="page-head">
   <div>
-    <h1>Alerts</h1>
-    <p>Rules evaluated by vmalert and routed by Alertmanager to Telegram.
-       Firing rules reach you; this page is for checking that the ones you expect exist.</p>
+    <h2>Dataguard</h2>
+    <p>Owns the shape of a database: how many members it has, which machines they run on,
+       which one is primary, and its backups. Timings are in hours because an initial sync
+       reads the whole dataset off a live member.</p>
   </div>
 </div>
 
 
+
+
+
+<div class="tiles">
+  <div class="tile">
+    <span class="k">Managed</span>
+    <span class="v">2</span>
+    <span class="m">databases carrying <code>infra.managed_by=dataguard</code></span>
+  </div>
+  <div class="tile">
+    <span class="k">Machines held</span>
+    <span class="v">1</span>
+    <span class="m">leased from the overseer for database members</span>
+  </div>
+</div>
+
+<section class="panel">
+  <div class="panel-head"><h2>Databases</h2></div>
+  <div class="panel-body">
+    
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Component</th><th>Shape</th><th>Lag</th><th>Backup</th><th>Verified</th>
+        </tr></thead>
+        <tbody>
+        
+        <tr>
+          <td><a href="#view-component-docs">docs</a></td>
+          <td>
+            Master + one machine
+            
+          </td>
+          <td class="mono">0.4s</td>
+          <td class="mono">
+            
+              <time datetime="1787846587.628623" data-localtime-epoch>1787846587</time>
+            
+          </td>
+          <td>
+            
+              <span class="pill ok plain">restores</span>
+            
+          </td>
+        </tr>
+        
+        <tr>
+          <td><a href="#view-component-cache">cache</a></td>
+          <td>
+            On the master
+            
+          </td>
+          <td class="mono">—</td>
+          <td class="mono">
+            <span class="pill mute plain">none</span>
+          </td>
+          <td>
+            
+              
+              <span class="pill warn plain">never verified</span>
+            
+          </td>
+        </tr>
+        
+        </tbody>
+      </table>
+    </div>
+    
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>What is being held back</h2>
+    <span class="spacer"></span>
+    <span class="eyebrow">counted since dataguard last restarted</span>
+  </div>
+  <div class="panel-body">
+    
+    <div class="rows">
+      
+      <div class="row">
+        <span class="mono">cooldown</span>
+        <span class="spacer"></span>
+        <span class="mono">14</span>
+      </div>
+      
+      <div class="row">
+        <span class="mono">no_verified_backup</span>
+        <span class="spacer"></span>
+        <span class="mono">3</span>
+      </div>
+      
+    </div>
+    <p class="hint">When nothing is happening, this is the answer to why. Every gate a
+    topology change has to pass increments its own counter, so a database that is not
+    growing names the reason rather than leaving you to read a log — <code>cooldown</code>
+    is waiting out the hours since the last change, <code>no_backup</code> is a backup
+    target that has never produced one, <code>backup_stale</code> is one that has stopped,
+    <code>no_majority</code> is a set that has lost members, <code>member_syncing</code> is
+    a copy in progress, and <code>another_sync_in_flight</code> is another database being
+    copied right now — only one may run at a time, because a sync reads the whole dataset
+    off a live member.</p>
+    
+  </div>
+</section>
+
+<div class="page-head section-gap">
+  <div>
+    <h2>Policy</h2>
+    <p>Cluster-wide. Everything about ONE database — how many members, its lag budget,
+       whether reads may go to secondaries, where its backups go — is not here: it belongs
+       to that component, travels as labels on its own services, and is edited on its page.
+       A copy here would be a copy that goes stale.</p>
+  </div>
+</div>
+
+
+<form method="post" action="#" data-preview>
+  <input type="hidden" name="csrf" value="preview">
+
+  
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Dataguard</h2>
+      <span class="spacer"></span>
+      
+      <span class="eyebrow">5 of 5 editable</span>
+    </div>
+
+    
+    <div class="setting-row">
+      <label for="set-DATAGUARD_DRY_RUN">
+        <span class="mono">DATAGUARD_DRY_RUN</span>
+      </label>
+
+      
+        <input id="set-DATAGUARD_DRY_RUN" type="text" name="value__DATAGUARD_DRY_RUN" value="false">
+        <input type="hidden" name="key" value="DATAGUARD_DRY_RUN">
+      
+
+      <p class="why">
+        
+        Every decision is logged and nothing is applied. A rehearsal, and the honest way to find out what it wants to do to a live database.
+        
+          <em>Saving redeploys the monitoring stack.</em>
+        
+      </p>
+    </div>
+    
+    <div class="setting-row">
+      <label for="set-TOPOLOGY_COOLDOWN_SECONDS">
+        <span class="mono">TOPOLOGY_COOLDOWN_SECONDS</span>
+      </label>
+
+      
+        <input id="set-TOPOLOGY_COOLDOWN_SECONDS" type="text" name="value__TOPOLOGY_COOLDOWN_SECONDS" value="14400">
+        <input type="hidden" name="key" value="TOPOLOGY_COOLDOWN_SECONDS">
+      
+
+      <p class="why">
+        
+        How long after one topology change before another may start. HOURS, not the autoscaler&#39;s ninety seconds: an initial sync reads the whole dataset off a live member, and a loop that reacts faster than the thing it controls oscillates.
+        
+          <em>Saving redeploys the monitoring stack.</em>
+        
+      </p>
+    </div>
+    
+    <div class="setting-row">
+      <label for="set-PRESSURE_SUSTAIN_SECONDS">
+        <span class="mono">PRESSURE_SUSTAIN_SECONDS</span>
+      </label>
+
+      
+        <input id="set-PRESSURE_SUSTAIN_SECONDS" type="text" name="value__PRESSURE_SUSTAIN_SECONDS" value="3600">
+        <input type="hidden" name="key" value="PRESSURE_SUSTAIN_SECONDS">
+      
+
+      <p class="why">
+        
+        How long pressure must hold before it counts. Long, because the cheapest response to a database being busy costs an hour.
+        
+          <em>Saving redeploys the monitoring stack.</em>
+        
+      </p>
+    </div>
+    
+    <div class="setting-row">
+      <label for="set-BACKUP_MAX_AGE_SECONDS">
+        <span class="mono">BACKUP_MAX_AGE_SECONDS</span>
+      </label>
+
+      
+        <input id="set-BACKUP_MAX_AGE_SECONDS" type="text" name="value__BACKUP_MAX_AGE_SECONDS" value="86400">
+        <input type="hidden" name="key" value="BACKUP_MAX_AGE_SECONDS">
+      
+
+      <p class="why">
+        
+        How old a VERIFIED backup may be before dataguard refuses to change a database&#39;s shape. A topology change can lose data.
+        
+          <em>Saving redeploys the monitoring stack.</em>
+        
+      </p>
+    </div>
+    
+    <div class="setting-row">
+      <label for="set-VIEWER_IDLE_SECONDS">
+        <span class="mono">VIEWER_IDLE_SECONDS</span>
+      </label>
+
+      
+        <input id="set-VIEWER_IDLE_SECONDS" type="text" name="value__VIEWER_IDLE_SECONDS" value="900">
+        <input type="hidden" name="key" value="VIEWER_IDLE_SECONDS">
+      
+
+      <p class="why">
+        
+        How long a data visualiser stays up after the last time somebody looked at it. It is full access to your data, so the shorter it exists the smaller that surface is.
+        
+          <em>Saving redeploys the monitoring stack.</em>
+        
+      </p>
+    </div>
+    
+  </section>
+  
+
+  <div class="sticky-save">
+    <button class="btn btn-primary" type="submit">Save and apply</button>
+    <span class="muted">
+      Only changed values are written. The stacks they affect are redeployed for you;
+      the app stack always goes through the safe path that preserves replicas and image.
+    </span>
+  </div>
+</form>
+</div>
+</div>
+      </section>
+      <section data-view="alerts" hidden><div class="page-head">
+  <div>
+    <h1>Alerts</h1>
+    <p>Rules evaluated by vmalert, routed by Alertmanager, and delivered to every
+       target below. Firing rules reach you; this page is for checking that the ones
+       you expect exist and that they have somewhere to go.</p>
+  </div>
+</div>
+
+
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Targets</h2>
+    <span class="spacer"></span>
+    <span class="eyebrow">every alert goes to every one of them</span>
+  </div>
+  <div class="panel-body">
+    
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Name</th><th>Kind</th><th>Where</th><th>Credential</th><th></th></tr></thead>
+        <tbody>
+        
+        <tr>
+          <td class="mono">team</td>
+          <td>telegram</td>
+          <td class="mono small">chat -1001234567890</td>
+          <td class="mono small masked">…AbCdEf</td>
+          <td>
+            <form method="post" action="#"
+                  data-preview>
+              <input type="hidden" name="csrf" value="preview">
+              <button class="btn btn-sm btn-danger" type="submit">Remove</button>
+            </form>
+          </td>
+        </tr>
+        
+        </tbody>
+      </table>
+    </div>
+    
+  </div>
+  <form method="post" action="#"
+        data-preview>
+    <input type="hidden" name="csrf" value="preview">
+    <div class="panel-body">
+      <div class="grid-2">
+        <div class="field">
+          <label for="at-name">Name</label>
+          <input id="at-name" name="name" type="text" required
+                 pattern="[a-z][a-z0-9-]{1,31}" placeholder="team-channel">
+        </div>
+        <div class="field">
+          <label for="at-kind">Kind</label>
+          <select id="at-kind" name="kind">
+            <option value="telegram">telegram</option>
+          </select>
+          <p class="hint">Telegram today. The list is a list so a second kind is
+          one entry and one render function, not a redesign of this page.</p>
+        </div>
+        <div class="field">
+          <label for="at-token">Bot token</label>
+          <input id="at-token" name="bot_token" type="password" autocomplete="off">
+          <p class="hint">From @BotFather. Kept in a root-only file on the master and
+          mounted into Alertmanager — not a docker secret, because a secret cannot be
+          absent and cannot be edited, and this has to be both.</p>
+        </div>
+        <div class="field">
+          <label for="at-chat">Chat id</label>
+          <input id="at-chat" name="chat_id" type="text" autocomplete="off"
+                 placeholder="-1001234567890">
+          <p class="hint">A number, and a group's is negative. Message @userinfobot
+          from the chat if you are not sure.</p>
+        </div>
+      </div>
+    </div>
+    <div class="sticky-save">
+      <button class="btn btn-primary" type="submit">Add target</button>
+      <span class="muted">Saving regenerates the Alertmanager config and redeploys
+      monitoring.</span>
+    </div>
+  </form>
+</section>
 
 
 
@@ -9743,6 +10988,130 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
     a rule whose selector has drifted looks exactly like a rule with nothing to report.
   </div>
 </section></section>
+      <section data-view="storage" hidden>
+<div class="page-head">
+  <div>
+    <h1>Storage</h1>
+    <p>S3-compatible buckets — AWS, Backblaze, Hetzner Object Storage, a MinIO of your
+       own. Defined once for the whole cluster; a database names one on its own Settings
+       tab, so changing an endpoint is one edit here rather than an edit per database
+       and the one you forgot.</p>
+  </div>
+</div>
+
+<section class="panel">
+  <div class="panel-head"><h2>Targets</h2></div>
+  <div class="panel-body">
+    
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Name</th><th>Endpoint</th><th>Bucket</th><th>Credentials</th><th>Used by</th><th></th>
+        </tr></thead>
+        <tbody>
+        
+        <tr>
+          <td class="mono">s3-main</td>
+          <td class="mono small">https://fsn1.your-objectstorage.com</td>
+          <td class="mono small">aichat-backups/prod</td>
+          <td class="mono small">
+            storage-s3-main-v1
+            
+          </td>
+          <td class="mono small">documents</td>
+          <td>
+            <form method="post" action="#"
+                  data-preview>
+              <input type="hidden" name="csrf" value="preview">
+              <input type="text" name="confirm" placeholder="s3-main"
+                     size="10" autocomplete="off" required>
+              <button class="btn btn-sm btn-danger" type="submit">Remove</button>
+            </form>
+          </td>
+        </tr>
+        
+        </tbody>
+      </table>
+    </div>
+    <div class="panel-note">
+      Removing a target removes the DEFINITION. Nothing already written to it is deleted,
+      and a target still named by a component is refused rather than orphaned.
+    </div>
+    
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Add a target</h2></div>
+  <form method="post" action="#" data-preview>
+    <input type="hidden" name="csrf" value="preview">
+    <div class="panel-body">
+      <div class="grid-2">
+        <div class="field">
+          <label for="st-name">Name</label>
+          <input id="st-name" name="name" type="text" required
+                 pattern="[a-z][a-z0-9-]{1,31}" placeholder="s3-main">
+          <p class="hint">What a database's Settings tab will refer to. Not renameable.</p>
+        </div>
+        <div class="field">
+          <label for="st-endpoint">Endpoint</label>
+          <input id="st-endpoint" name="endpoint" type="text"
+                 placeholder="https://fsn1.your-objectstorage.com">
+          <p class="hint">Blank for AWS. Anything else needs its own URL, and it should be
+          https — what travels over it is the whole database.</p>
+        </div>
+        <div class="field">
+          <label for="st-region">Region</label>
+          <input id="st-region" name="region" type="text" placeholder="eu-central-1">
+        </div>
+        <div class="field">
+          <label for="st-bucket">Bucket</label>
+          <input id="st-bucket" name="bucket" type="text" placeholder="cluster-backups">
+        </div>
+        <div class="field">
+          <label for="st-prefix">Prefix</label>
+          <input id="st-prefix" name="prefix" type="text" placeholder="prod/">
+          <p class="hint">Optional. Each database gets its own folder under this.</p>
+        </div>
+        <div class="field">
+          <label for="st-access">Access key</label>
+          <input id="st-access" name="access_key" type="text" autocomplete="off"
+                 spellcheck="false">
+          <p class="hint">Stored as a Swarm secret, never in a file the panel writes — a
+          backup agent runs on whichever machine holds the database, and Swarm is the only
+          thing that can put a credential there.</p>
+        </div>
+        <div class="field">
+          <label for="st-secret">Secret key</label>
+          <input id="st-secret" name="secret_key" type="password" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="st-sse">Server-side encryption</label>
+          <label class="switch switch-inline">
+            <input id="st-sse" type="checkbox" name="sse" checked>
+            <span class="switch-track" aria-hidden="true"></span>
+            <span class="switch-label">on</span>
+          </label>
+          <p class="hint">On by default. It costs nothing on any implementation that
+          supports it, and what is in the bucket is every row of your database.</p>
+        </div>
+        <div class="field">
+          <label for="st-path">Path-style addressing</label>
+          <label class="check">
+            <input id="st-path" type="checkbox" name="path_style">
+            <span>Needed by MinIO and some self-hosted gateways.</span>
+          </label>
+        </div>
+      </div>
+    </div>
+    <div class="sticky-save">
+      <button class="btn btn-primary" type="submit">Save target</button>
+      <span class="muted">Credentials are written first: a target pointing at a secret
+      that does not exist is a database that fails to deploy with a message about Swarm
+      rather than about storage.</span>
+    </div>
+  </form>
+</section></section>
       <section data-view="settings" hidden><div class="page-head">
   <div>
     <h1>Settings</h1>
@@ -9820,7 +11189,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
       <h2>Hetzner</h2>
       <span class="spacer"></span>
       
-      <span class="eyebrow">5 of 6 editable</span>
+      <span class="eyebrow">4 of 5 editable</span>
     </div>
 
     
@@ -9901,25 +11270,6 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
     </div>
     
     <div class="setting-row">
-      <label for="set-WORKER_TYPE">
-        <span class="mono">WORKER_TYPE</span>
-      </label>
-
-      
-        <input id="set-WORKER_TYPE" type="text" name="value__WORKER_TYPE" value="cpx21">
-        <input type="hidden" name="key" value="WORKER_TYPE">
-      
-
-      <p class="why">
-        
-        Applies to workers created from now on. How many replicas it holds is read from the Hetzner catalogue, so there is nothing to keep in sync — a bigger type simply means fewer, larger nodes.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
       <label for="set-HCLOUD_TOKEN">
         <span class="mono">HCLOUD_TOKEN</span>
       </label>
@@ -9952,7 +11302,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
       <h2>Access</h2>
       <span class="spacer"></span>
       
-      <span class="eyebrow">3 of 8 editable</span>
+      <span class="eyebrow">1 of 6 editable</span>
     </div>
 
     
@@ -10051,44 +11401,6 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
     </div>
     
     <div class="setting-row">
-      <label for="set-ALERT_TELEGRAM_BOT_TOKEN">
-        <span class="mono">ALERT_TELEGRAM_BOT_TOKEN</span>
-      </label>
-
-      
-        <input id="set-ALERT_TELEGRAM_BOT_TOKEN" type="text" name="value__ALERT_TELEGRAM_BOT_TOKEN" value="8140000000:AAF-preview-not-a-real-token">
-        <input type="hidden" name="key" value="ALERT_TELEGRAM_BOT_TOKEN">
-      
-
-      <p class="why">
-        
-        From @BotFather. Rendered into a root-only config file on the master, never into a container&#39;s environment.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
-      <label for="set-ALERT_TELEGRAM_CHAT_ID">
-        <span class="mono">ALERT_TELEGRAM_CHAT_ID</span>
-      </label>
-
-      
-        <input id="set-ALERT_TELEGRAM_CHAT_ID" type="text" name="value__ALERT_TELEGRAM_CHAT_ID" value="-1002233445566">
-        <input type="hidden" name="key" value="ALERT_TELEGRAM_CHAT_ID">
-      
-
-      <p class="why">
-        
-        The group or channel to post in. Negative for groups; get it from /getUpdates after sending one message there. Leave both blank and alerts are generated and dropped.
-        
-          <em>Saving redeploys the monitoring stack.</em>
-        
-      </p>
-    </div>
-    
-    <div class="setting-row">
       <label for="set-CF_TUNNEL_TOKEN">
         <span class="mono">CF_TUNNEL_TOKEN</span>
       </label>
@@ -10152,9 +11464,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
 <div class="banner">
   <div>
-    <strong>Fleet</strong> lives
-    on the <a href="#view-autoscaler">Autoscaler</a> page, next to the
-    signals it drives — SLO, replica and host
+    <strong>Fleet, Dataguard</strong> live
+    on the <a href="#view-manager">Manager</a> page, next to the
+    signals they drive — SLO, replica and host
     bounds, sustain windows and cooldowns.
   </div>
 </div>
@@ -10610,6 +11922,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   // Sections rendered server-side already carry their checkbox state; this
   // brings the disabled state of their controls into line with it on load.
   initToggleSections(document);
+  syncPlacement(document);
 
   // --- tooltips that appear immediately -------------------------------------
   // The native `title` attribute waits about a second before showing, which is
@@ -10725,6 +12038,32 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   function initToggleSections(root) {
     var sections = (root || document).querySelectorAll("[data-toggle-section]");
     for (var i = 0; i < sections.length; i++) { syncToggleSection(sections[i]); }
+  }
+
+  // The manager switch and the placement mode are one decision wearing two
+  // hats, and the server keeps them in step whatever this does — see
+  // Component.normalize. This is here so the form does not sit there showing
+  // you a combination it is about to change behind your back: turning the
+  // manager on sets Placement to auto in front of you, and pinning Placement
+  // turns the manager off.
+  //
+  // Which one wins depends on which one you just touched, exactly as on the
+  // server: the more recent, more specific intent is the one that survives.
+  function syncPlacement(root) {
+    var scope = root || document;
+    var master = scope.querySelector("[data-placement-sync]");
+    var mode = scope.querySelector("#f-placement_mode");
+    if (!master || !mode) { return; }
+    master.addEventListener("change", function () {
+      if (master.checked && mode.value !== "auto") { mode.value = "auto"; }
+    });
+    mode.addEventListener("change", function () {
+      if (mode.value !== "auto" && master.checked) {
+        master.checked = false;
+        var section = master.closest("[data-toggle-section]");
+        if (section) { syncToggleSection(section); }
+      }
+    });
   }
 
   function sig(tasks) {
@@ -10920,7 +12259,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 /* Preview-only: hash routing between views. All widget behaviour comes from the
    shared app.js above, so what you click here is the same code the panel runs. */
 (function () {
-  var LABEL = {"alerts": "Alerts", "autoscaler": "Autoscaler", "autoscaler-silent": "Autoscaler, no metrics", "cluster": "Cluster", "component-api": "api", "component-api-staging": "api-staging", "component-cache": "cache", "component-documents": "documents", "component-sessions": "sessions", "components": "Components", "login": "Sign in", "new-app": "New application", "new-mongo": "New mongodb", "new-redis": "New redis", "node-k39dl2mzq018": "aichat-master", "node-w1af02c9be47": "aichat-worker-1754812203", "node-w2bc71d0aa93": "aichat-worker-1754819114", "node-w3de92f1cc05": "aichat-worker-1754823887", "overview": "Overview", "settings": "Settings"};
+  var LABEL = {"alerts": "Alerts", "cluster": "Cluster", "component-api": "api", "component-api-staging": "api-staging", "component-cache": "cache", "component-documents": "documents", "components": "Components", "login": "Sign in", "manager": "Manager", "manager-silent": "Manager, no metrics", "new-app": "New application", "new-mongo": "New mongodb", "new-redis": "New redis", "node-k39dl2mzq018": "aichat-master", "node-w1af02c9be47": "aichat-worker-1754812203", "node-w2bc71d0aa93": "aichat-worker-1754819114", "node-w3de92f1cc05": "aichat-worker-1754823887", "overview": "Overview", "settings": "Settings", "storage": "Storage"};
   var CLUSTER = "aichat";
 
   function show(name) {

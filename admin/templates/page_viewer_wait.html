@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}{{ component.name }} · visualiser · {{ cluster_name }}{% endblock %}
+{% block crumb %}{{ cluster_name }} · components · {{ component.name }}{% endblock %}
+{% block main %}
+<div class="page-head">
+  <div>
+    <div class="eyebrow"><a href="{{ component_href(component.name) }}">{{ component.name }}</a></div>
+    <h1>Starting the visualiser</h1>
+    <p class="hint">It is kept stopped when nobody is looking at it — it has full access to
+    this database and no password of its own, so the shorter it exists the smaller that
+    surface is. Give it a few seconds and reload.</p>
+  </div>
+</div>
+{% if detail %}
+<div class="banner bad"><div>{{ detail }}</div></div>
+{% endif %}
+<div class="btn-row">
+  <a class="btn btn-primary" href="{{ viewer_href(component.name) }}">Try again</a>
+  <a class="btn" href="{{ component_href(component.name) }}">Back to {{ component.name }}</a>
+</div>
+{% endblock %}

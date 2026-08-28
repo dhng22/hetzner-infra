@@ -18,10 +18,12 @@ which is bearer-token authenticated instead. See deploy_hook().
 
 import os
 
-from flask import (Flask, abort, flash, jsonify, redirect, render_template,
+import requests
+from flask import (Flask, Response, abort, flash, jsonify, redirect, render_template,
                    request, session, url_for)
 from werkzeug.utils import safe_join
 
+import alerttargets
 import auth
 import catalog
 import components
@@ -31,6 +33,7 @@ import registry
 import settings_def
 import shape
 import state
+import storage as storage_store
 from components import store as component_store
 
 PREVIEW = os.environ.get("PREVIEW") == "1"
@@ -67,8 +70,9 @@ NAV = [
     {"key": "overview", "label": "Overview", "endpoint": "overview"},
     {"key": "components", "label": "Components", "endpoint": "components_index"},
     {"key": "cluster", "label": "Cluster", "endpoint": "cluster"},
-    {"key": "autoscaler", "label": "Autoscaler", "endpoint": "autoscaler"},
+    {"key": "manager", "label": "Manager", "endpoint": "manager"},
     {"key": "alerts", "label": "Alerts", "endpoint": "alerts"},
+    {"key": "storage", "label": "Storage", "endpoint": "storage"},
     {"key": "settings", "label": "Settings", "endpoint": "settings"},
 ]
 
@@ -195,6 +199,12 @@ def _globals():
         "new_href": lambda type_name: url_for("component_new", type=type_name),
         "create_href": lambda: url_for("component_create"),
         "settings_href": lambda: url_for("save_settings"),
+        "storage_href": lambda: url_for("save_storage"),
+        "alert_target_href": lambda: url_for("save_alert_target"),
+        "alert_target_delete_href": lambda name: url_for("delete_alert_target", name=name),
+        "storage_delete_href": lambda name: url_for("delete_storage", name=name),
+        "viewer_href": lambda name: url_for("component_viewer", name=name, sub=""),
+        "restore_href": lambda name: url_for("restore_component", name=name),
         "registry_href": lambda: url_for("save_registry"),
         "stack_href": lambda: url_for("deploy_system"),
         "logout_href": lambda: url_for("logout"),
@@ -497,7 +507,7 @@ def _form_spec(form):
 #: Tabs whose content this route fetches only when they are the open tab. They
 #: must be followed as links rather than switched in the browser — see the
 #: handler in static/app.js.
-LAZY_TABS = ("logs", "deployments", "credentials", "map")
+LAZY_TABS = ("logs", "deployments", "credentials", "map", "backups")
 
 
 @app.get("/components/<name>")
@@ -505,6 +515,13 @@ LAZY_TABS = ("logs", "deployments", "credentials", "map")
 def component_detail(name):
     component = _load(name)
     view = data.component_view(component)
+    # How much data it actually holds. Swarm advertises cores and memory and
+    # says nothing about a volume, so without this the header could state a
+    # component's CPU and memory footprint and be silent about the one resource
+    # that cannot be recovered by shedding load. Absent for anything dataguard
+    # is not measuring, which is honest — nothing else in the cluster knows.
+    if component.MANAGER_FIELD == "dataguard":
+        view["data_gb"] = data.component_data_gb(component.name)
     tabs = component.tabs()
     tab = request.args.get("tab", tabs[0][0])
     if tab not in [t[0] for t in tabs]:
@@ -526,12 +543,22 @@ def component_detail(name):
         extra["deployments"], extra["rollout"] = data.deployments(name, component.service)
         extra["registries"] = data.registry_logins()
     if tab == "map":
-        extra["map"] = data.component_map(component.services())
+        # The component NAME is passed as well as its services, because a
+        # database's map is coloured by which member is primary and that answer
+        # lives in dataguard's metrics rather than in the task list.
+        extra["map"] = data.component_map(
+            component.services(),
+            component=component.name if component.MANAGER_FIELD == "dataguard" else None)
     # Any type that declares credentials gets the tab, and a type that does not
     # gets nothing. No branch here names a database.
     if tab == "credentials" and type(component).SECRETS:
         extra["creds"] = component.credentials(data.master_ip())
         extra["firewall"] = _firewall_state(component)
+    # `pbm list` shells into a container, so it runs only when the tab is open.
+    # Any type that can list snapshots gets the tab; no branch here names one.
+    if tab == "backups" and hasattr(component, "snapshots"):
+        found = component.snapshots()
+        extra["snapshots"], extra["pitr"] = found if found else ([], {})
 
     return render_template("page_component_detail.html", section="components",
                            component=component, view=view, tabs=tabs, tab=tab,
@@ -857,19 +884,288 @@ def deploy_system():
     return redirect(url_for("components_index"))
 
 
-@app.get("/autoscaler")
+@app.get("/manager")
 @auth.login_required
-def autoscaler():
-    return render_template("page_autoscaler.html", section="autoscaler",
+def manager():
+    """
+    Two tabs over one page: the fleet, and the databases.
+
+    They share a page because they are the same kind of thing — cluster-wide
+    policy for a process that changes the cluster on its own — and because the
+    alternative was a second nav entry for a handful of settings. Both post to
+    /settings and both redeploy `monitoring`, so "change it and deploy" is one
+    button in either.
+    """
+    return render_template("page_manager.html", section="manager",
                            a=data.autoscaler_state(),
-                           scaling_groups=_settings_groups(only=AUTOSCALER_GROUPS))
+                           tab=request.args.get("tab", "fleet"),
+                           scaling_groups=_settings_groups(only=AUTOSCALER_GROUPS),
+                           dataguard_groups=_settings_groups(only=DATAGUARD_GROUPS),
+                           dg=data.dataguard_state())
 
 
 @app.get("/alerts")
 @auth.login_required
 def alerts():
     return render_template("page_alerts.html", section="alerts", alerts=data.alerts(),
-                           destination=data.alert_destination())
+                           destination=data.alert_destination(),
+                           alert_targets=alerttargets.described(),
+                           alert_kinds=alerttargets.KINDS)
+
+
+@app.post("/alerts/targets")
+@auth.login_required
+def save_alert_target():
+    """
+    Add a destination, then regenerate and redeploy.
+
+    Both, and in that order: the file the panel writes is not what Alertmanager
+    reads — `bin/render-alertmanager` turns the list into a config on the next
+    monitoring deploy — so saving without deploying would leave the panel
+    showing a target that receives nothing.
+    """
+    _require_csrf()
+    _no_writes_in_preview()
+    target = {
+        "name": (request.form.get("name") or "").strip(),
+        "kind": request.form.get("kind") or alerttargets.KIND_TELEGRAM,
+        "bot_token": (request.form.get("bot_token") or "").strip(),
+        "chat_id": (request.form.get("chat_id") or "").strip(),
+    }
+    problems = alerttargets.save(target)
+    if problems:
+        for problem in problems:
+            flash(problem, "bad")
+        return redirect(url_for("alerts"))
+    ok, output = envstore.deploy_stack("monitoring")
+    flash(f"{target['name']} added. " + (output or
+          ("Monitoring redeployed with it." if ok else "The redeploy failed.")),
+          "ok" if ok else "bad")
+    return redirect(url_for("alerts"))
+
+
+@app.post("/alerts/targets/<name>/delete")
+@auth.login_required
+def delete_alert_target(name):
+    _require_csrf()
+    _no_writes_in_preview()
+    alerttargets.remove(name)
+    remaining = alerttargets.names()
+    ok, _output = envstore.deploy_stack("monitoring")
+    message = f"{name} removed."
+    if not remaining:
+        # The state that looks healthy from the inside, said out loud rather
+        # than left for somebody to notice when an alert did not arrive.
+        message += " Nothing is left — every alert is now generated and dropped."
+    flash(message, "ok" if ok else "bad")
+    return redirect(url_for("alerts"))
+
+
+# --- restore ---------------------------------------------------------------
+
+@app.post("/components/<name>/restore")
+@auth.login_required
+def restore_component(name):
+    """
+    Put a database back to a moment in the past. The most destructive verb here.
+
+    Everything written after the target is GONE — that is what restoring means,
+    and it is why this needs the component's name typed rather than a confirm
+    dialog. `docker stack rm` has the same guard for the same reason: a button
+    whose worst outcome is unrecoverable should be harder to press by accident
+    than one whose worst outcome is a redeploy.
+    """
+    _require_csrf()
+    _no_writes_in_preview()
+    try:
+        component = components.load(name)
+    except components.ComponentError as exc:
+        abort(404, str(exc))
+    if not hasattr(component, "restore"):
+        abort(404, "This component type has no restore.")
+    if request.form.get("confirm") != name:
+        flash("Type the component's name to confirm the restore.", "bad")
+        return redirect(_component_href(name, "backups"))
+
+    ok, output = component.restore(
+        snapshot=request.form.get("snapshot") or None,
+        point_in_time=request.form.get("point_in_time") or None)
+    flash(output, "ok" if ok else "bad")
+    return redirect(_component_href(name, "backups"))
+
+
+# --- the data visualiser ---------------------------------------------------
+# A browser console over a database, reached only through this panel.
+#
+# THE SERVICE HAS NO PUBLISHED PORT AND NO TUNNEL HOSTNAME. It is full access to
+# your data with no password of its own, so the only door is the session you are
+# already signed in to — which is also the only door that already has a lockout,
+# a Strict SameSite cookie and a CSRF token behind it. Giving it a hostname of
+# its own would be a second front door with a different auth story, and giving it
+# its own login would be a second password nobody rotates.
+#
+# It starts at zero replicas and dataguard stops it again once nobody has looked
+# at it, so the surface exists only while somebody is using it.
+
+VIEWER_PORT = {"mongo": 8081, "redis": 5540}
+#: Everything a proxy must not forward. `Upgrade` in particular: a websocket
+#: through here would escape the request/response model this route is built on,
+#: and both consoles fall back to long polling without it.
+HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+              "te", "trailer", "transfer-encoding", "upgrade", "host",
+              "content-length", "content-encoding"}
+#: Never forwarded upstream, and separate from the hop-by-hop list because the
+#: reason is different. These are OUR credentials, not transport plumbing.
+#:
+#: The visualiser is a third-party image with unrestricted access to a database,
+#: reached through a page the operator is signed in to — so the browser attaches
+#: the panel's session cookie to every request through this route, exactly as it
+#: would to any other path on this origin. Passing that straight through hands a
+#: console the bearer token for the console that runs the cluster. `Cookie` is
+#: rebuilt below with the panel's own cookie removed and the visualiser's kept,
+#: because the visualiser does need its own session back.
+NEVER_FORWARD = {"cookie", "authorization"}
+VIEWER_MAX_BYTES = 32 * 1024 * 1024
+
+
+@app.route("/components/<name>/viewer/", defaults={"sub": ""},
+           methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+@app.route("/components/<name>/viewer/<path:sub>",
+           methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+@auth.login_required
+def component_viewer(name, sub):
+    """
+    Proxy one request to a component's visualiser, starting it if it is asleep.
+
+    `_require_csrf` is deliberately NOT applied. A request through here carries
+    the UPSTREAM application's CSRF token, not the panel's, and demanding ours
+    would break every form the console has. What guards this instead is the
+    session plus `SESSION_COOKIE_SAMESITE="Strict"`, which is what stops another
+    site driving it from your browser — and the fact that the thing behind it is
+    not reachable any other way. This is the only mutating path in the panel
+    without a CSRF check, and it is why the note is here rather than in a commit
+    message.
+    """
+    if PREVIEW:
+        abort(400, "This is a preview build with dummy data — nothing is proxied.")
+    try:
+        component = components.load(name)
+    except components.ComponentError as exc:
+        abort(404, str(exc))
+    if not component.spec.get("visualizer"):
+        abort(404, "This component has no data visualiser.")
+    port = VIEWER_PORT.get(component.TYPE)
+    if not port:
+        abort(404, "This component type has no visualiser.")
+
+    service = f"{component.stack}_viewer"
+    started, detail = data.ensure_viewer(service)
+    if not started:
+        return render_template("page_viewer_wait.html", section="components",
+                               component=component, detail=detail), 503
+    data.touch_viewer(component.name)
+
+    body = request.get_data(cache=False, as_text=False)
+    if len(body) > VIEWER_MAX_BYTES:
+        abort(413, "That is larger than the visualiser proxy will forward.")
+    headers = {k: v for k, v in request.headers.items()
+               if k.lower() not in HOP_BY_HOP and k.lower() not in NEVER_FORWARD}
+    # The visualiser's own cookies, and only those. `SESSION_COOKIE_NAME` rather
+    # than the literal "session" so this keeps working if that is ever changed.
+    theirs = "; ".join(f"{k}={v}" for k, v in request.cookies.items()
+                       if k != app.config["SESSION_COOKIE_NAME"])
+    if theirs:
+        headers["Cookie"] = theirs
+    try:
+        upstream = requests.request(
+            request.method, f"http://{service}:{port}/{sub}",
+            params=request.args, data=body, headers=headers,
+            allow_redirects=False, stream=True, timeout=60)
+    except requests.RequestException as exc:
+        return render_template("page_viewer_wait.html", section="components",
+                               component=component, detail=str(exc)), 502
+
+    out = Response(upstream.iter_content(chunk_size=64 * 1024),
+                   status=upstream.status_code)
+    for key, value in upstream.headers.items():
+        if key.lower() in HOP_BY_HOP:
+            continue
+        if key.lower() == "location":
+            # Rewrite an absolute redirect back into our own path, or the
+            # console sends the browser to a hostname that does not resolve.
+            value = value.replace(f"http://{service}:{port}",
+                                  f"/components/{name}/viewer")
+        out.headers[key] = value
+    return out
+
+
+# --- storage ---------------------------------------------------------------
+# Where backups go, defined once for the cluster. A component names a target;
+# this is what a name means. See admin/storage.py for why the credentials are
+# Swarm secrets rather than rows in the file.
+
+def _storage_users(name):
+    """Which components would break if this target went away."""
+    found = []
+    everything, _problems = components.all_components()
+    for component in everything:
+        if component.spec.get("backup_target") == name:
+            found.append(component.name)
+    return found
+
+
+@app.get("/storage")
+@auth.login_required
+def storage():
+    targets = storage_store.described()
+    return render_template("page_storage.html", section="storage",
+                           targets=[dict(t, used_by=_storage_users(t["name"]))
+                                    for t in targets])
+
+
+@app.post("/storage")
+@auth.login_required
+def save_storage():
+    _require_csrf()
+    _no_writes_in_preview()
+    form = request.form
+    target = {
+        "name": (form.get("name") or "").strip(),
+        "kind": storage_store.KIND_S3,
+        "endpoint": (form.get("endpoint") or "").strip(),
+        "region": (form.get("region") or "").strip(),
+        "bucket": (form.get("bucket") or "").strip(),
+        "prefix": (form.get("prefix") or "").strip(),
+        "path_style": form.get("path_style") == "on",
+        # Server-side encryption, on by default. It costs nothing on any S3
+        # implementation that supports it, and what is in the bucket is every
+        # row of your database.
+        "sse": form.get("sse", "on") == "on",
+    }
+    problems = storage_store.save(target, form.get("access_key", ""),
+                                  form.get("secret_key", ""))
+    if problems:
+        for problem in problems:
+            flash(problem, "bad")
+    else:
+        flash(f"{target['name']} saved.", "ok")
+    return redirect(url_for("storage"))
+
+
+@app.post("/storage/<name>/delete")
+@auth.login_required
+def delete_storage(name):
+    _require_csrf()
+    _no_writes_in_preview()
+    if request.form.get("confirm") != name:
+        flash("Type the target's name to confirm.", "bad")
+        return redirect(url_for("storage"))
+    problems = storage_store.remove(name, _storage_users(name))
+    for problem in problems:
+        flash(problem, "bad")
+    if not problems:
+        flash(f"{name} removed. Nothing already in it was deleted.", "ok")
+    return redirect(url_for("storage"))
 
 
 # --- settings --------------------------------------------------------------
@@ -878,8 +1174,8 @@ def alerts():
 @auth.login_required
 def settings():
     return render_template("page_settings.html", section="settings",
-                           groups=_settings_groups(skip=AUTOSCALER_GROUPS),
-                           elsewhere=AUTOSCALER_GROUPS)
+                           groups=_settings_groups(skip=AUTOSCALER_GROUPS + DATAGUARD_GROUPS),
+                           elsewhere=AUTOSCALER_GROUPS + DATAGUARD_GROUPS)
 
 
 @app.post("/settings")
@@ -924,6 +1220,7 @@ def save_settings():
 #: copy of the same form — two forms posting the same keys is a page where the
 #: value you are looking at may already be stale.
 AUTOSCALER_GROUPS = ["Fleet"]
+DATAGUARD_GROUPS = ["Dataguard"]
 
 
 def _settings_groups(only=None, skip=None):
@@ -966,7 +1263,7 @@ def _infra_values():
 PREVIEW_INFRA = {
     "APP_NAME": "aichat", "ROOT_DOMAIN": "acme.dev", "HCLOUD_LOCATION": "hel1",
     "HCLOUD_NETWORK_NAME": "prod-net", "HCLOUD_SSH_KEY_NAME": "my-laptop",
-    "WORKER_IMAGE": "ubuntu-24.04", "WORKER_TYPE": "cpx21",
+    "WORKER_IMAGE": "ubuntu-24.04",
     "HCLOUD_TOKEN": "hcl_9f2bc41d77aa0e35", "GHCR_USER": "acme-bot",
     "GHCR_TOKEN": "ghp_a71ccf20e9bb14d0",
     "NODE_PRESSURE_PCT": "80", "MIN_WORKERS": "0", "MAX_WORKERS": "5",
@@ -977,8 +1274,6 @@ PREVIEW_INFRA = {
     "ADMIN_USER": "admin", "ADMIN_PASSWORD": "hunter2hunter2",
     "GRAFANA_ADMIN_USER": "admin", "GRAFANA_ADMIN_PASSWORD": "s3cr3t-grafana",
     "CF_TUNNEL_TOKEN": "eyJhIjoiN2Y0MGQ5YTIi", "CI_SSH_PUBLIC_KEY": "ssh-ed25519 AAAAC3Nza...",
-    "ALERT_TELEGRAM_BOT_TOKEN": "8140000000:AAF-preview-not-a-real-token",
-    "ALERT_TELEGRAM_CHAT_ID": "-1002233445566",
 }
 # Nothing application-shaped here: no image, no port, no SLO, no replica counts.
 # The fixture stands in for the real infra.env, so an extra key would make the

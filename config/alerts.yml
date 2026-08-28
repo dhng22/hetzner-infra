@@ -35,25 +35,28 @@ groups:
       #
       # Distinct from ReplicaCeiling, which means "this component is out of
       # replicas". Either can trip without the other.
-      - alert: AutoscalerAtMax
-        expr: autoscaler_current_workers >= autoscaler_max_workers
+      - alert: FleetAtMax
+        expr: overseer_current_workers >= overseer_max_workers
         for: 15m
         labels: { severity: warning }
         annotations:
-          summary: "Autoscaler pinned at MAX_WORKERS — raise the ceiling or optimise"
+          summary: "The fleet is pinned at MAX_WORKERS — raise the ceiling or optimise"
 
       # The app is pinned to worker nodes and there are no worker nodes, so
-      # every task is unplaceable. The autoscaler fails back to manager mode on
-      # its next loop, which makes this self-healing within ~60s — so if it is
-      # still true after two minutes, the recovery itself is broken (no docker
-      # CLI in the image, socket permissions, a rollout wedged mid-flight).
+      # every task is unplaceable. The overseer dispatches a release on its next
+      # loop and the autoscaler applies it, which makes this self-healing within
+      # ~2 minutes across the two processes — so if it is still true after five,
+      # the recovery itself is broken (no docker CLI in the image, socket
+      # permissions, a rollout wedged mid-flight, or the dispatch not arriving).
       #
-      # Both gauges come from the same target, so the labels match and `and`
-      # composes them. This is the one state in the new placement model that is
-      # a hard outage rather than a slow degradation.
+      # BOTH GAUGES MUST COME FROM ONE PROCESS. They carry no `service` label of
+      # their own, so vmagent gives them the exporting Swarm service's name, and
+      # `and` between two exporters would match nothing — silently, forever.
+      # That is why every unlabeled fleet gauge lives in the overseer rather than
+      # being split with the half that applies them.
       - alert: AppStrandedWithoutWorkers
-        expr: autoscaler_placement_worker_mode == 1 and autoscaler_current_workers < 1
-        for: 2m
+        expr: overseer_placement_worker_mode == 1 and overseer_current_workers < 1
+        for: 5m
         labels: { severity: critical }
         annotations:
           summary: "App is pinned to worker nodes but no worker exists — tasks cannot be placed"
@@ -88,6 +91,106 @@ groups:
         labels: { severity: critical }
         annotations:
           summary: "Autoscaler has not completed a loop in 5 minutes"
+
+      # The overseer decides; the autoscaler and dataguard only apply. Its
+      # absence is therefore louder than either of theirs: nothing changes size,
+      # no machine is bought or sold, and no database is looked at.
+      - alert: OverseerAbsent
+        expr: absent(overseer_last_loop_timestamp_seconds)
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "The overseer is not being scraped at all — nothing is deciding anything"
+
+      - alert: OverseerStalled
+        expr: time() - overseer_last_loop_timestamp_seconds > 300
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Overseer has not completed a loop in 5 minutes — the fleet is frozen"
+
+  # --- databases ------------------------------------------------------------
+  # Every rule keys on a dataguard gauge with a `component` label rather than
+  # naming a database, because component names are created at runtime and a rule
+  # that names one is a rule somebody has to remember to add.
+  - name: data
+    rules:
+      # The loudest thing in this file. No primary means no writes, and unlike a
+      # slow service it does not degrade — it stops.
+      - alert: NoPrimary
+        expr: max by (component) (dataguard_members{state="PRIMARY"}) < 1
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.component }} has no primary — it is refusing writes"
+
+      - alert: ReplicaLagOverBudget
+        expr: max by (component) (dataguard_replication_lag_seconds) > 60
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.component }} has a replica more than 60s behind"
+
+      # A transition that started and did not finish. Dataguard takes one step
+      # per loop and re-reads the world each time, so "in flight" for hours means
+      # an initial sync that is not progressing rather than a step that hung.
+      - alert: TopologyChangeStuck
+        expr: max by (component) (dataguard_topology_change_in_flight) == 1
+        for: 6h
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.component }} has been mid-transition for six hours"
+
+      - alert: BackupOverdue
+        expr: time() - max by (component) (dataguard_backup_last_success_timestamp) > 172800
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.component }} has not been backed up in two days"
+
+      # A BACKUP NOBODY HAS RESTORED IS A HYPOTHESIS. This is the rule that
+      # separates "we have backups" from "we can recover", and it is the one
+      # people find out about the hard way when it is missing.
+      - alert: BackupNeverVerified
+        expr: time() - max by (component) (dataguard_backup_last_verified_timestamp) > 1209600
+        for: 1h
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.component }}'s backups have not been proven to restore in two weeks"
+
+      # An expired member certificate does not degrade a replica set, it stops
+      # it: members refuse each other and there is no primary. Renewal starts a
+      # month out, so this firing means renewal itself is not working.
+      - alert: TLSCertExpiring
+        expr: min by (component) (dataguard_tls_days_remaining) < 14
+        for: 1h
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.component }} has a member certificate expiring in under 14 days"
+
+      # Informational on purpose. A restore refuses writes for as long as it
+      # runs, and somebody looking at a database that is refusing writes should
+      # be able to find out why from the same place they find everything else.
+      - alert: RestoreInFlight
+        expr: dataguard_restore_in_flight == 1
+        for: 1m
+        labels: { severity: info }
+        annotations:
+          summary: "A database restore is running — that database is refusing writes"
+
+      - alert: DataguardAbsent
+        expr: absent(dataguard_last_loop_timestamp_seconds)
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Dataguard is not being scraped — no database is being watched"
+
+      - alert: DataguardStalled
+        expr: time() - dataguard_last_loop_timestamp_seconds > 600
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Dataguard has not completed a loop in ten minutes"
 
   - name: app
     rules:
@@ -129,7 +232,7 @@ groups:
       #
       # Distinct from AutoscalerAtMax on purpose. That one means "out of node
       # budget"; this means "this component is out of replicas".
-      # THE DISPATCHER HAS GONE QUIET.
+      # THE OVERSEER HAS GONE QUIET.
       #
       # It owns the performance loop: it measures, decides, and pushes a verdict
       # to whichever manager claims the cause. Managers do not poll, so if it
@@ -141,7 +244,7 @@ groups:
       # it. But it is INVISIBLE from the outside: a cluster nobody is scaling
       # looks exactly like a cluster nothing is happening to. This rule is what
       # makes the safe failure a noticed one.
-      - alert: DispatcherSilent
+      - alert: OverseerSilent
         expr: autoscaler_services_awaiting_dispatch > 0
         for: 10m
         labels: { severity: warning }
@@ -150,7 +253,7 @@ groups:
           description: >-
             The autoscaler has had no fresh verdict for at least ten minutes, so
             it is holding every replica count where it is. Placement, node
-            lifecycle and reaping are unaffected. Check that monitoring_dispatcher
+            lifecycle and reaping are unaffected. Check that monitoring_overseer
             is running and that the autoscaler service still carries
             infra.handles=local with a reachable infra.handles.port.
 
@@ -158,13 +261,13 @@ groups:
       # not being handled, and the manager itself cannot report that — it is not
       # being told anything at all.
       - alert: ManagerUnreachable
-        expr: dispatcher_delivery_ok == 0
+        expr: overseer_delivery_ok == 0
         for: 10m
         labels: { severity: warning }
         annotations:
           summary: "{{ $labels.manager }} claims a cause but cannot be delivered to"
           description: >-
-            The dispatcher has a verdict for {{ $labels.manager }} and its POST
+            The overseer has a verdict for {{ $labels.manager }} and its POST
             has been failing for ten minutes, so that manager is acting on
             nothing. Deliveries are level-triggered and retried every loop, so
             this clears by itself the moment the manager answers.
@@ -177,7 +280,7 @@ groups:
       # also silent, so this is the rule that stops "we are not scaling" from
       # meaning "nobody ever finds out".
       #
-      # The gauge belongs to the DISPATCHER, not the autoscaler: attribution is
+      # The gauge belongs to the OVERSEER, not the autoscaler: attribution is
       # diagnosis, it has more than one consumer, and it has no business living
       # in the process that can delete servers.
       #
@@ -192,7 +295,7 @@ groups:
       # because the thing being alerted on is by definition not something the
       # cluster can fix by itself.
       - alert: ThrottledByUnownedDependency
-        expr: dispatcher_signal_unowned == 1
+        expr: overseer_signal_unowned == 1
         for: 30m
         labels: { severity: warning }
         annotations:
@@ -200,7 +303,7 @@ groups:
           description: >-
             p95 has been over budget for half an hour while the replicas
             themselves are idle, so the autoscaler is deliberately not scaling.
-            The suspected cause is {{ $labels.cause }}; the dispatcher's log
+            The suspected cause is {{ $labels.cause }}; the overseer's log
             names the specific target. Either give something the
             infra.handles={{ $labels.cause }} label, or mute it on the component
             with autoscale.mute_causes.
@@ -228,7 +331,7 @@ groups:
       - alert: NoHealthyReplicas
         expr: |
           autoscaler_service_running_replicas == 0
-          and on (service) (autoscaler_service_admitted_replicas > 0)
+          and on (service) (overseer_service_replica_ceiling > 0)
         for: 2m
         labels: { severity: critical }
         annotations:
@@ -300,7 +403,7 @@ groups:
       # this is still true ten minutes later, MAX_WORKERS is the binding
       # constraint and a human has to choose.
       - alert: AppMinReplicasUnsatisfiable
-        expr: autoscaler_service_min_unsatisfied == 1
+        expr: overseer_service_min_unsatisfied == 1
         for: 10m
         labels: { severity: critical }
         annotations:

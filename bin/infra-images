@@ -7,14 +7,15 @@
 #   infra_images            # resolve the pinned commit from state/version.json
 #   infra_images <commit>   # resolve that commit instead
 #
-# It exports three references:
+# It exports one reference per component:
 #   INFRA_IMAGE_AUTOSCALER  ghcr.io/<owner>/<repo>/autoscaler:<commit>
-#   INFRA_IMAGE_DISPATCHER  ghcr.io/<owner>/<repo>/dispatcher:<commit>
+#   INFRA_IMAGE_OVERSEER    ghcr.io/<owner>/<repo>/overseer:<commit>
+#   INFRA_IMAGE_DATAGUARD   ghcr.io/<owner>/<repo>/dataguard:<commit>
 #   INFRA_IMAGE_ADMIN       ghcr.io/<owner>/<repo>/admin:<commit>
 #
 # WHY THE TAG IS A COMMIT SHA AND NEVER `latest`.
 #
-# These three images used to be built on the master, tagged `:latest`, and
+# These images used to be built on the master, tagged `:latest`, and
 # handed to `docker stack deploy`. A tag that exists only in one box's image
 # store cannot be resolved to a digest, so Swarm wrote the bare string into the
 # service spec — and rebuilding the tag then produced a spec byte-identical to
@@ -38,7 +39,7 @@
 # there is no setting to get wrong and no second place for the answer to live.
 # =============================================================================
 
-INFRA_IMAGE_COMPONENTS="autoscaler dispatcher admin"
+INFRA_IMAGE_COMPONENTS="autoscaler overseer dataguard admin"
 
 #: The registry path the images are published under.
 #: Derived from INFRA_REPO_URL, never configured, so there is one answer to
@@ -100,16 +101,18 @@ infra_images() {
         echo "that repository's own Actions workflow and live under its own namespace." >&2
         return 1
     fi
-    # Outputs, not settings. INFRA_IMAGE_COMMIT is what the three references
-    # below are pinned to, which callers log and write into version.json.
+    # Outputs, not settings. INFRA_IMAGE_COMMIT is what the references below
+    # are pinned to, which callers log and write into version.json.
     export INFRA_IMAGE_COMMIT="$tag"
     export INFRA_IMAGE_AUTOSCALER="$repo/autoscaler:$tag"
-    export INFRA_IMAGE_DISPATCHER="$repo/dispatcher:$tag"
+    export INFRA_IMAGE_OVERSEER="$repo/overseer:$tag"
+    export INFRA_IMAGE_DATAGUARD="$repo/dataguard:$tag"
     export INFRA_IMAGE_ADMIN="$repo/admin:$tag"
 }
 
 #: Every reference infra_images just exported, one per line — so a caller that
-#: pulls them cannot pull two of the three because somebody added a component.
+#: pulls them cannot pull three of four because somebody added a component.
 infra_image_refs() {
-    printf '%s\n' "$INFRA_IMAGE_AUTOSCALER" "$INFRA_IMAGE_DISPATCHER" "$INFRA_IMAGE_ADMIN"
+    printf '%s\n' "$INFRA_IMAGE_AUTOSCALER" "$INFRA_IMAGE_OVERSEER" \
+                   "$INFRA_IMAGE_DATAGUARD" "$INFRA_IMAGE_ADMIN"
 }

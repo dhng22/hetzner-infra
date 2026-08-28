@@ -16,17 +16,32 @@ and monitoring picks up anything new without configuration.
    │    cloudflared   (global: one connector per node)              │
    │    <your apps>   (N replicas each, autoscaled independently)   │
    │    node-exporter + cadvisor (global)                           │
+   ├────────────────────────────────────────────────────────────────┤
+   │  DATABASE MACHINES — leased, one per member, never packed       │
+   │    <one database member>  + its backup agent                   │
+   │    labelled `dedicated=true`, so no app replica lands here     │
    └─────────────────────────────────┬──────────────────────────────┘
             creates, drains          │        metrics, logs
    ┌─────────────────────────────────┴──────────────────────────────┐
-   │  MASTER — manual, CPX31. HOST #1.                              │
-   │    admin panel · autoscaler                                    │
+   │  MASTER — manual. HOST #1.                                     │
+   │    admin panel                                                 │
+   │    overseer     decides: what is slow, and how big the fleet is│
+   │    autoscaler   applies it to services                         │
+   │    dataguard    applies it to databases                        │
    │    VictoriaMetrics · Loki · Grafana · vmagent · Alertmanager   │
    │    cloudflared                                                 │
-   │    <your databases>  (stateful: they never move)               │
+   │    <your databases>  (member 1 always; the rest grow outward)  │
    │    ...and your apps ONLY while no worker exists                │
    └────────────────────────────────────────────────────────────────┘
 ```
+
+**One process decides; two apply.** The overseer measures every application,
+works out why a slow one is slow, and owns the Hetzner fleet: how many machines
+exist, of what size, and which may be deleted. It holds the token. The
+autoscaler turns its verdicts into replica counts and placement constraints;
+dataguard turns them into replica-set members, failovers and backups. Neither
+can buy a machine, and neither decides anything — which is why a manager that
+wants a machine asks rather than racing another one for it.
 
 The master is **not a worker** — it is the control plane, and while no worker
 exists it carries your components itself. So the resting state is one box and no
@@ -38,7 +53,9 @@ configured. See [Scaling policy](#scaling-policy).
 Two networks, both created before any component exists: `edge` (every component
 plus cloudflared — this is how your app reaches your database, and how the
 tunnel reaches your app) and `monitoring` (the observability stack, plus
-anything being scraped).
+anything being scraped). Dataguard is the only infrastructure service on both,
+because it has to talk to a database rather than about one — which is why its
+receiver binds the monitoring address only and never `0.0.0.0`.
 
 ## Components
 
@@ -52,16 +69,26 @@ and a Docker stack:
   stack.yml        what was last rendered and deployed
 ```
 
-Two types ship today:
+Three types ship today:
 
 | Group | Type | What it is | Owns |
 |---|---|---|---|
 | Application | `app` | a container image of yours, behind the tunnel | its environment, its replica count, its scaling policy |
-| Database | `redis` | a password-protected Redis with a volume | its own password, yours to set or generate |
+| Database | `redis` | Redis with a Sentinel quorum in front of it | its own password, yours to set or generate |
+| Database | `mongo` | a MongoDB replica set, TLS end to end | its own password, its own certificate authority |
 
-In the panel that is one **+ New** button with those two entries. Database
-currently means Redis; a second engine is a new class and one line, and the
-menu grows on its own.
+In the panel that is one **+ New** button with two entries, and Database offers
+both engines. A third is a new class and one line in `components/__init__.py`;
+no route, template or script learns its name.
+
+Both databases are created at their FINAL SHAPE and grow into it. A `mongo` with
+a pool of three is four member services and a connection string that names all
+four on the day you make it, while only the one on the master is running. The
+driver ignores a seed it cannot resolve and discovers the set from the ones it
+can — which is what lets the database move onto its own machines later without
+anything that talks to it changing. A `redis` does the same trick with a
+sentinel URL. **Raising the pool afterwards is the one change that does alter
+the string, so pick the ceiling when you create it.**
 
 Create them in the panel (**Components → New app**) or on the master:
 
@@ -170,7 +197,7 @@ There is no `REPLICAS_PER_WORKER`. Everything is a `(CPU, memory)` vector:
 a node's free capacity = what it advertises
                        - the reservations of every task on it that is not an app
 demand                 = for each component, replicas x its own reservation
-a new worker           = the Hetzner catalogue entry for WORKER_TYPE
+a new machine          = the catalogue entry for the smallest plan that fits
                        - the per-node tax of the global services
 ```
 
@@ -302,13 +329,13 @@ the service spec, so a worker created an hour from now can still pull.
 Push to `master`. That is the whole procedure.
 
 GitHub Actions builds the three images this repository owns — the autoscaler,
-the dispatcher and the admin panel — runs all four test suites **inside** the
+the overseer and the admin panel — runs all four test suites **inside** the
 images it just built, and only then publishes them to GHCR, tagged with the
 commit:
 
 ```
 ghcr.io/<owner>/<repo>/autoscaler:<sha>
-ghcr.io/<owner>/<repo>/dispatcher:<sha>
+ghcr.io/<owner>/<repo>/overseer:<sha>
 ghcr.io/<owner>/<repo>/admin:<sha>
 ```
 
@@ -486,25 +513,61 @@ rolls production back:
 - **Components share the fleet.** A staging copy is a component like any other:
   it reserves resources, and a real load test against it will buy a worker.
   Give it small reservations and a low `max_replicas`, or expect the bill.
-- **Deleting a Redis keeps its volume.** `docker stack rm` does not remove
+- **Deleting a database keeps its volumes.** `docker stack rm` does not remove
   volumes and neither do we — a mistyped delete should cost you a redeploy, not
-  your data. Remove `<name>-data` by hand once you are sure.
+  your data. Remove `<name>-<n>-data` by hand once you are sure.
 - **Rotating a database password breaks your clients, by design.** Nothing else
   in the cluster holds a copy, so nothing else needs updating; your application
   needs the new URL, and that is your move to make.
 - **The master is a single point of failure for control, not traffic.** Enable
-  Hetzner backups; every volume and all metrics history live only there.
-- **Redis has no HA.** `everysec` AOF loses up to a second on a hard crash.
-  Fine for cache and sessions, not as a source of truth.
+  Hetzner backups; the metrics history and every unmanaged volume live only there.
+- **Secondary reads are a contract with your application, not a setting.** A
+  managed Mongo ships with `readPreference=secondaryPreferred`, because read
+  scaling is the point of a replica set. A secondary can be behind the write
+  that produced what you are reading, and the only fix is on your side: one
+  causally consistent session per request chain, with its `operationTime`
+  carried forward. The Credentials tab has the code. Turn the switch off and
+  every read goes to the primary — correct by construction, and then only a
+  bigger machine can help read latency, which dataguard will say rather than
+  adding a replica that could not have helped.
+- **A client that cannot speak Sentinel will not fail over.** `redis://host:6379`
+  is a promise that one server is the database, and no amount of infrastructure
+  keeps that promise while the server changes. redis-py, ioredis, Lettuce and
+  go-redis all speak it. If yours does not, that component is HA for the data
+  and not for that client.
+- **Redis backup is not MongoDB backup.** Mongo gets real point-in-time
+  recovery — a continuous oplog between snapshots, so you can restore to a
+  second. Redis gets an RDB snapshot plus the append-only file, replayed to the
+  last `everysec` fsync: up to a second of writes gone. Both are called
+  "backup"; only one of them is arbitrary-timestamp recovery.
+- **A backup nobody has restored is a hypothesis.** Dataguard proves one
+  restores on a schedule and refuses to change a database's shape without a
+  recent VERIFIED backup, because a topology change can lose data. `BackupNeverVerified`
+  is the alert; the Dataguard tab is where you see which gate is holding
+  something back.
+- **A database is never power-cycled onto a bigger plan.** The overseer can
+  resize a worker; for a member it provisions a bigger machine, syncs onto it,
+  promotes it and drops the old one. Same sequence as every other transition,
+  interruptible at every step, and the old machine serves until it is not needed.
+- **The data visualiser is full access with no password of its own.** It is
+  never published and never on the tunnel: the View button proxies it through
+  your panel session, it starts on the click, and dataguard stops it once
+  nobody is looking. That proxy is the only mutating path in the panel without
+  a CSRF check — a request through it carries the console's token, not ours —
+  and what guards it is the session plus a Strict SameSite cookie.
 - **Scale-down drains for at most 180s** before removing the node anyway. Long
   requests need that raised in `autoscaler.py`.
 - **A silent alert rule is worse than no alert rule.** `NoHealthyReplicas` once
   matched a service name that no longer existed, so it could never fire and
   looked identical to "nothing is wrong". Now that component names are created
-  at runtime, no rule may name one: they key on gauges the autoscaler exports,
+  at runtime, no rule may name one: they key on gauges the three infrastructure
+  processes export,
   and `config/alerts_test.yml` pins that — including that the cluster-level
-  gauges stay unlabelled, which is what keeps `AppStrandedWithoutWorkers` able
-  to fire at all. Run `promtool test rules config/alerts_test.yml` after
+  gauges stay unlabelled — and, since the fleet moved out of the autoscaler,
+  that BOTH SIDES OF A JOIN COME FROM ONE PROCESS. vmagent gives an unlabelled
+  gauge the exporting service's name, so `X == 1 and Y < 1` across two exporters
+  matches nothing, silently, forever. That is why every fleet gauge lives in the
+  overseer rather than being split with the half that applies it. Run `promtool test rules config/alerts_test.yml` after
   touching `alerts.yml`. The `Watchdog` rule fires permanently on purpose — if
   the daily heartbeat stops arriving, the pipeline is broken, not quiet.
 

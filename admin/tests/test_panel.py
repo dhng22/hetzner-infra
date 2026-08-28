@@ -11,13 +11,21 @@ refuse" is a correctness property worth pinning.
 """
 
 import os
+import importlib.machinery
 import shutil
 import sys
 import tempfile
 import re
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_ADMIN = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ADMIN)
+# The repository ROOT as well, for `pki`. The panel ISSUES the TLS material a
+# managed database mounts, so `admin/Dockerfile` copies `pki/` in from beside
+# `admin/` — but this suite runs with `admin/` as the working directory both
+# in the image and out of it, and that puts admin/ on the path and the root
+# nowhere. Without this line every mongo render test dies on `import pki`.
+sys.path.insert(1, os.path.dirname(_ADMIN))
 
 
 class PanelTest(unittest.TestCase):
@@ -90,7 +98,7 @@ class PanelTest(unittest.TestCase):
     # --- auth ---------------------------------------------------------------
 
     def test_every_page_requires_a_session(self):
-        for path in ("/", "/components", "/cluster", "/autoscaler", "/alerts",
+        for path in ("/", "/components", "/cluster", "/manager", "/alerts",
                      "/settings", "/api/topology", "/components/new",
                      "/cluster/nodes/k39dl2mzq018"):
             r = self.client.get(path)
@@ -638,29 +646,37 @@ class PanelTest(unittest.TestCase):
                 f"the preview shows {key}={self.panel.PREVIEW_INFRA.get(key)!r} but "
                 f"the cloud-init ships {shipped[key]!r}")
 
-    def test_the_autoscaler_gets_every_setting_the_panel_offers_it(self):
+    def test_every_setting_the_panel_offers_reaches_the_process_that_reads_it(self):
         """
-        The panel offering a knob and the autoscaler reading it are useless if
-        the value never travels between them. It used to travel by being listed
-        a third time in stacks/monitoring.yml, which is an edit with no visible
+        The panel offering a knob and a process reading it are useless if the
+        value never travels between them. It used to travel by being listed a
+        third time in stacks/monitoring.yml, which is an edit with no visible
         consequence when it is missed: the row renders, the save succeeds, and
-        the autoscaler goes on using its own default. The stack now names
+        the process goes on using its own default. The stack names
         /etc/infra/fleet.env instead, and that file is generated from this list.
+
+        All three readers are scanned, because fleet.env now feeds the overseer
+        AND dataguard — the file is one delivery to several processes, and a
+        setting reaching only the one it used to belong to is exactly the failure
+        this exists to catch.
         """
         import pathlib
         import re
         import settings_def
 
         root = pathlib.Path(__file__).resolve().parents[2]
-        code = (root / "autoscaler" / "autoscaler.py").read_text()
-        reads = set(re.findall(r'_env\(\s*"([A-Z][A-Z0-9_]*)"', code))
+        reads = set()
+        for source in ("overseer/overseer.py", "autoscaler/autoscaler.py",
+                       "dataguard/dataguard.py"):
+            reads |= set(re.findall(r'_env\(\s*"([A-Z][A-Z0-9_]*)"',
+                                    (root / source).read_text()))
 
         delivered = settings_def.autoscaler_env({})
         offered = [k for k in settings_def.DEFAULTS if k in reads]
         self.assertIn("MIN_WORKERS", offered, "nothing parsed — the assertion below is vacuous")
         for key in offered:
             self.assertIn(key, delivered,
-                          f"{key} is offered by the panel and read by the autoscaler, "
+                          f"{key} is offered by the panel and read by a process, "
                           f"but it is in no group fleet.env is built from")
             self.assertEqual(delivered[key], settings_def.DEFAULTS[key])
 
@@ -690,9 +706,9 @@ class PanelTest(unittest.TestCase):
         """
         infra.env is a documented file — nearly every line carries a trailing
         comment — and fleet.env is machine input. A parser that keeps the
-        comment gives WORKER_TYPE the value "cpx22   # shared worker pool" and
-        MAX_WORKERS the value "5   # a BUDGET cap", and the second of those is
-        an int() that raises at import: the autoscaler crashloops on a config
+        comment gives WORKER_IMAGE the value "ubuntu-24.04   # what a worker
+        boots" and MAX_WORKERS the value "5   # a BUDGET cap", and the second of
+        those is an int() that raises at import: the process crashloops on a config
         file that looks perfectly fine when you cat it. bin/render-fleet-env
         therefore reads through envstore, which already implements the shell
         rule, instead of splitting on "=" itself.
@@ -703,7 +719,7 @@ class PanelTest(unittest.TestCase):
         path = os.path.join(self.tmp, "commented.env")
         with open(path, "w") as fh:
             fh.write("# a header comment\n"
-                     "WORKER_TYPE=cpx22              # shared worker pool\n"
+                     "WORKER_IMAGE=ubuntu-24.04      # what a worker boots\n"
                      "MAX_WORKERS=5                  # a BUDGET cap\n"
                      "SCHEDULE_FLOOR=                # UTC; \"HH:MM-HH:MM=N\"\n"
                      "HCLOUD_SSH_KEY_NAME=me@host#1\n")
@@ -714,7 +730,7 @@ class PanelTest(unittest.TestCase):
         finally:
             envstore.INFRA_ENV = real
 
-        self.assertEqual(delivered["WORKER_TYPE"], "cpx22")
+        self.assertEqual(delivered["WORKER_IMAGE"], "ubuntu-24.04")
         self.assertEqual(delivered["MAX_WORKERS"], "5")
         self.assertEqual(delivered["SCHEDULE_FLOOR"], "")
         # No whitespace before the '#', so it is part of the value, not a comment.
@@ -878,11 +894,11 @@ class PanelTest(unittest.TestCase):
         real = fixtures.autoscaler_state
         fixtures.autoscaler_state = fixtures.autoscaler_state_silent
         try:
-            for path in ("/", "/components", "/cluster", "/autoscaler", "/alerts",
+            for path in ("/", "/components", "/cluster", "/manager", "/alerts",
                          "/settings", "/api/topology"):
                 r = self.client.get(path)
                 self.assertEqual(r.status_code, 200, f"{path} broke with no metrics")
-            page = self.client.get("/autoscaler").get_data(as_text=True)
+            page = self.client.get("/manager").get_data(as_text=True)
             self.assertIn("not reporting", page)
         finally:
             fixtures.autoscaler_state = real
@@ -919,10 +935,17 @@ class PanelTest(unittest.TestCase):
     def test_defaults_agree_everywhere(self):
         """
         A setting's default is written down three times — the panel's DEFAULTS,
-        the autoscaler's own `_env` call and the cloud-init's infra.env block —
-        because each is read by a different process and none can import the
-        others. Three copies of one number is drift waiting to happen, so it is
-        drift the test suite refuses rather than a convention.
+        the reading process's own `_env` call and the cloud-init's infra.env
+        block — because each is read by a different process and none can import
+        the others. Three copies of one number is drift waiting to happen, so it
+        is drift the test suite refuses rather than a convention.
+
+        The READERS are the overseer, the autoscaler and dataguard, and which
+        one owns a given setting moved once already: the fleet settings were the
+        autoscaler's and are now the overseer's. Scanning all three rather than
+        naming one is what stops the next move from silently emptying this test
+        — an empty `reader` would make every assertion below vacuous, which is
+        why the sentinel check exists.
         """
         import pathlib
         import re
@@ -930,8 +953,12 @@ class PanelTest(unittest.TestCase):
 
         root = pathlib.Path(__file__).resolve().parents[2]
 
-        code = (root / "autoscaler" / "autoscaler.py").read_text()
-        reader = dict(re.findall(r'_env\(\s*"([A-Z][A-Z0-9_]*)"\s*,\s*"([^"]*)"', code))
+        reader = {}
+        for source in ("overseer/overseer.py", "autoscaler/autoscaler.py",
+                       "dataguard/dataguard.py"):
+            code = (root / source).read_text()
+            reader.update(re.findall(
+                r'_env\(\s*"([A-Z][A-Z0-9_]*)"\s*,\s*"([^"]*)"', code))
 
         block = (root / "master-cloud-init.yaml").read_text()
         block = block[block.index("/etc/infra/infra.env"):block.index("bootstrap.sh")]
@@ -941,11 +968,13 @@ class PanelTest(unittest.TestCase):
             if match:
                 shipped[match.group(1)] = match.group(2).split("#")[0].strip()
 
-        self.assertIn("MIN_WORKERS", reader, "the autoscaler's config block did not parse")
+        self.assertIn("MIN_WORKERS", reader, "no config block parsed at all")
         for key, default in settings_def.DEFAULTS.items():
-            self.assertIn(key, reader, f"{key} is offered by the panel but the autoscaler never reads it")
+            self.assertIn(key, reader,
+                          f"{key} is offered by the panel but nothing reads it")
             self.assertEqual(reader[key], default,
-                             f"{key}: panel defaults to {default!r}, autoscaler to {reader[key]!r}")
+                             f"{key}: panel defaults to {default!r}, the reader to "
+                             f"{reader[key]!r}")
             self.assertEqual(shipped.get(key), default,
                              f"{key}: panel defaults to {default!r}, cloud-init ships {shipped.get(key)!r}")
 
@@ -965,6 +994,472 @@ class PanelTest(unittest.TestCase):
             envstore.load_infra, envstore.save_infra, envstore.deploy_stack = saved
         # APP_NAME is BOOT-mode, so it must be ignored even when posted.
         self.assertEqual(written, {"MIN_WORKERS": "3"})
+
+
+class DatabasePanelTest(PanelTest):
+    """
+    The surfaces the database work added: the placement/manager invariant, the
+    Dataguard tab, Storage, and the visualiser proxy.
+    """
+
+    def setUp(self):
+        super().setUp() if hasattr(super(), "setUp") else None
+        # No docker daemon here, and the database renderer shells out for Swarm
+        # secrets. Stubbing the two shells keeps these tests about the panel.
+        from components import base
+        self._shells = (base.run, base.docker_out)
+        base.run = lambda argv, timeout=600, stdin=None: (True, "")
+        base.docker_out = lambda argv: ""
+
+    def tearDown(self):
+        from components import base
+        base.run, base.docker_out = self._shells
+
+    def make_mongo(self, name="docs", **spec):
+        """
+        A managed mongo through the real route.
+
+        `_form_spec` reads a bool as "was this key on the form at all", so a
+        field is turned OFF by being ABSENT — passing an empty string would post
+        the key and read as True, which is the trap that makes a test claim a
+        visualiser is off while the component has one.
+        """
+        csrf = self.login()
+        bools = {"exporter": True, "visualizer": True,
+                 "dataguard": True, "secondary_reads": True}
+        for key in list(bools):
+            if key in spec:
+                bools[key] = bool(spec.pop(key))
+        form = {"csrf": csrf, "type": "mongo", "name": name,
+                "replica_pool": "3", "max_members": "4", "version": "7.0",
+                "username": "root", "cache_mb": "256", "cpu_reservation": "0.3",
+                "memory_reservation_mb": "768", "placement_mode": "auto",
+                "lag_budget_seconds": "10", "max_replica_lag_alert": "60",
+                "backup_interval_hours": "24",
+                "__bool__": list(bools)}
+        form.update({k: "true" for k, on in bools.items() if on})
+        form.update(spec)
+        r = self.client.post("/components", data=form, follow_redirects=True)
+        self.assertEqual(r.status_code, 200)
+        return csrf
+
+    # --- the invariant ----------------------------------------------------
+
+    def test_pinning_the_placement_turns_the_manager_off(self):
+        """
+        The two are one decision wearing two hats: dataguard's whole first move
+        is putting a replica on another machine, so a component pinned to the
+        master is one it cannot manage. Saving both would be the form promising
+        something the next loop breaks.
+        """
+        csrf = self.make_mongo("pinned")
+        self.client.post("/components/pinned/settings", follow_redirects=True, data={
+            "csrf": csrf, "placement_mode": "master",
+            "__bool__": ["dataguard"], "dataguard": "true"})
+        spec = self.components.load("pinned").spec
+        self.assertEqual(spec["placement_mode"], "master")
+        self.assertFalse(spec["dataguard"])
+
+    def test_turning_the_manager_on_sets_the_placement_back_to_auto(self):
+        """The other direction, and it must be the other direction: whichever
+        of the two you just touched is the more recent intent."""
+        csrf = self.make_mongo("swung", placement_mode="master", dataguard=False)
+        self.client.post("/components/swung/settings", follow_redirects=True, data={
+            "csrf": csrf, "__bool__": ["dataguard"], "dataguard": "true"})
+        spec = self.components.load("swung").spec
+        self.assertEqual(spec["placement_mode"], "auto")
+        self.assertTrue(spec["dataguard"])
+
+    def test_the_cli_gets_the_same_rule(self):
+        """
+        `bin/component` imports the same package, so the rule has to live below
+        the route or the two surfaces disagree about what was saved.
+        """
+        self.make_mongo("viacli")
+        component, problems = self.components.update(
+            "viacli", {"placement_mode": "master"})
+        self.assertEqual(problems, [])
+        self.assertFalse(component.spec["dataguard"])
+
+    # --- the form ---------------------------------------------------------
+
+    def test_the_database_groups_render_on_both_surfaces(self):
+        """
+        The create form and the Settings tab are one partial for exactly this
+        reason. A group that appeared on one of them is the drift that made the
+        autoscale policy show twelve live-looking inputs on a component whose
+        autoscaling was off.
+        """
+        self.make_mongo("bothways")
+        create = self.client.get("/components/new?type=mongo").get_data(as_text=True)
+        settings = self.client.get("/components/bothways?tab=settings").get_data(as_text=True)
+        for marker in ("Observability", "Dataguard", "f-visualizer",
+                       "f-secondary_reads", "data-placement-sync"):
+            self.assertIn(marker, create, marker)
+            self.assertIn(marker, settings, marker)
+
+    def test_the_exporter_is_a_switch_now_and_not_a_checkbox(self):
+        self.login()
+        create = self.client.get("/components/new?type=mongo").get_data(as_text=True)
+        self.assertIn('id="f-exporter"', create)
+        chunk = create[create.index('id="f-exporter"') - 400:create.index('id="f-exporter"') + 200]
+        self.assertIn("switch-track", chunk)
+
+    # --- the dataguard tab ------------------------------------------------
+
+    def test_the_manager_page_has_a_dataguard_tab_with_its_own_policy(self):
+        self.login()
+        page = self.client.get("/manager?tab=dataguard").get_data(as_text=True)
+        self.assertIn('data-tab="dataguard"', page)
+        self.assertIn("TOPOLOGY_COOLDOWN_SECONDS", page)
+        # And the reason a database is not growing, which is what people open
+        # this page to find out.
+        self.assertIn("What is being held back", page)
+
+    def test_dataguard_policy_is_not_also_on_the_settings_page(self):
+        """Two editors for one value is two values that can disagree."""
+        self.login()
+        page = self.client.get("/settings").get_data(as_text=True)
+        self.assertNotIn('name="value__TOPOLOGY_COOLDOWN_SECONDS"', page)
+
+    # --- storage ----------------------------------------------------------
+
+    def test_storage_is_in_the_nav_between_alerts_and_settings(self):
+        self.login()
+        page = self.client.get("/storage").get_data(as_text=True)
+        self.assertIn("Storage", page)
+        rail = page[page.index('class="rail"'):page.index("rail-foot")]
+        self.assertLess(rail.index('data-nav="alerts"'), rail.index('data-nav="storage"'))
+        self.assertLess(rail.index('data-nav="storage"'), rail.index('data-nav="settings"'))
+
+    def test_a_storage_credential_never_lands_in_the_definition_file(self):
+        """
+        The file is 0600 and it is still the wrong place: a backup agent runs on
+        a machine the panel cannot write to, so the credential has to be a Swarm
+        secret — and once it is, keeping a copy here is a copy to leak.
+        """
+        import storage as storage_store
+        problems = storage_store.save(
+            {"name": "s3main", "kind": "s3", "bucket": "b", "endpoint": "https://x"},
+            "AKIAEXAMPLE", "supersecret")
+        self.assertEqual(problems, [])
+        with open(storage_store.PATH) as fh:
+            body = fh.read()
+        self.assertNotIn("supersecret", body)
+        self.assertNotIn("AKIAEXAMPLE", body)
+
+    def test_a_target_a_component_still_uses_cannot_be_removed(self):
+        import storage as storage_store
+        storage_store.save({"name": "s3main", "kind": "s3", "bucket": "b"})
+        problems = storage_store.remove("s3main", used_by=["docs"])
+        self.assertTrue(problems)
+        self.assertIn("docs", problems[0])
+        self.assertIn("s3main", storage_store.names())
+
+    def test_a_plaintext_endpoint_is_called_out(self):
+        import storage as storage_store
+        problems = storage_store.check(
+            {"name": "s3main", "kind": "s3", "bucket": "b", "endpoint": "http://x"})
+        self.assertTrue(any("clear text" in p for p in problems))
+
+    def test_a_copy_inside_this_cluster_is_not_offered_as_a_backup(self):
+        """
+        It survives a container and a disk; it does not survive a mistake, a
+        deleted project or a compromised account — which are the three things
+        people mean when they say they have backups. Offering it would be the
+        panel implying otherwise.
+        """
+        import storage as storage_store
+        self.assertEqual(storage_store.KINDS, ("s3",))
+        self.assertTrue(storage_store.check(
+            {"name": "spare", "kind": "node", "constraint": "node.labels.backup == true"}))
+
+    # --- alert targets ----------------------------------------------------
+
+    def test_alert_destinations_are_a_list_not_two_settings_rows(self):
+        """
+        They were two rows on the Settings page, which made "who gets alerted" a
+        property of the cluster rather than a thing you have any of: no second
+        channel, no deliberate none, and a second KIND meant hand-editing YAML.
+        """
+        import settings_def
+        self.assertNotIn("ALERT_TELEGRAM_BOT_TOKEN", settings_def.FIELDS)
+        self.assertNotIn("ALERT_TELEGRAM_CHAT_ID", settings_def.FIELDS)
+        self.login()
+        page = self.client.get("/alerts").get_data(as_text=True)
+        # Above the rules, because a rule with nowhere to go is the state this
+        # page exists to make visible, and you should meet it before the list of
+        # things that will not reach you.
+        self.assertIn("<h2>Targets</h2>", page)
+        self.assertLess(page.index("<h2>Targets</h2>"), page.index("<h2>Rules</h2>"))
+
+    def test_a_telegram_chat_id_must_be_a_number(self):
+        import alerttargets
+        problems = alerttargets.check({"name": "team", "kind": "telegram",
+                                       "bot_token": "123:AAA", "chat_id": "@mychannel"})
+        self.assertTrue(any("number" in p for p in problems), problems)
+
+    def test_a_target_with_no_token_is_refused(self):
+        import alerttargets
+        self.assertTrue(alerttargets.check(
+            {"name": "team", "kind": "telegram", "chat_id": "-100"}))
+
+    def test_the_token_is_masked_in_the_listing(self):
+        """
+        The page has to show WHICH credential is there without showing it. A
+        bot token is enough to post as you into every chat the bot is in.
+        """
+        import alerttargets
+        token = "8140000000:AAF-this-is-the-secret-part"
+        self.assertEqual([], alerttargets.save(
+            {"name": "team", "kind": "telegram", "bot_token": token,
+             "chat_id": "-100"}))
+        [row] = alerttargets.described()
+        self.assertNotIn(token, row["masked"])
+        self.assertTrue(row["masked"].endswith("t-part"))
+        # And the whole row, not just the one field a template happens to use:
+        # the raw token used to ride along under another key, unread, one edit
+        # away from being rendered.
+        self.assertNotIn(token, str(row))
+
+
+    # --- the database map --------------------------------------------------
+
+    def test_a_database_map_is_coloured_by_role_not_by_image_tag(self):
+        """
+        Every member runs the identical image, so a tag would be the same word
+        on every block while the thing worth seeing — which machine takes
+        writes — would be nowhere on the page.
+        """
+        import shape
+        topo = {"nodes": [
+            {"hostname": "master", "tasks": [
+                {"service": "docs_mongo-1", "tag": "7.0", "id": "a"}]},
+            {"hostname": "db-1", "tasks": [
+                {"service": "docs_mongo-2", "tag": "7.0", "id": "b"}]},
+        ]}
+        built = shape.component_map(
+            topo, ["docs_mongo-1", "docs_mongo-2"],
+            roles={"docs_mongo-1": "SECONDARY", "docs_mongo-2": "PRIMARY"})
+        self.assertTrue(built["by_role"])
+        keys = {t["tag"]: t["key"] for t in built["tags"]}
+        self.assertEqual(keys["PRIMARY"], "primary")
+        self.assertEqual(keys["SECONDARY"], "secondary")
+        # Primary FIRST however few there are of it: "which one is primary" is
+        # the whole question, and ranking by count would bury it under three
+        # secondaries.
+        self.assertEqual(built["tags"][0]["tag"], "PRIMARY")
+
+    def test_a_member_nobody_reported_on_is_unknown_not_a_secondary(self):
+        """
+        Calling it a secondary would draw a set that looks healthier than it is,
+        and "no primary" and "nobody is watching" are different problems.
+        """
+        import shape
+        topo = {"nodes": [{"hostname": "db-1", "tasks": [
+            {"service": "docs_mongo-3", "tag": "7.0", "id": "c"}]}]}
+        built = shape.component_map(topo, ["docs_mongo-3"], roles={})
+        self.assertEqual(built["tags"][0]["tag"], "unknown")
+
+    def test_an_application_map_still_colours_by_tag(self):
+        import shape
+        topo = {"nodes": [{"hostname": "w1", "tasks": [
+            {"service": "api_app", "tag": "sha-abc", "id": "a"},
+            {"service": "api_app", "tag": "sha-def", "id": "b"}]}]}
+        built = shape.component_map(topo, ["api_app"])
+        self.assertFalse(built["by_role"])
+        self.assertEqual({t["tag"] for t in built["tags"]}, {"sha-abc", "sha-def"})
+
+    def test_every_database_type_has_a_map_tab(self):
+        self.make_mongo("mapped")
+        page = self.client.get("/components/mapped?tab=map").get_data(as_text=True)
+        self.assertIn('data-tab="map"', page)
+
+
+    # --- the visualiser ---------------------------------------------------
+
+    def test_the_viewer_proxy_is_refused_when_the_component_has_none(self):
+        """
+        404, not 403: a component without a visualiser has no such URL at all,
+        and saying "forbidden" would confirm the path exists for the ones that do.
+        """
+        self.make_mongo("noviewer", visualizer=False)
+        self.assertEqual(self.client.get("/components/noviewer/viewer/").status_code, 404)
+
+    def test_the_viewer_proxy_needs_a_session(self):
+        self.client.get("/logout")
+        with self.client.session_transaction() as sess:
+            sess.clear()
+        r = self.client.get("/components/docs/viewer/")
+        self.assertIn(r.status_code, (302, 401, 404))
+
+    def test_the_panel_session_cookie_is_not_forwarded_to_the_visualiser(self):
+        """
+        The visualiser is a third-party image with unrestricted access to a
+        database, reached through a page you are signed in to — so the browser
+        attaches the panel's session cookie to every request on this origin,
+        including these. Forwarding that upstream hands a data console the
+        bearer token for the console that runs the cluster.
+
+        Its OWN cookies still have to reach it or it cannot keep a session.
+        """
+        import app as panel
+        self.make_mongo("proxied")
+
+        seen = {}
+
+        class Upstream:
+            status_code = 200
+            headers = {"Content-Type": "text/plain"}
+
+            @staticmethod
+            def iter_content(chunk_size=0):
+                return iter([b"ok"])
+
+        def fake_request(method, url, **kw):
+            seen.update(kw.get("headers") or {})
+            seen["_url"] = url
+            return Upstream()
+
+        real_request = panel.requests.request
+        real_ensure = panel.data.ensure_viewer
+        panel.requests.request = fake_request
+        panel.data.ensure_viewer = lambda service: (True, "")
+        try:
+            self.client.set_cookie("theirs", "redisinsight-session")
+            r = self.client.get("/components/proxied/viewer/api/info")
+        finally:
+            panel.requests.request = real_request
+            panel.data.ensure_viewer = real_ensure
+
+        self.assertEqual(200, r.status_code)
+        forwarded = {k.lower(): v for k, v in seen.items() if k != "_url"}
+        name = panel.app.config["SESSION_COOKIE_NAME"]
+        self.assertNotIn(f"{name}=", forwarded.get("cookie", ""))
+        self.assertNotIn("authorization", forwarded)
+        # ...and theirs still arrives, or the console cannot hold a session.
+        self.assertIn("theirs=redisinsight-session", forwarded.get("cookie", ""))
+
+        # The case the rebuild alone does NOT cover: when the panel session is
+        # the only cookie there is nothing to rebuild the header from, so it has
+        # to have been dropped rather than replaced.
+        seen.clear()
+        self.client.delete_cookie("theirs")
+        panel.requests.request = fake_request
+        panel.data.ensure_viewer = lambda service: (True, "")
+        try:
+            self.client.get("/components/proxied/viewer/api/info")
+        finally:
+            panel.requests.request = real_request
+            panel.data.ensure_viewer = real_ensure
+        alone = {k.lower(): v for k, v in seen.items() if k != "_url"}
+        self.assertNotIn("cookie", alone)
+
+    def test_the_view_button_only_appears_when_the_visualiser_is_on(self):
+        self.make_mongo("withviewer")
+        page = self.client.get("/components/withviewer").get_data(as_text=True)
+        self.assertIn("View data", page)
+        self.make_mongo("noviewer2", visualizer=False)
+        page = self.client.get("/components/noviewer2").get_data(as_text=True)
+        self.assertNotIn("View data", page)
+
+
+class AlertmanagerRenderTest(unittest.TestCase):
+    """
+    The generated Alertmanager config, including from a state file nobody sane
+    wrote.
+
+    `bin/render-alertmanager` is the last thing between `alert_targets.json` and
+    a file Alertmanager has to parse, and it is NOT always the panel that wrote
+    that file — an operator editing JSON on the master, or a panel older than
+    the validation, both produce input the panel's own checks never saw. A
+    target that cannot be rendered into YAML meaning what it says is dropped and
+    named on stderr, because the alternative is a monitoring stack that will not
+    start and a message about a parse error on line 41.
+    """
+
+    GOOD = {"name": "team", "kind": "telegram",
+            "bot_token": "8140000000:AAF-this-is-a-plausible-token",
+            "chat_id": "-1001234567890"}
+
+    def setUp(self):
+        import importlib.util
+        import pathlib
+        root = pathlib.Path(__file__).resolve().parents[2]
+        spec = importlib.util.spec_from_loader(
+            "render_alertmanager",
+            importlib.machinery.SourceFileLoader(
+                "render_alertmanager", str(root / "bin" / "render-alertmanager")))
+        self.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.mod)
+        self.tmp = tempfile.mkdtemp(prefix="render-test-")
+        os.makedirs(os.path.join(self.tmp, "state"))
+        self.mod.TARGETS = os.path.join(self.tmp, "state", "alert_targets.json")
+        self.out = os.path.join(self.tmp, "alertmanager.yml")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def render(self, targets):
+        import io
+        import json
+        from contextlib import redirect_stderr, redirect_stdout
+        with open(self.mod.TARGETS, "w") as fh:
+            json.dump(targets, fh)
+        noise, out = io.StringIO(), io.StringIO()
+        with redirect_stderr(noise), redirect_stdout(out):
+            sys.argv = ["render-alertmanager", self.out]
+            self.mod.main()
+        with open(self.out) as fh:
+            return fh.read(), noise.getvalue()
+
+    def parsed(self, text):
+        import yaml
+        return yaml.safe_load(text)
+
+    def test_a_good_target_becomes_one_config_in_each_receiver(self):
+        text, _ = self.render([self.GOOD])
+        got = self.parsed(text)
+        receivers = {r["name"]: r for r in got["receivers"]}
+        self.assertEqual(["default", "heartbeat"], sorted(receivers))
+        entry = receivers["default"]["telegram_configs"][0]
+        self.assertEqual(self.GOOD["bot_token"], entry["bot_token"])
+        self.assertEqual(-1001234567890, entry["chat_id"])
+
+    def test_a_token_with_a_newline_cannot_break_the_file(self):
+        """
+        The failure this prevents is not subtle once it happens and impossible
+        to see before: an unparseable alertmanager.yml stops the monitoring
+        stack deploying, which takes the alerting down with it.
+        """
+        text, noise = self.render([
+            self.GOOD,
+            {"name": "evil", "kind": "telegram", "chat_id": "1",
+             "bot_token": '1234:x"\n      - bot_token: "y'},
+        ])
+        got = self.parsed(text)
+        receivers = {r["name"]: r for r in got["receivers"]}
+        self.assertEqual(1, len(receivers["default"]["telegram_configs"]))
+        self.assertIn("evil", noise)
+
+    def test_a_chat_id_that_is_not_a_number_is_dropped(self):
+        text, _ = self.render([
+            self.GOOD,
+            dict(self.GOOD, name="odd", chat_id="9; rm -rf /"),
+        ])
+        receivers = {r["name"]: r for r in self.parsed(text)["receivers"]}
+        self.assertEqual(1, len(receivers["default"]["telegram_configs"]))
+
+    def test_no_targets_renders_receivers_that_drop_everything(self):
+        """
+        Deliberately, and visibly. A config Alertmanager refuses to load would
+        take the whole monitoring stack down over a cluster nobody has wired to
+        a chat yet.
+        """
+        text, _ = self.render([])
+        receivers = {r["name"]: r for r in self.parsed(text)["receivers"]}
+        self.assertEqual(["default", "heartbeat"], sorted(receivers))
+        self.assertIsNone(receivers["default"].get("telegram_configs"))
 
 
 if __name__ == "__main__":

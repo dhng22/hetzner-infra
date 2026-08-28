@@ -65,9 +65,24 @@ def image_tag(image):
     return tail.rsplit(":", 1)[1] if ":" in tail else "latest"
 
 
-def component_map(topo, services):
+#: What a database member's block is coloured by, instead of an image tag.
+#: PRIMARY is the one that takes writes and there is exactly one of it, so it is
+#: the colour that has to stand out — losing it is the outage.
+ROLE_KEYS = {"PRIMARY": "primary", "SECONDARY": "secondary"}
+ROLE_ORDER = ("PRIMARY", "SECONDARY", "STARTUP2", "DOWN")
+
+
+def component_map(topo, services, roles=None):
     """
-    A topology narrowed to one component and coloured by image tag.
+    A topology narrowed to one component, coloured by image tag — or, for a
+    database, by which member of the set each block IS.
+
+    `roles` is {service name: replica-set state} and switches what a block MEANS
+    without changing the picture, which is the point: the same tree, the same
+    blocks, so the Overview map and this one still read as one fleet. For an
+    application the interesting question is which replicas run which build; for
+    a database it is which machine is taking writes, and neither is served by
+    showing an image tag that is identical on every member.
 
     Same nodes and the same blocks as the Overview map, except every block is a
     replica of THIS component and what it says is the tag that replica runs.
@@ -80,22 +95,46 @@ def component_map(topo, services):
     two consecutive glances incomparable.
     """
     wanted = set(services)
+
+    def label_of(task):
+        if roles is None:
+            return task["tag"]
+        # A member with no reported state is UNKNOWN and says so. Calling it a
+        # secondary would draw a set that looks healthier than it is.
+        return roles.get(task["service"], "unknown")
+
     counts = {}
     for entry in topo["nodes"]:
         for task in entry["tasks"]:
             if task["service"] in wanted:
-                counts[task["tag"]] = counts.get(task["tag"], 0) + 1
-    order = sorted(counts, key=lambda tag: (-counts[tag], tag))
-    key_of = {tag: TAG_KEYS[i % len(TAG_KEYS)] for i, tag in enumerate(order)}
+                label = label_of(task)
+                counts[label] = counts.get(label, 0) + 1
+
+    if roles is None:
+        # Ranked by replica count, so the incumbent keeps its colour while a new
+        # tag arrives beside it — a palette that reshuffled every tick would
+        # make two consecutive glances incomparable.
+        order = sorted(counts, key=lambda tag: (-counts[tag], tag))
+        key_of = {tag: TAG_KEYS[i % len(TAG_KEYS)] for i, tag in enumerate(order)}
+        fallback = "platform"
+    else:
+        # Ranked by ROLE, not by count: primary first however few there are of
+        # it, because "which one is primary" is the whole question.
+        order = ([r for r in ROLE_ORDER if r in counts]
+                 + sorted(k for k in counts if k not in ROLE_ORDER))
+        key_of = {role: ROLE_KEYS.get(role, "platform") for role in order}
+        fallback = "platform"
+
     nodes = []
     for entry in topo["nodes"]:
-        tasks = [dict(t, key=key_of.get(t["tag"], "platform"), name=t["tag"])
+        tasks = [dict(t, key=key_of.get(label_of(t), fallback), name=label_of(t))
                  for t in entry["tasks"] if t["service"] in wanted]
         nodes.append({**entry, "tasks": tasks, "tasks_total": len(tasks)})
     return {
         "nodes": nodes,
         "tags": [{"tag": tag, "key": key_of[tag], "count": counts[tag]} for tag in order],
         "total": sum(counts.values()),
+        "by_role": roles is not None,
     }
 
 

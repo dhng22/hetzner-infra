@@ -603,6 +603,12 @@ ul.tight li { margin-bottom: 2px; }
 .sw-data     { background: var(--s-data); }
 .sw-observe  { background: var(--s-observe); }
 .sw-platform { background: var(--s-platform); }
+/* A replica set is not a palette of equals: there is exactly one primary and
+   losing it is the outage, so it gets the alarm colour and everything else gets
+   the calm one. Reusing --ember and --s-prod rather than inventing two more
+   hues keeps the same meanings the rest of the panel already assigns them. */
+.sw-primary   { background: var(--ember); }
+.sw-secondary { background: var(--s-prod); }
 
 /* --- the tree ---------------------------------------------------------------
    Root (cluster) at the top, hosts on the next level, their tasks hanging below
@@ -765,6 +771,10 @@ a.tnode.is-link:focus-visible { outline: 2px solid var(--accent); outline-offset
                  --slot-ring: var(--s-observe); }
 .slot-platform { --slot-bg: color-mix(in srgb, var(--s-platform) 14%, var(--surface));
                  --slot-ring: var(--s-platform); }
+.slot-primary   { --slot-bg: color-mix(in srgb, var(--ember) 14%, var(--surface));
+                  --slot-ring: var(--ember); }
+.slot-secondary { --slot-bg: color-mix(in srgb, var(--s-prod) 14%, var(--surface));
+                  --slot-ring: var(--s-prod); }
 .slot.is-empty { --slot-bg: transparent; }
 
 @media (max-width: 720px) {
@@ -784,6 +794,12 @@ a.tnode.is-link:focus-visible { outline: 2px solid var(--accent); outline-offset
 .switch-track::after { content: ""; position: absolute; top: 2px; inset-inline-start: 2px;
                        width: 14px; height: 14px; border-radius: 50%;
                        background: var(--surface); transition: transform .15s ease; }
+/* Inside a field rather than in a panel title: same control, but it sits under
+   its own label with the help text below, so it needs the field's rhythm rather
+   than the title bar's. */
+.switch-inline { margin-block-start: 2px; }
+/* Bottom of the header's right-hand column: an action, under the facts. */
+.head-view { margin-block-start: var(--s-2); align-self: flex-end; }
 .switch input:checked + .switch-track { background: var(--accent); }
 .switch input:checked + .switch-track::after { transform: translateX(16px); }
 .switch input:focus-visible + .switch-track { outline: 2px solid var(--accent);

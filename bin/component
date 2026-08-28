@@ -39,9 +39,14 @@ import os
 import subprocess
 import sys
 
-sys.path.insert(0, os.path.join(os.environ.get("INFRA_DIR", "/opt/infra"), "admin"))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__))), "admin"))
+# Two roots each: the bundle's `admin/` for the component library, and the
+# bundle ITSELF for `pki`, which the panel and dataguard share — a mongo
+# component issues its own TLS material when it renders, and a copy of that
+# beside this file would be a copy that drifts.
+for _root in (os.environ.get("INFRA_DIR", "/opt/infra"),
+              os.path.dirname(os.path.dirname(os.path.abspath(__file__)))):
+    sys.path.insert(0, os.path.join(_root, "admin"))
+    sys.path.insert(0, _root)
 
 try:
     import components

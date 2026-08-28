@@ -56,6 +56,13 @@
     <span class="v">{% if n.cpu_pct is not none %}{{ n.cpu_pct|round|int }}<small>%</small>{% else %}—{% endif %}</span>
     <span class="m">cpu · mem {% if n.mem_pct is not none %}{{ n.mem_pct|round|int }}%{% else %}—{% endif %}</span>
   </div>
+  <div class="tile{% if n.disk_pct is not none and n.disk_pct >= 85 %} is-bad{% elif n.disk_pct is not none and n.disk_pct >= 70 %} is-warn{% endif %}">
+    <span class="k">Disk in use</span>
+    <span class="v">{% if n.disk_pct is not none %}{{ n.disk_pct|round|int }}<small>%</small>{% else %}—{% endif %}</span>
+    {# The one resource shedding load cannot recover. A node out of memory kills
+       a container and carries on; a node out of disk takes the database with it. #}
+    <span class="m">{% if n.disk_free_gb %}{{ n.disk_free_gb }} GB free of {{ n.disk_total_gb }}{% else %}root filesystem{% endif %}</span>
+  </div>
 </div>
 
 <p class="panel-intro">
@@ -73,7 +80,7 @@
           <tbody>
             <tr><td>Address</td><td class="mono">{{ n.addr }}</td></tr>
             <tr><td>Role</td><td>{{ n.role }}{% if n.reachability %} · {{ n.reachability }}{% endif %}</td></tr>
-            <tr><td>Capacity</td><td class="mono">{{ n.cpus }} vCPU · {{ n.memory_gb }} GB</td></tr>
+            <tr><td>Capacity</td><td class="mono">{{ n.cpus }} vCPU · {{ n.memory_gb }} GB{% if n.disk_total_gb %} · {{ n.disk_total_gb }} GB disk{% endif %}</td></tr>
             <tr><td>Platform</td><td class="mono">{{ n.os }}/{{ n.arch }}</td></tr>
             <tr><td>Docker engine</td><td class="mono">{{ n.engine }}</td></tr>
             <tr><td>Joined</td><td class="mono small">

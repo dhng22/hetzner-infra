@@ -23,9 +23,17 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY requirements.txt .
+COPY admin/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY . .
+
+# The build context is the REPOSITORY ROOT rather than admin/, because the panel
+# ISSUES the TLS material a managed database mounts — the stack references those
+# Swarm secrets, so they have to exist before the first `docker stack deploy`,
+# which means the panel needs the same `pki` dataguard renews them with. Two
+# copies of "what a member certificate looks like" is two things that can drift,
+# and the symptom of drift here is a replica set that will not form.
+COPY pki/ ./pki/
+COPY admin/ .
 
 EXPOSE 3000
 

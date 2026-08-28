@@ -38,7 +38,7 @@
 
     <div class="nav-label">Preview</div>
     <a class="nav-item" href="#view-login"><span class="dot" aria-hidden="true"></span>Sign-in screen</a>
-    <a class="nav-item" href="#view-autoscaler-silent"><span class="dot" aria-hidden="true"></span>Autoscaler, no metrics</a>
+    <a class="nav-item" href="#view-manager-silent"><span class="dot" aria-hidden="true"></span>Manager, no metrics</a>
 
     <div class="rail-foot">
       <button class="btn btn-sm" type="button" data-theme-toggle style="width:100%">Switch theme</button>
@@ -90,7 +90,7 @@
       <section data-view="node-{{ n.id }}" hidden>{% include "_node.html" %}</section>
       {% endfor %}
 
-      <section data-view="autoscaler" hidden>{% include "_autoscaler.html" %}</section>
+      <section data-view="manager" hidden>{% include "_manager.html" %}</section>
 
       {# The same page with nothing reporting. It is a separate screen rather
          than a note because the preview's job is to be the production panel on
@@ -98,10 +98,11 @@
          cannot show the state the page is opened in: every gauge None, one
          unguarded comparison between two of them, a 500 in production and a
          perfect preview of the identical template. #}
-      <section data-view="autoscaler-silent" hidden>
-        {% with a = a_silent %}{% include "_autoscaler.html" %}{% endwith %}
+      <section data-view="manager-silent" hidden>
+        {% with a = a_silent %}{% include "_manager.html" %}{% endwith %}
       </section>
       <section data-view="alerts" hidden>{% include "_alerts.html" %}</section>
+      <section data-view="storage" hidden>{% include "_storage.html" %}</section>
       <section data-view="settings" hidden>{% include "_settings.html" %}</section>
 
       <section data-view="login" hidden>

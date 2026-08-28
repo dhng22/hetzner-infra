@@ -4,7 +4,7 @@ The decision rule, tested where it lives.
     python3 -m unittest discover -s signals/tests
 
 This is the one copy of "is this service slow, and is that its own fault". The
-dispatcher applies it; the autoscaler acts on the result. Before the split the
+overseer applies it; the autoscaler acts on the result. Before the split the
 autoscaler did both, which is why it had to know what a MongoDB driver timer
 looked like.
 """

@@ -25,7 +25,7 @@
 <div class="banner">
   <div>
     <strong>{{ elsewhere|join(', ') }}</strong> {{ 'lives' if elsewhere|length == 1 else 'live' }}
-    on the <a href="{{ section_href({'key': 'autoscaler'}) }}">Autoscaler</a> page, next to the
+    on the <a href="{{ section_href({'key': 'manager'}) }}">Manager</a> page, next to the
     signals {{ 'it drives' if elsewhere|length == 1 else 'they drive' }} — SLO, replica and host
     bounds, sustain windows and cooldowns.
   </div>

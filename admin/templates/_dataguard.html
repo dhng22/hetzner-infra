@@ -1,0 +1,135 @@
+{#
+  Dataguard: what it is doing to each database, and — far more often — what it
+  is refusing to do and why.
+#}
+<div class="page-head">
+  <div>
+    <h2>Dataguard</h2>
+    <p>Owns the shape of a database: how many members it has, which machines they run on,
+       which one is primary, and its backups. Timings are in hours because an initial sync
+       reads the whole dataset off a live member.</p>
+  </div>
+</div>
+
+{% if not dg.live %}
+<div class="banner bad">
+  <div><strong>Dataguard is not reporting.</strong> Nothing below is being managed while this
+  says so — no failover handling, no backups, no lag checks. The databases themselves are
+  unaffected; they simply have nobody watching them. Check
+  <code>monitoring_dataguard</code> on the Cluster tab.</div>
+</div>
+{% endif %}
+
+{% if dg.restore_in_flight %}
+<div class="banner warn">
+  <div><strong>A restore is running.</strong> The database being restored is refusing
+  writes until it finishes. This is expected and it is not a fault.</div>
+</div>
+{% endif %}
+
+<div class="tiles">
+  <div class="tile">
+    <span class="k">Managed</span>
+    <span class="v">{{ dg.managed|int if dg.managed is not none else '—' }}</span>
+    <span class="m">databases carrying <code>infra.managed_by=dataguard</code></span>
+  </div>
+  <div class="tile">
+    <span class="k">Machines held</span>
+    <span class="v">{{ dg.leases|int if dg.leases is not none else '—' }}</span>
+    <span class="m">leased from the overseer for database members</span>
+  </div>
+</div>
+
+<section class="panel">
+  <div class="panel-head"><h2>Databases</h2></div>
+  <div class="panel-body">
+    {% if dg.components %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Component</th><th>Shape</th><th>Lag</th><th>Backup</th><th>Verified</th>
+        </tr></thead>
+        <tbody>
+        {% for c in dg.components %}
+        <tr>
+          <td><a href="{{ component_href(c.component) }}">{{ c.component }}</a></td>
+          <td>
+            {{ c.state_label }}
+            {% if c.changing %}<span class="pill warn plain">changing</span>{% endif %}
+          </td>
+          <td class="mono">{% if c.lag is not none %}{{ '%.1f'|format(c.lag) }}s{% else %}—{% endif %}</td>
+          <td class="mono">
+            {% if c.backup_at %}
+              <time datetime="{{ c.backup_at }}" data-localtime-epoch>{{ c.backup_at|int }}</time>
+            {% else %}<span class="pill mute plain">none</span>{% endif %}
+          </td>
+          <td>
+            {% if c.verified %}
+              <span class="pill ok plain">restores</span>
+            {% else %}
+              {# A backup nobody has restored is a hypothesis, and this column
+                 says so rather than showing a tick for the date it was taken.
+                 Automated restore-verification is not built yet, so this reads
+                 "never verified" for everything — which is true. Restore one by
+                 hand from the component's Backups tab if you want to know. #}
+              <span class="pill warn plain">never verified</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="hint">No database is under management. A Redis or MongoDB component gets
+    there by having Dataguard switched on in its own Settings tab — which also puts its
+    Placement on <code>auto</code>, because a manager that may not choose the machine
+    cannot do the job.</p>
+    {% endif %}
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>What is being held back</h2>
+    <span class="spacer"></span>
+    <span class="eyebrow">counted since dataguard last restarted</span>
+  </div>
+  <div class="panel-body">
+    {% if dg.refused %}
+    <div class="rows">
+      {% for reason, count in dg.refused %}
+      <div class="row">
+        <span class="mono">{{ reason }}</span>
+        <span class="spacer"></span>
+        <span class="mono">{{ count|int }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <p class="hint">When nothing is happening, this is the answer to why. Every gate a
+    topology change has to pass increments its own counter, so a database that is not
+    growing names the reason rather than leaving you to read a log — <code>cooldown</code>
+    is waiting out the hours since the last change, <code>no_backup</code> is a backup
+    target that has never produced one, <code>backup_stale</code> is one that has stopped,
+    <code>no_majority</code> is a set that has lost members, <code>member_syncing</code> is
+    a copy in progress, and <code>another_sync_in_flight</code> is another database being
+    copied right now — only one may run at a time, because a sync reads the whole dataset
+    off a live member.</p>
+    {% else %}
+    <p class="hint">Nothing has been refused. Either every database is where it wants to
+    be, or dataguard has not run since it started.</p>
+    {% endif %}
+  </div>
+</section>
+
+<div class="page-head section-gap">
+  <div>
+    <h2>Policy</h2>
+    <p>Cluster-wide. Everything about ONE database — how many members, its lag budget,
+       whether reads may go to secondaries, where its backups go — is not here: it belongs
+       to that component, travels as labels on its own services, and is edited on its page.
+       A copy here would be a copy that goes stale.</p>
+  </div>
+</div>
+
+{% with groups = dataguard_groups %}{% include "_settings_form.html" %}{% endwith %}

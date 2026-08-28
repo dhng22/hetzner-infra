@@ -409,6 +409,7 @@
   // Sections rendered server-side already carry their checkbox state; this
   // brings the disabled state of their controls into line with it on load.
   initToggleSections(document);
+  syncPlacement(document);
 
   // --- tooltips that appear immediately -------------------------------------
   // The native `title` attribute waits about a second before showing, which is
@@ -524,6 +525,32 @@
   function initToggleSections(root) {
     var sections = (root || document).querySelectorAll("[data-toggle-section]");
     for (var i = 0; i < sections.length; i++) { syncToggleSection(sections[i]); }
+  }
+
+  // The manager switch and the placement mode are one decision wearing two
+  // hats, and the server keeps them in step whatever this does — see
+  // Component.normalize. This is here so the form does not sit there showing
+  // you a combination it is about to change behind your back: turning the
+  // manager on sets Placement to auto in front of you, and pinning Placement
+  // turns the manager off.
+  //
+  // Which one wins depends on which one you just touched, exactly as on the
+  // server: the more recent, more specific intent is the one that survives.
+  function syncPlacement(root) {
+    var scope = root || document;
+    var master = scope.querySelector("[data-placement-sync]");
+    var mode = scope.querySelector("#f-placement_mode");
+    if (!master || !mode) { return; }
+    master.addEventListener("change", function () {
+      if (master.checked && mode.value !== "auto") { mode.value = "auto"; }
+    });
+    mode.addEventListener("change", function () {
+      if (mode.value !== "auto" && master.checked) {
+        master.checked = false;
+        var section = master.closest("[data-toggle-section]");
+        if (section) { syncToggleSection(section); }
+      }
+    });
   }
 
   function sig(tasks) {

@@ -1,6 +1,6 @@
 {#
-  The editable half of a component's spec — Configuration, then the autoscale
-  policy — rendered from `fields()` against a `spec` mapping.
+  The editable half of a component's spec — Configuration, then one panel per
+  declared group — rendered from `fields()` against a `spec` mapping.
 
   The create page and the Settings tab both include this. They used to carry
   their own copy of the loop and drifted the moment either changed: the create
@@ -10,9 +10,15 @@
   presented as live on a component whose autoscaling was off. One partial is
   what stops that happening a second time.
 
+  The groups themselves come from `component_class.GROUPS`, not from a name
+  spelled out here. That changed when a second group existed: `autoscale` was
+  hard-coded, so Observability and Dataguard would each have meant another
+  copy of the same twenty lines, and the third one would have been the one
+  that quietly lost its switch.
+
   Callers set: fields, spec (name -> value; {} on create so defaults show),
-  and optionally secret_inputs (create only — Settings has a Credentials tab)
-  and creating.
+  groups (the class's GROUPS), and optionally secret_inputs (create only —
+  Settings has a Credentials tab) and creating.
 #}
 <section class="panel">
   <div class="panel-head"><h2>Configuration</h2></div>
@@ -52,7 +58,7 @@
   {% if creating|default(false) %}
   <div class="panel-note">
     Reservations are not optional. Swarm subtracts them when it places a task, and
-    they are the only thing the autoscaler measures node capacity with — a component
+    they are the only thing the overseer measures node capacity with — a component
     with none looks free and gets packed on top of the metrics database.
   </div>
   {% else %}
@@ -64,20 +70,25 @@
   {% endif %}
 </section>
 
-{% set policy = fields|selectattr('group', 'equalto', 'autoscale')|list %}
-{% if policy %}
-{% set toggle = policy|selectattr('name', 'equalto', 'autoscale')|first %}
-<section class="panel" data-toggle-section>
+{% for key, title, master, note in groups|default([]) %}
+{% set members = fields|selectattr('group', 'equalto', key)|list %}
+{% if members %}
+{% set toggle = members|selectattr('name', 'equalto', master)|first if master else none %}
+<section class="panel" {% if toggle %}data-toggle-section{% endif %}>
   <div class="panel-head">
-    <h2>Autoscale</h2>
+    <h2>{{ title }}</h2>
     {% if toggle %}
-    {# The switch that owns the section, in its title rather than as the
-       first of thirteen inputs — it decides whether the other twelve mean
-       anything at all. #}
-    <label class="switch" title="Let the autoscaler own the replica count">
+    {# The switch that owns the section, in its title rather than as the first
+       of thirteen inputs — it decides whether the others mean anything at all.
+       `data-placement-sync` is the browser-side half of Component.normalize:
+       turning a manager on sets Placement to auto in front of you, and pinning
+       Placement turns the manager off. The SERVER does this too and is the
+       authority; this is so the form does not silently disagree with what it
+       is about to save. #}
+    <label class="switch" title="{{ toggle.help }}">
       <input type="hidden" name="__bool__" value="{{ toggle.name }}">
       <input type="checkbox" name="{{ toggle.name }}" value="true"
-             data-toggle-master
+             data-toggle-master data-placement-sync
              {% if spec.get(toggle.name, toggle.default) %}checked{% endif %}>
       <span class="switch-track" aria-hidden="true"></span>
       <span class="switch-label">on</span>
@@ -85,18 +96,15 @@
     {% endif %}
     <span class="spacer"></span>
   </div>
-  <div class="panel-body" data-toggle-body>
+  <div class="panel-body" {% if toggle %}data-toggle-body{% endif %}>
     <div class="grid-2">
-      {% for f in policy if f.name != 'autoscale' %}
+      {% for f in members if f.name != master %}
         {% set value = spec.get(f.name, f.default) %}
         {% include "_field.html" %}
       {% endfor %}
     </div>
   </div>
-  <div class="panel-note">
-    With this off the replica count is yours and nothing below applies. The
-    autoscaler still measures this component and still right-sizes its
-    reservations — it just stops changing how many of it there are.
-  </div>
+  {% if note %}<div class="panel-note">{{ note }}</div>{% endif %}
 </section>
 {% endif %}
+{% endfor %}

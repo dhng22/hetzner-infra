@@ -29,10 +29,6 @@ FIELDS = {
     "HCLOUD_NETWORK_NAME": (EDIT, "monitoring", "Must already exist in Hetzner."),
     "HCLOUD_SSH_KEY_NAME": (EDIT, "monitoring", "Installed on workers created from now on."),
     "WORKER_IMAGE": (EDIT, "monitoring", "Applies to workers created from now on."),
-    "WORKER_TYPE": (EDIT, "monitoring",
-                    "Applies to workers created from now on. How many replicas it holds is "
-                    "read from the Hetzner catalogue, so there is nothing to keep in sync — "
-                    "a bigger type simply means fewer, larger nodes."),
     "WORKER_MAX_CORES": (EDIT, "monitoring",
                          "Vertical scaling ceiling. A worker may be grown onto a bigger plan "
                          "instead of a second worker being bought — up to this many cores. "
@@ -49,6 +45,45 @@ FIELDS = {
                                      "start. Long on purpose: a resize power-cycles a machine, "
                                      "so it corrects the shape of the fleet slowly while the "
                                      "replica count handles traffic."),
+
+    # --- databases ------------------------------------------------------------
+    # Dataguard's cluster-wide policy. Everything PER COMPONENT — how many
+    # members, the lag budget, whether reads may go to secondaries, where the
+    # backups go — is not here and never will be: it belongs to the component,
+    # travels as deploy labels on its own services, and is edited on that
+    # component's page. A copy here would be a copy that goes stale, which is the
+    # mistake the whole component model exists to remove.
+    "DB_MAX_CORES": (EDIT, "monitoring",
+                     "The biggest machine a database member may end up on, in cores. This "
+                     "is the ceiling the whole upgrade path is bounded by: under sustained "
+                     "write or capacity pressure dataguard starts a member on the next plan "
+                     "up, promotes it and drops the old one, and it stops when the next "
+                     "plan up would exceed this. Without it that loop has no end."),
+    "DB_MAX_MEMORY_GB": (EDIT, "monitoring",
+                         "The other half of the database ceiling, in GB. Separate from the "
+                         "worker ceiling because the mechanisms differ: a worker is grown by "
+                         "power-cycling it, which is why that is opt-in, while a database "
+                         "member is replaced by a bigger one that has already synced. A "
+                         "capacity rather than a plan name, for the same reason as the "
+                         "worker ceiling — the ladder is read from the Hetzner API."),
+    "DATAGUARD_DRY_RUN": (EDIT, "monitoring",
+                          "Every decision is logged and nothing is applied. A rehearsal, and "
+                          "the honest way to find out what it wants to do to a live database."),
+    "TOPOLOGY_COOLDOWN_SECONDS": (EDIT, "monitoring",
+                                  "How long after one topology change before another may start. "
+                                  "HOURS, not the autoscaler's ninety seconds: an initial sync "
+                                  "reads the whole dataset off a live member, and a loop that "
+                                  "reacts faster than the thing it controls oscillates."),
+    "PRESSURE_SUSTAIN_SECONDS": (EDIT, "monitoring",
+                                 "How long pressure must hold before it counts. Long, because "
+                                 "the cheapest response to a database being busy costs an hour."),
+    "BACKUP_MAX_AGE_SECONDS": (EDIT, "monitoring",
+                               "How old a VERIFIED backup may be before dataguard refuses to "
+                               "change a database's shape. A topology change can lose data."),
+    "VIEWER_IDLE_SECONDS": (EDIT, "monitoring",
+                            "How long a data visualiser stays up after the last time somebody "
+                            "looked at it. It is full access to your data, so the shorter it "
+                            "exists the smaller that surface is."),
 
     # --- registry -------------------------------------------------------------
     # Both are read exactly once, by bootstrap. Registry auth afterwards lives in
@@ -97,13 +132,6 @@ FIELDS = {
     # Swarm secret cannot be. Saving either of these re-renders
     # config/alertmanager.yml and redeploys monitoring, which is the whole
     # reason bin/stack-deploy does the rendering rather than bootstrap.
-    "ALERT_TELEGRAM_BOT_TOKEN": (EDIT, "monitoring",
-                                 "From @BotFather. Rendered into a root-only config file on "
-                                 "the master, never into a container's environment."),
-    "ALERT_TELEGRAM_CHAT_ID": (EDIT, "monitoring",
-                               "The group or channel to post in. Negative for groups; get it "
-                               "from /getUpdates after sending one message there. Leave both "
-                               "blank and alerts are generated and dropped."),
     "CF_TUNNEL_TOKEN": (SECRET, "ingress", "Rotating this means re-issuing the connector token in Cloudflare."),
     "HCLOUD_TOKEN": (SECRET, "monitoring", "Lets the autoscaler create and delete servers."),
     "CI_SSH_PUBLIC_KEY": (BOOT, None, "The deploy user is created at boot. Edit authorized_keys on the master."),
@@ -118,13 +146,16 @@ FIELDS = {
 GROUPS = [
     ("Identity", ["APP_NAME", "ROOT_DOMAIN"]),
     ("Hetzner", ["HCLOUD_LOCATION", "HCLOUD_NETWORK_NAME", "HCLOUD_SSH_KEY_NAME",
-                 "WORKER_IMAGE", "WORKER_TYPE", "HCLOUD_TOKEN"]),
+                 "WORKER_IMAGE", "HCLOUD_TOKEN"]),
     ("Fleet", ["MIN_WORKERS", "MAX_WORKERS", "WORKER_MAX_CORES", "WORKER_MAX_MEMORY_GB",
                "NODE_RESIZE_COOLDOWN_SECONDS",
                "NODE_PRESSURE_PCT", "COOLDOWN_UP_SECONDS",
                "COOLDOWN_DOWN_SECONDS", "SCHEDULE_FLOOR", "DRY_RUN"]),
+    ("Dataguard", ["DATAGUARD_DRY_RUN", "DB_MAX_CORES", "DB_MAX_MEMORY_GB",
+                   "TOPOLOGY_COOLDOWN_SECONDS",
+                   "PRESSURE_SUSTAIN_SECONDS", "BACKUP_MAX_AGE_SECONDS",
+                   "VIEWER_IDLE_SECONDS"]),
     ("Access", ["ADMIN_USER", "ADMIN_PASSWORD", "GRAFANA_ADMIN_USER", "GRAFANA_ADMIN_PASSWORD",
-                "ALERT_TELEGRAM_BOT_TOKEN", "ALERT_TELEGRAM_CHAT_ID",
                 "CF_TUNNEL_TOKEN", "CI_SSH_PUBLIC_KEY"]),
     # Not shown, on purpose: GHCR_USER and GHCR_TOKEN.
     #
@@ -169,21 +200,33 @@ DEFAULTS = {
     "COOLDOWN_DOWN_SECONDS": "900",
     "SCHEDULE_FLOOR": "",
     "DRY_RUN": "false",
+
+    "DATAGUARD_DRY_RUN": "false",
+    "DB_MAX_CORES": "16",
+    "DB_MAX_MEMORY_GB": "32",
+    "TOPOLOGY_COOLDOWN_SECONDS": "14400",
+    "PRESSURE_SUSTAIN_SECONDS": "3600",
+    "BACKUP_MAX_AGE_SECONDS": "86400",
+    "VIEWER_IDLE_SECONDS": "900",
 }
 
-# Which settings the autoscaler's container is allowed to receive.
+# Which settings the infrastructure containers are allowed to receive.
 #
 # `bin/render-fleet-env` turns this into /etc/infra/fleet.env and
-# stacks/monitoring.yml hands that file to the autoscaler with `env_file`. That
-# is why adding a fleet setting no longer means editing the stack: the stack
-# names a FILE, and the file is generated from this list.
+# stacks/monitoring.yml hands that file to the OVERSEER and to DATAGUARD with
+# `env_file`. That is why adding a fleet setting no longer means editing the
+# stack: the stack names a FILE, and the file is generated from this list.
+#
+# One file, several readers. Each process ignores what it does not read, which
+# is why a dataguard setting arriving at the overseer costs nothing — and why
+# the test that pins this scans all three sources rather than one.
 #
 # Stated as GROUPS and a mode filter rather than as a list of key names, because
 # a hand-kept list is one more place to forget. Everything in these groups goes
 # except SECRET-mode keys — an ALLOW-list, so a credential added to Access later
 # cannot reach the autoscaler by having been overlooked. HCLOUD_TOKEN is the one
 # credential it does need and it arrives as a docker secret, not through here.
-AUTOSCALER_ENV_GROUPS = ("Identity", "Hetzner", "Fleet")
+AUTOSCALER_ENV_GROUPS = ("Identity", "Hetzner", "Fleet", "Dataguard")
 
 
 def autoscaler_env(values):

@@ -31,8 +31,8 @@ COPY autoscaler/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # The build context is the REPOSITORY ROOT, not autoscaler/, because `signals`
-# is shared with the dispatcher. Both processes must reach the same verdict
-# about whether a service is busy — the autoscaler acts on it, the dispatcher
+# is shared with the overseer. Both processes must reach the same verdict
+# about whether a service is busy — the autoscaler acts on it, the overseer
 # attributes what the autoscaler refused to act on — and a copy per image is
 # how those two silently drift apart.
 COPY signals/ ./signals/

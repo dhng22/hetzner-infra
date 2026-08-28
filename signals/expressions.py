@@ -1,7 +1,7 @@
 """
 The metric expressions every performance signal is read through.
 
-One definition each, imported by the autoscaler and the dispatcher. A service
+One definition each, imported by the autoscaler and the overseer. A service
 is "slow" or "busy" according to these and nothing else, which is what lets two
 processes reach the same verdict about the same service.
 """

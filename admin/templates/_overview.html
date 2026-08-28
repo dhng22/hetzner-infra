@@ -100,11 +100,15 @@
               </span>
               <span class="tnode-title" title="{{ n.hostname }}">{{ n.hostname }}</span>
               <span class="tnode-sub">
-                <b data-f="tasks">{{ n.tasks_total }}</b> tasks · {{ n.cpus }} vCPU · {{ n.memory_gb }} GB
+                <b data-f="tasks">{{ n.tasks_total }}</b> tasks · {{ n.cpus }} vCPU · {{ n.memory_gb }} GB{% if n.disk_total_gb %} · {{ n.disk_total_gb }} GB disk{% endif %}
               </span>
               <span class="tnode-meters">
                 <span title="node CPU utilisation — how busy it is right now">cpu <b data-f="cpu">{% if n.cpu_pct is not none %}{{ n.cpu_pct|round|int }}%{% else %}—{% endif %}</b></span>
                 <span title="node memory utilisation — how much is in use right now">mem <b data-f="mem">{% if n.mem_pct is not none %}{{ n.mem_pct|round|int }}%{% else %}—{% endif %}</b></span>
+                {# Disk, because a database lives on one. It is the resource
+                   shedding load cannot recover: a full disk does not get slower,
+                   it stops. #}
+                <span title="root filesystem — where docker keeps every volume">disk <b data-f="disk">{% if n.disk_pct is not none %}{{ n.disk_pct|round|int }}%{% else %}—{% endif %}</b></span>
               </span>
 
               {# Reserved, not used: the pair that decides whether anything else

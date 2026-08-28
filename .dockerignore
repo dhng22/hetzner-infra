@@ -1,6 +1,7 @@
-# The autoscaler and dispatcher images build from the REPOSITORY ROOT, because
-# they share signals/. Without this every build ships the git history and the
-# panel's 400KB preview artefact into the daemon for no reason.
+# The overseer, autoscaler and dataguard images build from the REPOSITORY ROOT,
+# because they share signals/ — and dataguard also shares pki/ with the panel.
+# Without this every build ships the git history and the panel's 480KB preview
+# artefact into the daemon for no reason.
 .git
 .idea
 .claude

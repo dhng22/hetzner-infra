@@ -45,7 +45,7 @@ tests:
         values: '0 0 1x20'
       - series: 'autoscaler_service_running_replicas{service="api_app"}'
         values: '2x22'
-      - series: 'autoscaler_service_admitted_replicas{service="api_app"}'
+      - series: 'overseer_service_replica_ceiling{service="api_app"}'
         values: '2x22'
     alert_rule_test:
       - eval_time: 8m
@@ -113,7 +113,7 @@ tests:
     input_series:
       - series: 'autoscaler_service_running_replicas{service="api_app"}'
         values: '3 3 0x20'
-      - series: 'autoscaler_service_admitted_replicas{service="api_app"}'
+      - series: 'overseer_service_replica_ceiling{service="api_app"}'
         values: '3x22'
     alert_rule_test:
       - eval_time: 8m
@@ -128,11 +128,11 @@ tests:
     input_series:
       - series: 'autoscaler_service_running_replicas{service="api_app"}'
         values: '0x20'
-      - series: 'autoscaler_service_admitted_replicas{service="api_app"}'
+      - series: 'overseer_service_replica_ceiling{service="api_app"}'
         values: '2x20'
       - series: 'autoscaler_service_running_replicas{service="worker_app"}'
         values: '4x20'
-      - series: 'autoscaler_service_admitted_replicas{service="worker_app"}'
+      - series: 'overseer_service_replica_ceiling{service="worker_app"}'
         values: '4x20'
     alert_rule_test:
       - eval_time: 8m
@@ -147,7 +147,7 @@ tests:
     input_series:
       - series: 'autoscaler_service_running_replicas{service="batch_app"}'
         values: '0x20'
-      - series: 'autoscaler_service_admitted_replicas{service="batch_app"}'
+      - series: 'overseer_service_replica_ceiling{service="batch_app"}'
         values: '0x20'
     alert_rule_test:
       - eval_time: 8m
@@ -295,7 +295,7 @@ tests:
   # --- UNSATISFIABLE MINIMUM ------------------------------------------------
   - interval: 1m
     input_series:
-      - series: 'autoscaler_service_min_unsatisfied{service="api_app"}'
+      - series: 'overseer_service_min_unsatisfied{service="api_app"}'
         values: '1x20'
     alert_rule_test:
       - eval_time: 15m
@@ -352,7 +352,7 @@ tests:
   # when the target is gone, which is the case it looks like it covers.
   - interval: 1m
     input_series:
-      - series: 'autoscaler_current_workers'
+      - series: 'overseer_current_workers'
         values: '1x20'
     alert_rule_test:
       - eval_time: 10m
@@ -378,15 +378,15 @@ tests:
   # night pages someone.
   - interval: 1m
     input_series:
-      - series: 'autoscaler_current_workers'
+      - series: 'overseer_current_workers'
         values: '0x20'
-      - series: 'autoscaler_max_workers'
+      - series: 'overseer_max_workers'
         values: '5x20'
-      - series: 'autoscaler_placement_worker_mode'
+      - series: 'overseer_placement_worker_mode'
         values: '0x20'
     alert_rule_test:
       - eval_time: 18m
-        alertname: AutoscalerAtMax
+        alertname: FleetAtMax
         exp_alerts: []
       - eval_time: 18m
         alertname: AppStrandedWithoutWorkers
@@ -395,32 +395,32 @@ tests:
   # Mid-range: three of five. Also silent — it is a budget, not a warning line.
   - interval: 1m
     input_series:
-      - series: 'autoscaler_current_workers'
+      - series: 'overseer_current_workers'
         values: '3x20'
-      - series: 'autoscaler_max_workers'
+      - series: 'overseer_max_workers'
         values: '5x20'
     alert_rule_test:
       - eval_time: 18m
-        alertname: AutoscalerAtMax
+        alertname: FleetAtMax
         exp_alerts: []
 
   # At the ceiling: five of five, nothing left to buy. Must fire.
   - interval: 1m
     input_series:
-      - series: 'autoscaler_current_workers'
+      - series: 'overseer_current_workers'
         values: '5x20'
-      - series: 'autoscaler_max_workers'
+      - series: 'overseer_max_workers'
         values: '5x20'
     alert_rule_test:
       - eval_time: 18m
-        alertname: AutoscalerAtMax
+        alertname: FleetAtMax
         exp_alerts:
           - exp_labels: { severity: warning }
             exp_annotations:
-              summary: "Autoscaler pinned at MAX_WORKERS — raise the ceiling or optimise"
+              summary: "The fleet is pinned at MAX_WORKERS — raise the ceiling or optimise"
 
   # --- STRANDED: worker-pinned with an empty fleet -------------------------
-  # These four cases are the assertion that autoscaler_placement_worker_mode
+  # These four cases are the assertion that overseer_placement_worker_mode
   # stayed an UNLABELED cluster gauge. Give it a `service` label and the plain
   # `and` below matches nothing, the rule goes permanently silent, and these
   # tests are what notice.
@@ -429,12 +429,15 @@ tests:
   # state; zero workers with something still pinned is an outage.
   - interval: 1m
     input_series:
-      - series: 'autoscaler_placement_worker_mode'
+      - series: 'overseer_placement_worker_mode'
         values: '1x20'
-      - series: 'autoscaler_current_workers'
+      - series: 'overseer_current_workers'
         values: '0x20'
     alert_rule_test:
-      - eval_time: 5m
+      # Past the `for`, which is five minutes now: recovery crosses two
+      # processes — the overseer dispatches a release and the autoscaler applies
+      # it — so two minutes was short enough to fire during a normal handover.
+      - eval_time: 8m
         alertname: AppStrandedWithoutWorkers
         exp_alerts:
           - exp_labels: { severity: critical }
@@ -446,9 +449,9 @@ tests:
   # floor pages someone every night.
   - interval: 1m
     input_series:
-      - series: 'autoscaler_placement_worker_mode'
+      - series: 'overseer_placement_worker_mode'
         values: '0x20'
-      - series: 'autoscaler_current_workers'
+      - series: 'overseer_current_workers'
         values: '0x20'
     alert_rule_test:
       - eval_time: 15m
@@ -458,9 +461,9 @@ tests:
   # Worker mode WITH workers is the normal loaded state. Also silent.
   - interval: 1m
     input_series:
-      - series: 'autoscaler_placement_worker_mode'
+      - series: 'overseer_placement_worker_mode'
         values: '1x20'
-      - series: 'autoscaler_current_workers'
+      - series: 'overseer_current_workers'
         values: '3x20'
     alert_rule_test:
       - eval_time: 15m
@@ -475,9 +478,9 @@ tests:
   # either way, so a test there passes even with `for: 0m` and pins nothing.
   - interval: 1m
     input_series:
-      - series: 'autoscaler_placement_worker_mode'
+      - series: 'overseer_placement_worker_mode'
         values: '1 1 0 0 0 0'
-      - series: 'autoscaler_current_workers'
+      - series: 'overseer_current_workers'
         values: '0 0 0 0 0 0'
     alert_rule_test:
       - eval_time: 1m
@@ -498,7 +501,7 @@ tests:
   # Nothing claims the cause and it is not muted -> a human has to hear it.
   - interval: 1m
     input_series:
-      - series: 'dispatcher_signal_unowned{service="api_app", cause="upstream"}'
+      - series: 'overseer_signal_unowned{service="api_app", cause="upstream"}'
         values: '1x40'
     alert_rule_test:
       - eval_time: 35m
@@ -507,16 +510,16 @@ tests:
           - exp_labels: { severity: warning, service: api_app, cause: upstream }
             exp_annotations:
               summary: "api_app is slow because of upstream, and nothing handles it"
-              description: "p95 has been over budget for half an hour while the replicas themselves are idle, so the autoscaler is deliberately not scaling. The suspected cause is upstream; the dispatcher's log names the specific target. Either give something the infra.handles=upstream label, or mute it on the component with autoscale.mute_causes."
+              description: "p95 has been over budget for half an hour while the replicas themselves are idle, so the autoscaler is deliberately not scaling. The suspected cause is upstream; the overseer's log names the specific target. Either give something the infra.handles=upstream label, or mute it on the component with autoscale.mute_causes."
 
   # Claimed or muted: the autoscaler zeroes the gauge, so the rule stays quiet
   # with no list of exceptions to maintain here. This is what makes adding
   # dbmanager a label on dbmanager rather than an edit to this file.
   - interval: 1m
     input_series:
-      - series: 'dispatcher_signal{service="api_app", cause="database"}'
+      - series: 'overseer_signal{service="api_app", cause="database"}'
         values: '1x40'
-      - series: 'dispatcher_signal_unowned{service="api_app", cause="database"}'
+      - series: 'overseer_signal_unowned{service="api_app", cause="database"}'
         values: '0x40'
     alert_rule_test:
       - eval_time: 35m
@@ -526,14 +529,14 @@ tests:
   # Half an hour is the bar. A dependency having a bad ten minutes is not a page.
   - interval: 1m
     input_series:
-      - series: 'dispatcher_signal_unowned{service="api_app", cause="database"}'
+      - series: 'overseer_signal_unowned{service="api_app", cause="database"}'
         values: '1x12 0x30'
     alert_rule_test:
       - eval_time: 11m
         alertname: ThrottledByUnownedDependency
         exp_alerts: []
 
-  # --- DispatcherSilent -----------------------------------------------------
+  # --- OverseerSilent -----------------------------------------------------
   # Nothing arriving: the safe failure, made visible.
   - interval: 1m
     input_series:
@@ -541,12 +544,12 @@ tests:
         values: '2x20'
     alert_rule_test:
       - eval_time: 15m
-        alertname: DispatcherSilent
+        alertname: OverseerSilent
         exp_alerts:
           - exp_labels: { severity: warning }
             exp_annotations:
               summary: "no verdicts arriving — 2 service(s) frozen at their current replica count"
-              description: "The autoscaler has had no fresh verdict for at least ten minutes, so it is holding every replica count where it is. Placement, node lifecycle and reaping are unaffected. Check that monitoring_dispatcher is running and that the autoscaler service still carries infra.handles=local with a reachable infra.handles.port."
+              description: "The autoscaler has had no fresh verdict for at least ten minutes, so it is holding every replica count where it is. Placement, node lifecycle and reaping are unaffected. Check that monitoring_overseer is running and that the autoscaler service still carries infra.handles=local with a reachable infra.handles.port."
 
   # Verdicts arriving normally: silent. Zero is the healthy value, and it is a
   # value rather than an absent series so the rule can tell the two apart.
@@ -556,7 +559,7 @@ tests:
         values: '0x20'
     alert_rule_test:
       - eval_time: 15m
-        alertname: DispatcherSilent
+        alertname: OverseerSilent
         exp_alerts: []
 
   # A brief gap — one missed delivery — is not a page.
@@ -566,13 +569,13 @@ tests:
         values: '1x5 0x20'
     alert_rule_test:
       - eval_time: 4m
-        alertname: DispatcherSilent
+        alertname: OverseerSilent
         exp_alerts: []
 
   # --- ManagerUnreachable ---------------------------------------------------
   - interval: 1m
     input_series:
-      - series: 'dispatcher_delivery_ok{manager="monitoring_autoscaler"}'
+      - series: 'overseer_delivery_ok{manager="monitoring_autoscaler"}'
         values: '0x20'
     alert_rule_test:
       - eval_time: 15m
@@ -581,13 +584,132 @@ tests:
           - exp_labels: { severity: warning, manager: monitoring_autoscaler }
             exp_annotations:
               summary: "monitoring_autoscaler claims a cause but cannot be delivered to"
-              description: "The dispatcher has a verdict for monitoring_autoscaler and its POST has been failing for ten minutes, so that manager is acting on nothing. Deliveries are level-triggered and retried every loop, so this clears by itself the moment the manager answers."
+              description: "The overseer has a verdict for monitoring_autoscaler and its POST has been failing for ten minutes, so that manager is acting on nothing. Deliveries are level-triggered and retried every loop, so this clears by itself the moment the manager answers."
 
   - interval: 1m
     input_series:
-      - series: 'dispatcher_delivery_ok{manager="monitoring_autoscaler"}'
+      - series: 'overseer_delivery_ok{manager="monitoring_autoscaler"}'
         values: '1x20'
     alert_rule_test:
       - eval_time: 15m
         alertname: ManagerUnreachable
+        exp_alerts: []
+
+  # --- databases ------------------------------------------------------------
+  # The same property as everything above: no rule names a component, and each
+  # one produces one alert per component with the name in the annotation.
+
+  # No primary is the loudest state in the file — not a slow database, a
+  # database refusing writes.
+  - interval: 1m
+    input_series:
+      - series: 'dataguard_members{component="docs", state="PRIMARY"}'
+        values: '0x20'
+      - series: 'dataguard_members{component="cache", state="PRIMARY"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: NoPrimary
+        exp_alerts:
+          - exp_labels: { severity: critical, component: docs }
+            exp_annotations:
+              summary: "docs has no primary — it is refusing writes"
+
+  # A healthy set is silent. This is the half that catches a rule which fires on
+  # everything, which is as useless as one that fires on nothing.
+  - interval: 1m
+    input_series:
+      - series: 'dataguard_members{component="docs", state="PRIMARY"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: NoPrimary
+        exp_alerts: []
+
+  # Lag under the budget is normal replication, not a fault.
+  - interval: 1m
+    input_series:
+      - series: 'dataguard_replication_lag_seconds{component="docs", member="docs_mongo-2"}'
+        values: '2x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ReplicaLagOverBudget
+        exp_alerts: []
+
+  # Sustained lag well past it is.
+  - interval: 1m
+    input_series:
+      - series: 'dataguard_replication_lag_seconds{component="docs", member="docs_mongo-2"}'
+        values: '400x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ReplicaLagOverBudget
+        exp_alerts:
+          - exp_labels: { severity: warning, component: docs }
+            exp_annotations:
+              summary: "docs has a replica more than 60s behind"
+
+  # A backup taken but never PROVEN to restore. This is the rule that separates
+  # "we have backups" from "we can recover", so it fires on the verified
+  # timestamp and not on the successful one.
+  #
+  # TWO THINGS THIS CASE GOT WRONG, both of which made it un-failable.
+  #
+  # The series has to OUTLAST the threshold. It ran for thirty hours and
+  # asserted the alert fired, which it never could: `time()` had not yet passed
+  # two weeks, so the expression was false the whole way. It was not testing the
+  # rule, it was testing that promtool can evaluate an expression, and it would
+  # have gone on passing with the threshold set to any value at all.
+  #
+  # And the SAMPLES have to be closer together than the lookback. Points an hour
+  # apart evaluated every minute (`evaluation_interval: 1m`, top of this file)
+  # are stale for fifty-five minutes out of every sixty, so the expression goes
+  # empty between them and `for: 1h` is reset before it can ever elapse. Four
+  # minutes is comfortably inside the five-minute lookback.
+  #
+  # Backups keep succeeding throughout; only verification stops.
+  - interval: 4m
+    input_series:
+      - series: 'dataguard_backup_last_success_timestamp{component="docs"}'
+        values: '0+240x5200'
+      - series: 'dataguard_backup_last_verified_timestamp{component="docs"}'
+        values: '0x5200'
+    alert_rule_test:
+      # Two weeks is 336h; one more hour to satisfy `for`.
+      - eval_time: 338h
+        alertname: BackupNeverVerified
+        exp_alerts:
+          - exp_labels: { severity: warning, component: docs }
+            exp_annotations:
+              summary: "docs's backups have not been proven to restore in two weeks"
+      # And it must NOT fire the day before, or the two-week promise is a lie.
+      - eval_time: 300h
+        alertname: BackupNeverVerified
+        exp_alerts: []
+
+  # An expiring member certificate. Renewal starts thirty days out, so this
+  # firing means renewal itself has stopped working — and an expired one does
+  # not degrade a replica set, it stops it.
+  - interval: 1m
+    input_series:
+      - series: 'dataguard_tls_days_remaining{component="docs", member="2"}'
+        values: '9x90'
+      - series: 'dataguard_tls_days_remaining{component="docs", member="1"}'
+        values: '200x90'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: TLSCertExpiring
+        exp_alerts:
+          - exp_labels: { severity: critical, component: docs }
+            exp_annotations:
+              summary: "docs has a member certificate expiring in under 14 days"
+
+  # Comfortably in date: silent.
+  - interval: 1m
+    input_series:
+      - series: 'dataguard_tls_days_remaining{component="docs", member="1"}'
+        values: '200x90'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: TLSCertExpiring
         exp_alerts: []

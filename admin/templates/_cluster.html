@@ -53,6 +53,7 @@
             <b>{{ nodes|length }}</b> node{{ '' if nodes|length == 1 else 's' }}
             · <b>{{ nodes|sum(attribute='cpus') }}</b> vCPU
             · <b>{{ nodes|sum(attribute='memory_gb')|round(1) }}</b> GB
+            · <b>{{ nodes|sum(attribute='disk_total_gb')|round(1) }}</b> GB disk
           </span>
         </div>
       </div>
@@ -72,7 +73,7 @@
               {% if n.availability != 'active' %}<span class="pill warn">{{ n.availability }}</span>{% endif %}
             </span>
             <span class="tnode-title" title="{{ n.hostname }}">{{ n.hostname }}</span>
-            <span class="tnode-sub mono">{{ n.addr }} · {{ n.cpus }} vCPU · {{ n.memory_gb }} GB</span>
+            <span class="tnode-sub mono">{{ n.addr }} · {{ n.cpus }} vCPU · {{ n.memory_gb }} GB{% if n.disk_total_gb %} · {{ n.disk_total_gb }} GB disk{% endif %}</span>
             <span class="tnode-sub muted">{{ n.tasks_total }} tasks · engine {{ n.engine }}</span>
             {% if n.labels %}
             <span class="tnode-sub mono">{% for k, v in n.labels.items() %}{{ k }}={{ v }}{{ ' · ' if not loop.last }}{% endfor %}</span>
@@ -80,6 +81,7 @@
             <span class="tnode-meters">
               <span title="node CPU utilisation">used cpu <b>{% if n.cpu_pct is not none %}{{ n.cpu_pct|round|int }}%{% else %}—{% endif %}</b></span>
               <span title="node memory utilisation">used mem <b>{% if n.mem_pct is not none %}{{ n.mem_pct|round|int }}%{% else %}—{% endif %}</b></span>
+              <span title="root filesystem — where docker keeps every volume">used disk <b>{% if n.disk_pct is not none %}{{ n.disk_pct|round|int }}%{% else %}—{% endif %}</b>{% if n.disk_free_gb %} <span class="muted">({{ n.disk_free_gb }} GB free)</span>{% endif %}</span>
             </span>
 
             {# bottom-start: CPU reserved. bottom-end: memory reserved. #}

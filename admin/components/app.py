@@ -19,6 +19,14 @@ class AppComponent(Component):
     BLURB = "A container image of yours, behind the tunnel."
     CATEGORY = "Application"
     GROUP = "Application"
+    MANAGER_FIELD = "autoscale"
+    GROUPS = (
+        ("autoscale", "Autoscale", "autoscale",
+         "With this off the replica count is yours and nothing below applies. "
+         "The autoscaler still measures this component and still right-sizes its "
+         "reservations — it just stops changing how many of it there are, and "
+         "stops moving it between the master and the workers."),
+    )
 
     @classmethod
     def fields(cls):
@@ -279,8 +287,13 @@ class AppComponent(Component):
         file says, at whatever moment CI happened to ship. So the live constraint
         is read back and re-stated, and never invented.
         """
+        # Never on a machine leased to a database. Swarm has no taints, so this
+        # is the only way to say it — and it is unconditional, because a leased
+        # node is a worker like any other the moment an app service is unpinned.
+        # Without it, the first handover back to manager mode puts an API replica
+        # on the machine holding a mongod, competing with it for the disk.
         placement = {"preferences": [{"spread": "node.id"}]}
-        constraints = []
+        constraints = ["node.labels.dedicated != true"]
 
         mode = (self.spec.get("placement_mode") or "auto").strip()
         if mode == "auto":

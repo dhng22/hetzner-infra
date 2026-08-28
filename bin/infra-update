@@ -173,9 +173,10 @@ got="$(git -C "$work/repo" rev-parse HEAD)"
 # The same preflight bootstrap runs, for the same reason: a bundle missing a
 # stack file deploys most of a cluster and leaves the rest broken.
 for required in stacks/monitoring.yml stacks/ingress.yml stacks/admin.yml \
-                config/vmagent.yml.tpl config/alertmanager.yml.tpl \
+                config/vmagent.yml.tpl bin/render-alertmanager \
                 config/alerts.yml bin/component bin/stack-deploy bin/infra-update \
-                bin/render-fleet-env bin/infra-images; do
+                bin/render-fleet-env bin/infra-images \
+                pki/__init__.py signals/workloads.py; do
   [ -e "$work/repo/$required" ] || die "the fetched tree is missing $required — refusing to apply it"
 done
 
@@ -279,7 +280,7 @@ rsync -a --delete \
 # directory walk and turns that into a loud failure — before the commit is
 # recorded, so the panel shows "update failing" rather than the new SHA. Same
 # exclusions as `changed()`, or generated config would fail it every time.
-for area in admin autoscaler dispatcher signals bin stacks config; do
+for area in admin autoscaler overseer dataguard signals pki bin stacks config; do
   [ -e "$work/repo/$area" ] || continue
   diff -qr --no-dereference "${DIFF_SKIP[@]}" \
        "$INFRA_DIR/$area" "$work/repo/$area" >/dev/null 2>&1 \
@@ -336,6 +337,27 @@ if [ "$config_changed" = true ]; then
   docker service update --force --quiet "monitoring_vmalert" >/dev/null 2>&1 || true
 fi
 
+# --- services this version has retired ---------------------------------------
+# `bin/stack-deploy` runs `docker stack deploy` WITHOUT `--prune` — only a
+# component prunes, because a component owns its whole stack and nothing else
+# writes to it. The infrastructure stacks are not pruned on purpose: an operator
+# who added a service to one by hand should not lose it to an unrelated update.
+#
+# The cost of that choice is that a RENAMED infrastructure service does not go
+# away. `monitoring_dispatcher` became `monitoring_overseer`, and without this
+# the old one would keep running forever: still scraped, still holding a CPU and
+# memory reservation the capacity arithmetic subtracts from app room, and still
+# POSTing stale verdicts at the autoscaler alongside the new process.
+#
+# So retirements are named, once, and removed idempotently. A name that is
+# already gone is not an error.
+for retired in monitoring_dispatcher; do
+  if docker service inspect "$retired" >/dev/null 2>&1; then
+    log "removing $retired (renamed in this version)"
+    docker service rm "$retired" >/dev/null 2>&1 || log "could not remove $retired; remove it by hand"
+  fi
+done
+
 log "deploying ingress"
 "$INFRA_DIR/bin/stack-deploy" ingress >/dev/null || die "ingress deploy failed"
 
@@ -350,7 +372,7 @@ log "deploying admin"
 # is the commit label CI baked into the image it was started from.
 #
 # Asking the container rather than the tag is what makes a missed service loud.
-# The dispatcher was once given a build and no restart, so it rebuilt on every
+# The overseer was once given a build and no restart, so it rebuilt on every
 # tick and never once started, at status ok, for days.
 service_commit() {
   local name="$1" cid img
@@ -374,7 +396,7 @@ wait_for_commit() {
   die "$name did not come up on ${want:0:12} — it is on ${actual:-no running container on this node}. Swarm may have rolled it back. Check: docker service ps --no-trunc $name"
 }
 
-for name in monitoring_autoscaler monitoring_dispatcher admin_ui; do
+for name in monitoring_autoscaler monitoring_overseer monitoring_dataguard admin_ui; do
   wait_for_commit "$name" "$got"
 done
 

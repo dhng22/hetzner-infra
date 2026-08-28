@@ -69,6 +69,21 @@ for stack in monitoring ingress admin; do
   if docker stack ls --format '{{.Name}}' | grep -qx "$stack"; then ok "stack deployed: $stack"; else bad "stack deployed: $stack"; fi
 done
 
+# A RENAMED infrastructure service does not go away on its own. `bin/stack-deploy`
+# deploys without `--prune` on purpose — an operator who added a service to an
+# infra stack by hand should not lose it to an unrelated update — so the old name
+# keeps running: still scraped, still holding a reservation the capacity model
+# subtracts from application room, and still POSTing stale verdicts. bin/infra-update
+# removes each retirement by name; this is what proves it did.
+for retired in monitoring_dispatcher; do
+  if docker service inspect "$retired" >/dev/null 2>&1; then
+    bad "$retired is gone" \
+        "it was renamed and the old service is still running. Remove it: docker service rm $retired"
+  else
+    ok "$retired is gone (renamed)"
+  fi
+done
+
 # Is the CODE that is running the code the panel says is running?
 #
 # Asked of the CONTAINER, never of the tag or of the service spec. A spec can
@@ -82,7 +97,7 @@ want_commit="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).ge
 if [ -z "$want_commit" ]; then
   skip "running code matches the recorded commit" "this cluster does not self-update"
 else
-  for name in admin_ui monitoring_autoscaler monitoring_dispatcher; do
+  for name in admin_ui monitoring_autoscaler monitoring_overseer monitoring_dataguard; do
     # All three are pinned to the manager, so the container is on this host.
     cid="$(docker ps -q --filter "label=com.docker.swarm.service.name=$name" | head -1)"
     [ -n "$cid" ] || { skip "$name runs the recorded commit" "no container on this node"; continue; }
@@ -297,7 +312,23 @@ else
     # It goes through `sh -c`, so an unexpanded $REDIS_PASSWORD in the argv is
     # the specific failure worth naming: the server would enforce the literal
     # string while every client got the real one.
+    # A managed database's members are one mongod per volume. If one of them
+    # ever carried infra.workload=app the autoscaler would scale it, and a
+    # second mongod on one data directory is corruption rather than an outage.
+    if docker service inspect "$svc" \
+         --format '{{index .Spec.Labels "infra.managed_by"}}' 2>/dev/null \
+         | grep -qx dataguard; then
+      if docker service inspect "$svc" \
+           --format '{{index .Spec.Labels "infra.workload"}}' 2>/dev/null | grep -qx app; then
+        bad "$name is not both a database and an application" \
+            "it carries infra.managed_by=dataguard AND infra.workload=app. Remove one."
+      else
+        ok "$name is managed by dataguard and invisible to the autoscaler"
+      fi
+    fi
+
     if [ "$type" = "redis" ]; then
+      svc="${name}_redis-1"
       want="$(grep -m1 '^REDIS_PASSWORD=' "$dir/secret.env" 2>/dev/null | cut -d= -f2-)"
       got="$(docker service inspect "$svc" \
              --format '{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{println .}}{{end}}' 2>/dev/null \
@@ -317,7 +348,75 @@ else
             "without 'sh -c' the server enforces the literal string \$REDIS_PASSWORD"
       fi
     fi
+
+    # The same check the redis half has had all along, which mongo never did.
+    # The panel shows you a password; the server has to be enforcing that one.
+    if [ "$type" = "mongo" ]; then
+      msvc="${name}_mongo-1"
+      want="$(grep -m1 '^MONGO_PASSWORD=' "$dir/secret.env" 2>/dev/null | cut -d= -f2-)"
+      got="$(docker service inspect "$msvc" \
+             --format '{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{println .}}{{end}}' 2>/dev/null \
+             | grep '^MONGO_INITDB_ROOT_PASSWORD=' | cut -d= -f2-)"
+      if [ -n "$want" ] && [ "$want" = "$got" ]; then
+        ok "$name: the running server has the password the panel shows"
+      else
+        bad "$name: the running server has the password the panel shows" \
+            "redeploy it — the file and the service have drifted"
+      fi
+
+      # Replication is every write you have ever made, and once a member lives on
+      # another machine it crosses the network. `requireTLS`, not `preferTLS`: a
+      # mode that ACCEPTS plaintext will carry plaintext the first time a client
+      # gets its options wrong, and nothing will say so.
+      if docker service inspect "$msvc" \
+           --format '{{range .Spec.TaskTemplate.ContainerSpec.Args}}{{println .}}{{end}}' 2>/dev/null \
+           | grep -q -- '--tlsMode requireTLS'; then
+        ok "$name requires TLS on every connection, replication included"
+      else
+        bad "$name requires TLS on every connection, replication included" \
+            "the oplog would cross the network in clear text once a second member exists"
+      fi
+
+      # 0400 and owned by the mongod user, or mongod refuses to start and the
+      # error names the file rather than the ownership.
+      if docker service inspect "$msvc" \
+           --format '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.File.Name}} {{.File.Mode}} {{.File.UID}}{{println}}{{end}}' 2>/dev/null \
+           | grep -q 'tls-member.pem 256 999'; then
+        ok "$name mounts its certificate at 0400 owned by mongod"
+      else
+        bad "$name mounts its certificate at 0400 owned by mongod" \
+            "mongod refuses a key file it does not own, and the error blames the file"
+      fi
+    fi
   done
+fi
+
+# ---------------------------------------------------------------------------
+head_ "dataguard"
+
+# Dataguard is the only infrastructure service attached to `edge` as well as
+# `monitoring` — it has to be, because mongod and redis live there. That makes
+# ONE property load-bearing: its /signal receiver, which rewrites database
+# topology, must be bound to the monitoring address only. If it ever binds
+# 0.0.0.0, every application in the cluster can reach it.
+if docker service inspect monitoring_dataguard >/dev/null 2>&1; then
+  if docker run --rm --network edge curlimages/curl:8.10.1 \
+       -fsS -m 4 -X POST --data '{}' http://monitoring_dataguard:9202/signal >/dev/null 2>&1; then
+    bad "dataguard's /signal is unreachable from edge" \
+        "an application could POST a verdict that rewrites its own database's topology"
+  else
+    ok "dataguard's /signal is unreachable from edge"
+  fi
+  if docker run --rm --network monitoring curlimages/curl:8.10.1 \
+       -fsS -m 4 -X POST --data '{"signals":[]}' \
+       http://monitoring_dataguard:9202/signal >/dev/null 2>&1; then
+    ok "dataguard's /signal answers on the monitoring overlay"
+  else
+    bad "dataguard's /signal answers on the monitoring overlay" \
+        "the overseer cannot dispatch to it, so no database is being managed"
+  fi
+else
+  skip "dataguard's /signal binding" "dataguard is not deployed"
 fi
 
 # ---------------------------------------------------------------------------
@@ -349,7 +448,7 @@ elif grep -qE "slack_configs|webhook_configs" "$INFRA_DIR/config/alertmanager.ym
   ok "alerts have a destination"
 else
   bad "alerts have a destination" \
-      "alertmanager.yml has a receiver with no configs — every alert is generated, grouped and then DROPPED. Set ALERT_TELEGRAM_BOT_TOKEN and ALERT_TELEGRAM_CHAT_ID, then: stack-deploy monitoring"
+      "alertmanager.yml has a receiver with no configs — every alert is generated, grouped and then DROPPED. Add a destination under Alerts > Targets, then: stack-deploy monitoring"
 fi
 # It holds a bot token, so it must not be WORLD-readable. Not 0600 though: that
 # is what this check used to demand and it is wrong. prom/alertmanager runs as

@@ -19,7 +19,14 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_ADMIN = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ADMIN)
+# The repository ROOT as well, for `pki`. The panel ISSUES the TLS material a
+# managed database mounts, so `admin/Dockerfile` copies `pki/` in from beside
+# `admin/` — but this suite runs with `admin/` as the working directory both
+# in the image and out of it, and that puts admin/ on the path and the root
+# nowhere. Without this line every mongo render test dies on `import pki`.
+sys.path.insert(1, os.path.dirname(_ADMIN))
 
 
 class ComponentTest(unittest.TestCase):
@@ -35,6 +42,12 @@ class ComponentTest(unittest.TestCase):
         components.base.Component.live_replicas = lambda self, service=None: None
         components.base.Component.live_image = lambda self, service=None: None
         components.base.Component.live_worker_pinned = lambda self, service=None: False
+        # No docker either. `base.run` and `base.docker_out` are the two shells
+        # the renderer uses — for Swarm secrets and for reading a live spec back
+        # — and stubbing them here keeps every test in this file pure. A test
+        # that needed a daemon would be testing Docker, not the renderer.
+        components.base.run = lambda argv, timeout=600, stdin=None: (True, "")
+        components.base.docker_out = lambda argv: ""
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -51,7 +64,11 @@ class ComponentTest(unittest.TestCase):
         return component
 
     def make_mongo(self, name="docs", **spec):
-        component, problems = self.components.create("mongo", name, spec)
+        base = {"dataguard": True, "secondary_reads": True}
+        base.update(spec)
+        # A bool goes in as a real bool: `coerce` takes one straight through,
+        # and an empty string would coerce to None and fall back to the default.
+        component, problems = self.components.create("mongo", name, base)
         self.assertEqual(problems, [], f"unexpected problems: {problems}")
         return component
 
@@ -131,14 +148,25 @@ class ComponentTest(unittest.TestCase):
         placement back on every deploy, at whatever moment CI shipped.
         """
         placement = self.make_app().render()["services"]["app"]["deploy"]["placement"]
-        self.assertNotIn("constraints", placement)
+        self.assertNotIn("node.role == worker", placement["constraints"])
+        self.assertNotIn("node.role == manager", placement["constraints"])
         self.assertEqual(placement["preferences"], [{"spread": "node.id"}])
+
+    def test_an_app_is_kept_off_a_machine_leased_to_a_database(self):
+        """
+        Swarm has no taints, so this constraint IS the mechanism — and it is
+        unconditional, because a leased node is an ordinary worker the moment an
+        app service is unpinned. Without it, the first handover back to manager
+        mode puts an API replica on the machine holding a mongod.
+        """
+        placement = self.make_app().render()["services"]["app"]["deploy"]["placement"]
+        self.assertIn("node.labels.dedicated != true", placement["constraints"])
 
     def test_live_pin_is_preserved(self):
         component = self.make_app()
         component.live_worker_pinned = lambda service=None: True
         placement = component.render()["services"]["app"]["deploy"]["placement"]
-        self.assertEqual(placement["constraints"], ["node.role == worker"])
+        self.assertIn("node.role == worker", placement["constraints"])
 
     def test_live_replicas_and_image_win_over_the_spec(self):
         component = self.make_app(replicas=2)
@@ -226,7 +254,11 @@ class ComponentTest(unittest.TestCase):
         component.set_password("p@ss:word/slash")
         url = self.components.load("cache").connection_url()
         self.assertIn("p%40ss%3Aword%2Fslash", url)
-        self.assertTrue(url.endswith("@cache_redis:6379"))
+        # The SENTINELS, not the server: the client asks them who the primary is,
+        # which is what lets a failover change the answer and never the address.
+        self.assertTrue(url.startswith("redis+sentinel://"))
+        self.assertIn("cache_sentinel-1:26379", url)
+        self.assertTrue(url.endswith("/cache/0"))
 
     def test_redis_password_expands_at_runtime(self):
         """
@@ -237,16 +269,46 @@ class ComponentTest(unittest.TestCase):
         while every client is handed the real password. That was a live defect
         in the stack file this replaces.
         """
-        command = self.make_redis().render()["services"]["redis"]["command"]
+        command = self.make_redis().render()["services"]["redis-1"]["command"]
         self.assertEqual(command[:2], ["sh", "-c"])
         self.assertIn('--requirepass "$$REDIS_PASSWORD"', command[2])
         self.assertTrue(command[2].startswith("exec "))
 
-    def test_redis_is_manager_pinned_and_not_app_workload(self):
-        """Stateful: it has a volume, so it must never move to a worker."""
-        deploy = self.make_redis().render()["services"]["redis"]["deploy"]
+    def test_the_master_replica_is_pinned_and_is_not_an_app_workload(self):
+        """
+        Replica 1 is the master's copy and never moves — every state in
+        dataguard's ladder is described relative to it. It carries no
+        `infra.workload` label, which is what keeps the autoscaler away, and an
+        explicit `infra.managed_by` so a mislabelled one is refused rather than
+        merely unnoticed.
+        """
+        deploy = self.make_redis().render()["services"]["redis-1"]["deploy"]
         self.assertEqual(deploy["placement"]["constraints"], ["node.role == manager"])
         self.assertNotIn("infra.workload", deploy["labels"])
+        self.assertEqual(deploy["labels"]["infra.managed_by"], "dataguard")
+
+    def test_the_other_replicas_start_stopped(self):
+        """
+        Every member of the pool is a service from the first deploy — that is
+        what makes its DNS name addressable and its seed entry meaningful — but
+        only the master's copy runs until dataguard says otherwise.
+        """
+        rendered = self.make_redis().render()
+        self.assertEqual(rendered["services"]["redis-1"]["deploy"]["replicas"], 1)
+        for key in ("redis-2", "redis-3", "redis-4"):
+            self.assertEqual(rendered["services"][key]["deploy"]["replicas"], 0)
+
+    def test_the_sentinel_quorum_is_odd_and_does_not_hide_on_one_box(self):
+        """
+        The SENTINELS vote, not the replicas. A quorum that lives entirely on the
+        master cannot survive the master, so nothing pins them there.
+        """
+        rendered = self.make_redis().render()
+        sentinels = [k for k in rendered["services"] if k.startswith("sentinel-")]
+        self.assertEqual(len(sentinels), 3)
+        self.assertEqual(len(sentinels) % 2, 1)
+        placement = rendered["services"]["sentinel-1"]["deploy"]["placement"]
+        self.assertNotIn("node.role == manager", placement.get("constraints", []))
 
     def test_redis_exporter_is_optional_and_scraped(self):
         with_exporter = self.make_redis("c1").render()
@@ -255,12 +317,142 @@ class ComponentTest(unittest.TestCase):
         self.assertEqual(labels["prometheus.port"], "9121")
         without = self.make_redis("c2", exporter="false").render()
         self.assertNotIn("redis-exporter", without["services"])
-        self.assertEqual(without["services"]["redis"]["networks"], ["edge"])
+        self.assertEqual(without["services"]["redis-1"]["networks"], ["edge"])
 
     def test_redis_published_port_is_host_mode(self):
         rendered = self.make_redis(external_port=46379).render()
-        self.assertEqual(rendered["services"]["redis"]["ports"], [{
+        self.assertEqual(rendered["services"]["redis-1"]["ports"], [{
             "target": 6379, "published": 46379, "protocol": "tcp", "mode": "host"}])
+
+    # --- managed databases --------------------------------------------------
+
+    def test_the_seed_list_names_every_member_including_the_absent_ones(self):
+        """
+        The property the whole design rests on. A driver ignores a seed it
+        cannot resolve and discovers the set from the ones it can, so member 4
+        can be a name that means nothing for six months and then mean a machine
+        in Helsinki — with nothing that talks to the database changing.
+        """
+        component = self.make_mongo(replica_pool=3)
+        url = component.connection_url()
+        for index in range(1, 5):
+            self.assertIn(f"docs_mongo-{index}:27017", url)
+        self.assertIn("replicaSet=docs", url)
+
+    def test_the_connection_string_requires_tls_from_the_first_day(self):
+        """
+        While the set is one member on the master nothing crosses the network —
+        and that is exactly why it has to be right now rather than on the day a
+        second machine appears, which is a day nobody would remember.
+        """
+        self.assertIn("tls=true", self.make_mongo().connection_url())
+
+    def test_writes_are_majority_acknowledged_and_retried(self):
+        """
+        `w=majority` is what makes a write survive a failover; `retryWrites` is
+        what stops every stepdown being an error your users see.
+        """
+        url = self.make_mongo().connection_url()
+        self.assertIn("w=majority", url)
+        self.assertIn("readConcernLevel=majority", url)
+        self.assertIn("retryWrites=true", url)
+
+    def test_secondary_reads_are_the_only_thing_that_changes_the_read_preference(self):
+        """
+        It is the one option that changes what the APPLICATION is allowed to
+        assume, so it appears only when somebody has said yes to that.
+        """
+        self.assertIn("readPreference=secondaryPreferred",
+                      self.make_mongo("withreads").connection_url())
+        self.assertNotIn("readPreference",
+                         self.make_mongo("noreads", secondary_reads=False).connection_url())
+
+    def test_every_member_requires_tls_and_authenticates_with_x509(self):
+        rendered = self.make_mongo().render()
+        for index in range(1, 5):
+            command = rendered["services"][f"mongo-{index}"]["command"][2]
+            self.assertIn("--tlsMode requireTLS", command)
+            self.assertIn("--clusterAuthMode x509", command)
+            # preferTLS would carry plaintext the first time a client got its
+            # options wrong, and nothing would say so.
+            self.assertNotIn("preferTLS", command)
+
+    def test_a_member_certificate_is_mounted_read_only_and_owned_by_mongod(self):
+        """mongod refuses a key file it does not own, and blames the file."""
+        secrets = self.make_mongo().render()["services"]["mongo-2"]["secrets"]
+        member = next(s for s in secrets if s["target"] == "tls-member.pem")
+        self.assertEqual(member["uid"], "999")
+        self.assertEqual(member["mode"], 0o400)
+
+    def test_the_authority_private_key_never_leaves_the_master(self):
+        """
+        The Credentials tab hands out the CA CERTIFICATE, which a client outside
+        the cluster needs to verify a member. The key that signs them is not
+        reachable from any route, and this is the assertion that keeps it so.
+        """
+        component = self.make_mongo()
+        component.render()          # the authority is issued when it is needed
+        self.assertIn("BEGIN CERTIFICATE", component.ca_certificate())
+        self.assertNotIn("PRIVATE KEY", component.ca_certificate())
+
+    def test_only_the_master_member_starts(self):
+        """
+        Every member is a service from the first deploy — that is what makes its
+        DNS name addressable — but only the one on the master runs until
+        dataguard says otherwise.
+        """
+        rendered = self.make_mongo().render()
+        self.assertEqual(rendered["services"]["mongo-1"]["deploy"]["replicas"], 1)
+        for index in (2, 3, 4):
+            self.assertEqual(
+                rendered["services"][f"mongo-{index}"]["deploy"]["replicas"], 0)
+
+    def test_the_visualiser_has_no_published_port_and_starts_at_zero(self):
+        """
+        The whole security model. It is full access with no password of its own,
+        so the only door is the panel's session — and it does not exist until
+        somebody opens it.
+        """
+        viewer = self.make_mongo(visualizer=True).render()["services"]["viewer"]
+        self.assertNotIn("ports", viewer)
+        self.assertEqual(viewer["deploy"]["replicas"], 0)
+        self.assertEqual(viewer["networks"], ["edge"])
+
+    def test_a_managed_database_carries_its_whole_policy_as_labels(self):
+        """
+        Nothing about a component lives in dataguard's configuration: it
+        discovers by label and reads policy from the service, exactly as the
+        autoscaler does. A second database is a create form, not an edit.
+        """
+        labels = self.make_mongo().render()["services"]["mongo-2"]["deploy"]["labels"]
+        self.assertEqual(labels["infra.managed_by"], "dataguard")
+        self.assertEqual(labels["dataguard.member"], "2")
+        self.assertEqual(labels["dataguard.pool"], "4")
+        self.assertEqual(labels["dataguard.enabled"], "true")
+        self.assertEqual(labels["dataguard.secondary_reads"], "true")
+
+    def test_turning_dataguard_off_leaves_the_labels_saying_so(self):
+        """
+        Discovered either way, managed only when asked — the same shape as an
+        application that is discovered but not autoscaled.
+        """
+        labels = (self.make_mongo("unmanaged", dataguard=False)
+                  .render()["services"]["mongo-1"]["deploy"]["labels"])
+        self.assertEqual(labels["dataguard.enabled"], "false")
+
+    def test_redis_says_it_cannot_hide_a_replica_rather_than_pretending(self):
+        """
+        Mongo can take a lagging secondary out of read rotation. Redis cannot —
+        a sentinel-aware client picks its own — so the label says false instead
+        of claiming a control that does not exist.
+        """
+        labels = self.make_redis().render()["services"]["redis-2"]["deploy"]["labels"]
+        self.assertEqual(labels["dataguard.secondary_reads"], "false")
+
+    def test_a_redis_backup_target_needs_persistence(self):
+        _component, problems = self.components.create(
+            "redis", "nopersist", {"appendonly": "", "backup_target": "s3main"})
+        self.assertTrue(any("nothing to back up" in p for p in problems), problems)
 
     def test_rotation_changes_the_password(self):
         component = self.make_redis()
@@ -382,20 +574,20 @@ class ComponentTest(unittest.TestCase):
 
     # --- mongo --------------------------------------------------------------
 
-    def test_mongo_is_manager_pinned_and_not_app_workload(self):
+    def test_mongo_member_one_is_manager_pinned_and_not_an_app_workload(self):
         """It has a volume, so the autoscaler must never move it to a worker."""
-        deploy = self.make_mongo().render()["services"]["mongo"]["deploy"]
+        deploy = self.make_mongo().render()["services"]["mongo-1"]["deploy"]
         self.assertEqual(deploy["placement"]["constraints"], ["node.role == manager"])
         self.assertNotIn("infra.workload", deploy["labels"])
+        self.assertEqual(deploy["labels"]["infra.managed_by"], "dataguard")
 
     def test_mongo_pins_the_wiredtiger_cache(self):
         """
         Unset, WiredTiger sizes itself from the HOST's memory and ignores the
         container limit entirely — which is an OOM kill, not a slow query.
         """
-        command = self.make_mongo(cache_mb=512).render()["services"]["mongo"]["command"]
-        self.assertIn("--wiredTigerCacheSizeGB", command)
-        self.assertEqual(command[command.index("--wiredTigerCacheSizeGB") + 1], "0.5")
+        command = self.make_mongo(cache_mb=512).render()["services"]["mongo-1"]["command"][2]
+        self.assertIn("--wiredTigerCacheSizeGB 0.5", command)
 
     def test_mongo_cache_must_leave_headroom(self):
         _, problems = self.components.create(

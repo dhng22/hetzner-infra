@@ -1,14 +1,14 @@
 """
 VictoriaMetrics access, shared by every process that reads a performance signal.
 
-Extracted from the autoscaler when the dispatcher was split out of it. Two
+Extracted from the autoscaler when the overseer was split out of it. Two
 copies of `mean_expr` in two images is the drift this repository keeps being
 bitten by — a query fixed in one process and not the other produces two
 components that disagree about whether the same service is slow, and nothing
 fails while they do.
 
 Errors are counted through a HOOK rather than a metric declared here: the
-autoscaler and the dispatcher each own their own Prometheus registry, and a
+autoscaler and the overseer each own their own Prometheus registry, and a
 counter defined in a shared library would either have to be passed everywhere or
 become a third registry nobody scrapes.
 """

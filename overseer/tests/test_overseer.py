@@ -1,50 +1,58 @@
 """
-Tests for the performance dispatcher.
+Tests for the overseer's performance half: what is slow, and whose fault it is.
 
-    python3 -m unittest discover -s dispatcher/tests -v
+    python3 -m unittest discover -s overseer/tests -v
 
-Run from the repository root: the dispatcher imports `signals`, which is shared
-with the autoscaler and lives there.
+The fleet half is in test_fleet.py. Both import the same module object on
+purpose — prometheus_client refuses a second registration of the same metric
+name, so loading overseer.py twice under two names fails at import with an error
+that reads like the metric is duplicated in the source.
+
+Run from the repository root: the overseer imports `signals`, which is shared
+with the autoscaler and dataguard and lives beside all three.
 """
 
-import importlib.util
 import json
 import os
 import sys
 import types
 import unittest
 
-ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, ROOT)
-sys.path.insert(0, os.path.join(ROOT, "dispatcher"))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(_HERE))
+sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))
 
-# The docker socket does not exist in a test runner, and importing dispatcher
-# opens one at module scope. Stub the client, not the module: everything else in
-# the docker package is real, so a typo in an attribute name still fails.
-_fake_docker = types.ModuleType("docker")
-_fake_docker.DockerClient = lambda **kw: types.SimpleNamespace(services=None)
-sys.modules.setdefault("docker", _fake_docker)
+os.environ.setdefault("HCLOUD_TOKEN", "test-token")
+os.environ.setdefault("APP_NAME", "testcluster")
 
-# Loaded by PATH, not by name. `dispatcher/` is also a directory on sys.path,
-# so `import dispatcher` finds the namespace package rather than the module
-# inside it — and the failure is an AttributeError on every symbol, which reads
-# like the module is broken rather than like the wrong thing was imported.
-_spec = importlib.util.spec_from_file_location(
-    "dispatcher_app", os.path.join(ROOT, "dispatcher", "dispatcher.py"))
-D = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(D)
+import docker  # noqa: E402
 
-from signals import classify, discovery  # noqa: E402
+docker.DockerClient = lambda *a, **kw: types.SimpleNamespace(  # noqa: E731
+    api=types.SimpleNamespace(), nodes=types.SimpleNamespace(),
+    services=types.SimpleNamespace(), swarm=types.SimpleNamespace(),
+    info=lambda: {},
+)
+
+import overseer as D  # noqa: E402
+from signals import classify, discovery, workloads  # noqa: E402
+
+
+def raw_service(name="api_app", **labels):
+    """A docker-py service as the API returns it."""
+    base = {"infra.workload": "app", "infra.component": name.split("_")[0]}
+    base.update(labels)
+    return types.SimpleNamespace(name=name, id=f"id-{name}", attrs={"Spec": {
+        "Labels": base,
+        "Mode": {"Replicated": {"Replicas": 1}},
+        "TaskTemplate": {"Resources": {
+            "Reservations": {"NanoCPUs": 40_000_000, "MemoryBytes": 300 << 20},
+            "Limits": {"NanoCPUs": 80_000_000, "MemoryBytes": 600 << 20}}},
+    }})
 
 
 def service(name="api_app", **labels):
-    base = {"infra.workload": "app", "infra.component": name.split("_")[0]}
-    base.update(labels)
-    return types.SimpleNamespace(name=name, attrs={"Spec": {
-        "Labels": base,
-        "TaskTemplate": {"Resources": {
-            "Limits": {"NanoCPUs": 80_000_000, "MemoryBytes": 600 << 20}}},
-    }})
+    """One application, in the shape the overseer holds it."""
+    return workloads.workload_from_service(raw_service(name, **labels))
 
 
 class WatchedTest(unittest.TestCase):
@@ -143,7 +151,7 @@ class OwnershipTest(unittest.TestCase):
 
     def test_a_plain_claim_is_accepted(self):
         D.dkr = types.SimpleNamespace(services=types.SimpleNamespace(list=lambda: [
-            service("dbmanager_app", **{"infra.handles": "database, upstream",
+            raw_service("dbmanager_app", **{"infra.handles": "database, upstream",
                                         "infra.handles.port": "9300"})]))
         self.assertEqual(D.claimed_causes(), {"database", "upstream"})
 
@@ -199,7 +207,7 @@ class ManagerDiscoveryTest(unittest.TestCase):
             services=types.SimpleNamespace(list=lambda: list(services)))
 
     def test_a_claim_plus_a_port_is_a_deliverable_manager(self):
-        self.cluster(service("monitoring_autoscaler", **{
+        self.cluster(raw_service("monitoring_autoscaler", **{
             "infra.handles": "local", "infra.handles.port": "9201"}))
         [m] = D.managers()
         self.assertEqual(m.causes, frozenset({"local"}))
@@ -207,27 +215,27 @@ class ManagerDiscoveryTest(unittest.TestCase):
         self.assertEqual(m.url, "http://monitoring_autoscaler:9201/signal")
 
     def test_the_path_is_overridable(self):
-        self.cluster(service("dbm", **{"infra.handles": "database",
+        self.cluster(raw_service("dbm", **{"infra.handles": "database",
                                        "infra.handles.port": "8080",
                                        "infra.handles.path": "/hooks/perf"}))
         self.assertEqual(D.managers()[0].url, "http://dbm:8080/hooks/perf")
 
     def test_a_claim_with_no_port_is_refused_loudly_not_guessed(self):
-        self.cluster(service("dbm", **{"infra.handles": "database"}))
+        self.cluster(raw_service("dbm", **{"infra.handles": "database"}))
         self.assertEqual(D.managers(), [])
 
     def test_two_managers_can_claim_different_causes(self):
         self.cluster(
-            service("monitoring_autoscaler", **{"infra.handles": "local",
+            raw_service("monitoring_autoscaler", **{"infra.handles": "local",
                                                 "infra.handles.port": "9201"}),
-            service("dbmanager", **{"infra.handles": "database",
-                                    "infra.handles.port": "9300"}))
+            raw_service("dbmanager", **{"infra.handles": "database",
+                                        "infra.handles.port": "9300"}))
         self.assertEqual(D.claimed_causes(), {"local", "database"})
 
     def test_a_claim_on_a_target_is_refused(self):
         # A manager handles a KIND of thing. `database:documents` would be a
         # claim nothing could satisfy for the next database somebody creates.
-        self.cluster(service("dbm", **{"infra.handles": "database:documents",
+        self.cluster(raw_service("dbm", **{"infra.handles": "database:documents",
                                        "infra.handles.port": "9300"}))
         self.assertEqual(D.managers(), [])
 
@@ -283,11 +291,11 @@ class DeliveryTest(unittest.TestCase):
     def test_a_manager_only_receives_the_causes_it_claims(self):
         D.requests.post = self.ok
         D.dkr = types.SimpleNamespace(services=types.SimpleNamespace(list=lambda: [
-            service("api_app"),
-            service("monitoring_autoscaler", **{"infra.handles": "local",
+            raw_service("api_app"),
+            raw_service("monitoring_autoscaler", **{"infra.handles": "local",
                                                 "infra.handles.port": "9201"}),
-            service("dbmanager", **{"infra.handles": "database",
-                                    "infra.handles.port": "9300"})]))
+            raw_service("dbmanager", **{"infra.handles": "database",
+                                        "infra.handles.port": "9300"})]))
         decided = {
             "api_app": {"service": "api_app", "cause": "local", "direction": "up"},
             "web_app": {"service": "web_app", "cause": "database", "direction": "hold"},

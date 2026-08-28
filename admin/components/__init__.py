@@ -101,6 +101,10 @@ def create(type_name, name, raw_spec):
 
     spec, problems = cls.coerce_spec(raw_spec)
     component = cls(name, {"type": type_name, "spec": spec})
+    # Every field on a create form was "changed", so the manager switch wins any
+    # contradiction — which is the right way round: somebody who ticked Dataguard
+    # and left Placement on its default meant the tick.
+    component.normalize(changed={f.name for f in cls.fields()})
     problems += component.validate()
     if problems:
         return None, problems
@@ -134,6 +138,10 @@ def update(name, raw_spec):
     spec, problems = type(component).coerce_spec({**merged, **raw_spec})
     candidate = type(component)(name, {"type": component.TYPE, "spec": spec,
                                        "created_at": component.created_at})
+    # Which of the two sides of a contradiction wins depends on which one the
+    # save actually touched, so the diff is worked out here rather than guessed.
+    touched = {key for key, value in spec.items() if merged.get(key) != value}
+    candidate.normalize(changed=touched)
     problems += candidate.validate()
     if problems:
         return None, problems

@@ -74,7 +74,7 @@ x-manager-only: &manager-only
   placement:
     constraints: [node.role == manager]
 
-# WIRING ONLY. Every SETTING the autoscaler reads arrives through the env_file
+# WIRING ONLY. Every SETTING the overseer reads arrives through the env_file
 # below instead of being listed here.
 #
 # Listing them was a third edit nobody could see the need for: the panel offered
@@ -87,7 +87,7 @@ x-manager-only: &manager-only
 # What is left here is not configuration: an address inside the overlay, a grace
 # period nobody tunes, and a path into a bind mount. `environment` also wins over
 # `env_file`, so anything that must not be overridable belongs here.
-x-autoscaler-env: &autoscaler-env
+x-fleet-env: &fleet-env
   VM_URL: "http://victoriametrics:8428"
   POST_DRAIN_GRACE_SECONDS: "45"
   WORKER_USERDATA_PATH: "/etc/infra/worker-cloud-init.yaml"
@@ -97,10 +97,12 @@ x-autoscaler-base: &autoscaler-base
   # bin/infra-images. Never `:latest`: a tag that does not change is a
   # service spec that does not change, and Swarm has nothing to roll.
   image: ${INFRA_IMAGE_AUTOSCALER}
-  secrets: [HCLOUD_TOKEN]
+  # NO HCLOUD_TOKEN. This process cannot create or delete a server any more;
+  # the fleet belongs to the overseer. The socket stays read-write because it
+  # still changes service specs — replica counts, placement constraints and
+  # measured reservations.
   volumes:
     - /var/run/docker.sock:/var/run/docker.sock
-    - /opt/infra/config/worker-cloud-init.yaml:/etc/infra/worker-cloud-init.yaml:ro
   networks: [monitoring]
   deploy:
     replicas: 1
@@ -112,8 +114,8 @@ x-autoscaler-base: &autoscaler-base
       prometheus.path: "/metrics"
       # THE AUTOSCALER IS A MANAGER, and this is its whole subscription. It
       # claims `local` — the one cause more replicas can fix — and says where to
-      # deliver. The dispatcher reads these three labels off the service list;
-      # nothing anywhere is configured with this service's address, so dbmanager
+      # deliver. The overseer reads these three labels off the service list;
+      # nothing anywhere is configured with this service's address, so dataguard
       # is the same three labels on a different service and no edit here.
       infra.handles: "local"
       infra.handles.port: "9201"
@@ -287,55 +289,106 @@ services:
       resources:
         reservations: { cpus: "0.04", memory: 96M }
 
-  # --- the performance dispatcher -------------------------------------------
-  # Works out WHY a service is slow and hands the answer to whoever owns it.
+  # --- the overseer ---------------------------------------------------------
+  # What is happening, what it means, and what the fleet should be.
   #
-  # Separate from the autoscaler on purpose. Deciding that MongoDB is throttling
-  # an API is not a capacity decision, and it used to mean the process holding a
-  # Hetzner token — one that creates and deletes servers — also had to know what
-  # a MongoDB driver timer looks like. This one holds no token, mounts the
-  # socket READ-ONLY, and changes nothing at all.
+  # It measures every application, works out WHY a slow one is slow, and owns
+  # the Hetzner fleet outright: how many machines exist, of what size, and which
+  # of them may be deleted. That last part used to be the autoscaler's, and
+  # moved here when a SECOND manager wanted machines — dataguard has to buy a
+  # node to put a database replica on, and two processes racing on fleet size
+  # with two copies of the capacity arithmetic was never going to end well.
   #
-  # It is also the answer's second consumer that forced the split: a future
-  # dbmanager needs to know a database is the bottleneck, and if that lived in
-  # the autoscaler, dbmanager would either re-derive it — two implementations
-  # that will disagree — or depend on the autoscaler, which is backwards.
+  # It therefore holds HCLOUD_TOKEN and mounts the socket READ-WRITE, which the
+  # dispatcher it grew out of deliberately did not. See overseer/overseer.py for
+  # what that cost and what guards it.
   #
-  # A manager subscribes by labelling ITS OWN service `infra.handles=database`.
+  # A manager subscribes by labelling ITS OWN service `infra.handles=<cause>`.
   # Nothing here lists managers.
-  dispatcher:
-    image: ${INFRA_IMAGE_DISPATCHER}
+  overseer:
+    image: ${INFRA_IMAGE_OVERSEER}
+    secrets: [HCLOUD_TOKEN]
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/infra/config/worker-cloud-init.yaml:/etc/infra/worker-cloud-init.yaml:ro
     networks: [monitoring]
-    deploy:
-      replicas: 1
-      # Manager-only because it reads the service list, which is a manager API.
-      # It carries no state and no volume, so this is the API's requirement
-      # rather than a data one.
-      <<: *manager-only
-      labels:
-        prometheus.scrape: "true"
-        prometheus.port: "9210"
-        prometheus.path: "/metrics"
-      resources:
-        reservations: { cpus: "0.02", memory: 48M }
-      restart_policy:
-        condition: any
-        delay: 30s
-
-  # --- the autoscaler -------------------------------------------------------
-  # Manages the single shared worker pool. Staging rides along on it as one
-  # capped replica, so there is nothing separate to scale.
-  autoscaler:
-    <<: *autoscaler-base
     # Rendered by bin/stack-deploy immediately before this file is deployed, and
     # read by the docker CLI here rather than mounted — the values end up in the
     # service spec, so changing a setting is a spec change Swarm actually acts on.
     env_file:
       - /etc/infra/fleet.env
     environment:
-      <<: *autoscaler-env
+      <<: *fleet-env
+    deploy:
+      replicas: 1
+      # Manager-only because it reads the node and service lists, which are
+      # manager APIs. It carries no state and no volume, so this is the API's
+      # requirement rather than a data one.
+      <<: *manager-only
+      labels:
+        prometheus.scrape: "true"
+        prometheus.port: "9210"
+        prometheus.path: "/metrics"
+      resources:
+        # Larger than the dispatcher's, because the packer, the Hetzner
+        # catalogue cache and the resize machine all live here now.
+        reservations: { cpus: "0.04", memory: 96M }
+      restart_policy:
+        condition: any
+        delay: 30s
+
+  # --- dataguard ------------------------------------------------------------
+  # The autoscaler's counterpart for stateful components: replica sets, sentinel
+  # quorums, backups, restores and the machines they live on.
+  #
+  # It is on `edge` as well as `monitoring`, which nothing else in this stack is,
+  # because it has to speak to mongod and redis — and they are on `edge`. That
+  # widening is why its /signal receiver binds the monitoring interface only:
+  # an application that could POST to it could rewrite its own database's
+  # topology. See dataguard/dataguard.py.
+  dataguard:
+    image: ${INFRA_IMAGE_DATAGUARD}
+    volumes:
+      # Read-write: it creates and removes member services, and issues the
+      # per-component TLS material they mount.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/infra:/opt/infra
+    networks: [monitoring, edge]
+    env_file:
+      - /etc/infra/fleet.env
+    environment:
+      VM_URL: "http://victoriametrics:8428"
+      OVERSEER_URL: "http://monitoring_overseer:9211"
+    deploy:
+      replicas: 1
+      # Manager-only, and for once that IS a data requirement as well as an API
+      # one: the CA key it signs member certificates with lives in /opt/infra on
+      # the master and never leaves it.
+      <<: *manager-only
+      labels:
+        prometheus.scrape: "true"
+        prometheus.port: "9203"
+        prometheus.path: "/metrics"
+        # DATAGUARD IS A MANAGER, and this is its whole subscription — the
+        # extension point signals/classify.py has documented since before it
+        # existed. It claims `database`, so the overseer stops alerting that
+        # nothing owns a database bottleneck and dispatches it here instead.
+        infra.handles: "database"
+        infra.handles.port: "9202"
+        infra.handles.path: "/signal"
+      resources:
+        reservations: { cpus: "0.03", memory: 64M }
+      restart_policy:
+        condition: any
+        delay: 30s
+
+  # --- the autoscaler -------------------------------------------------------
+  # Applies what the overseer decides to application services: replica counts,
+  # placement constraints, and reservations measured from real usage.
+  autoscaler:
+    <<: *autoscaler-base
+    environment:
+      VM_URL: "http://victoriametrics:8428"
 
 networks:
   monitoring:
@@ -349,6 +402,14 @@ networks:
     name: monitoring
     driver: overlay
     attachable: true
+
+  # Declared external, never created here. `edge` is made by bootstrap.sh before
+  # any stack exists, and every component declares it the same way — no stack
+  # may own a network another stack needs. Only dataguard joins it from here,
+  # because it is the only infrastructure service that has to talk to a
+  # database rather than about one.
+  edge:
+    external: true
 
 volumes:
   vmdata:

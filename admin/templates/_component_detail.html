@@ -53,8 +53,20 @@
        answers a different question. #}
     <span class="head-reserved mono"
           data-tip="Reserved by every replica of every service in {{ component.name }}, across the cluster">
-      {{ view.reserved.cpu }} vCPU · {{ view.reserved.mem_mb }} MB
+      {{ view.reserved.cpu }} vCPU · {{ view.reserved.mem_mb }} MB{% if view.data_gb %} · {{ view.data_gb }} GB on disk{% endif %}
     </span>
+    {% endif %}
+    {% if component.spec.get("visualizer") %}
+    {# LAST in the header, under the size: it is a thing you DO to this component
+       rather than a fact about it, and the facts read as a block. It opens the
+       console through this panel's own session — the service has no published
+       port and no hostname, so this link is the only way in, and it starts on
+       the click and is stopped again when you stop looking. #}
+    <a class="btn btn-sm head-view" href="{{ viewer_href(component.name) }}"
+       target="_blank" rel="noopener"
+       title="Browse this database. Full access, through your panel session; it starts on demand and stops when idle.">
+      View data
+    </a>
     {% endif %}
   </div>
 </div>
@@ -404,11 +416,98 @@
   </div>
   {% endif %}
 
+  <!-- backups --------------------------------------------------------------->
+  {% if snapshots is defined %}
+  <div data-panel="backups" {% if tab != 'backups' %}hidden{% endif %}>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Snapshots</h2>
+        <span class="spacer"></span>
+        <span class="eyebrow">from the backup target on this component's Settings tab</span>
+      </div>
+      <div class="panel-body">
+        {% if snapshots %}
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>Taken</th><th>Size</th><th>Status</th></tr></thead>
+            <tbody>
+            {% for snap in snapshots %}
+            <tr>
+              <td class="mono small">{{ snap.name }}</td>
+              <td class="mono small">{{ snap.restoreTo or snap.completeTS or '—' }}</td>
+              <td class="mono small">{{ snap.size or '—' }}</td>
+              <td>
+                {% if snap.status == 'done' %}<span class="pill ok plain">done</span>
+                {% else %}<span class="pill warn plain">{{ snap.status or 'unknown' }}</span>{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <p class="hint">No snapshots. Either nothing has been taken yet, or the backup
+        controller is not running — it is pinned to the master, so check
+        <code>{{ component.name }}_pbm-ctl</code> on the Cluster tab.</p>
+        {% endif %}
+        {% if pitr %}
+        <div class="panel-note">
+          Continuous oplog is being kept between snapshots, so you can restore to any
+          second inside a covered range rather than only to a snapshot. Ranges:
+          <code class="mono">{{ pitr }}</code>
+        </div>
+        {% endif %}
+      </div>
+    </section>
+
+    <section class="panel danger-zone">
+      <div class="panel-head"><h2>Restore</h2></div>
+      <form method="post" action="{{ restore_href(component.name) }}"
+            {% if preview %}data-preview{% endif %}>
+        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+        <div class="panel-body stack">
+          <p>
+            <strong>Restoring destroys everything written after the point you choose.</strong>
+            That is what restoring means — it is not a merge, and there is no undo. The set
+            refuses writes while it runs, and dataguard will not change this database's
+            shape until it has finished.
+          </p>
+          <div class="grid-2">
+            <div class="field">
+              <label for="r-snapshot">Snapshot</label>
+              <select id="r-snapshot" name="snapshot">
+                <option value="">— choose one —</option>
+                {% for snap in snapshots %}
+                <option value="{{ snap.name }}">{{ snap.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="field">
+              <label for="r-pitr">…or a point in time</label>
+              <input id="r-pitr" name="point_in_time" type="text"
+                     placeholder="2026-08-27T14:31:00">
+              <p class="hint">Any second inside a covered range above. Takes precedence
+              over the snapshot if you fill both in.</p>
+            </div>
+          </div>
+          <div class="field">
+            <label for="r-confirm">Type <code>{{ component.name }}</code> to confirm</label>
+            <input id="r-confirm" name="confirm" type="text" autocomplete="off" required>
+          </div>
+        </div>
+        <div class="sticky-save">
+          <button class="btn btn-danger" type="submit">Restore this database</button>
+        </div>
+      </form>
+    </section>
+  </div>
+  {% endif %}
+
   {% if tabs|selectattr(0, 'equalto', 'settings')|list %}
   <div data-panel="settings" {% if tab != 'settings' %}hidden{% endif %}>
     <form method="post" action="{{ spec_href(component.name) }}" {% if preview %}data-preview{% endif %}>
       <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-      {% with spec = component.spec, fields = fields %}
+      {% with spec = component.spec, fields = fields, groups = component.GROUPS %}
         {% include "_spec_form.html" %}
       {% endwith %}
 

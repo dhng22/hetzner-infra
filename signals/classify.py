@@ -3,9 +3,9 @@ What a service's numbers MEAN: is it busy, and if it is slow, whose fault is it.
 
 Shared because two processes must reach the same verdict about the same service.
 The autoscaler asks "is this mine?" — it has to, because it acts on the answer
-inside its own loop and cannot wait for anything else. The dispatcher asks "then
+inside its own loop and cannot wait for anything else. The overseer asks "then
 whose is it?" and routes that to whoever claims it. If they disagreed about what
-"busy" means, the autoscaler would refuse to scale something the dispatcher said
+"busy" means, the autoscaler would refuse to scale something the overseer said
 was the service's own fault, and nobody would ever notice.
 """
 
@@ -21,7 +21,7 @@ CAUSE_UNKNOWN = "unknown"
 CAUSES = (CAUSE_LOCAL, CAUSE_DATABASE, CAUSE_UPSTREAM, CAUSE_UNKNOWN)
 
 #: A service that carries this label CLAIMS the causes it names, and the
-#: dispatcher hands them over instead of alerting. The whole extension point for
+#: overseer hands them over instead of alerting. The whole extension point for
 #: a future dbmanager is one label on its own service:
 #:
 #:     infra.handles=database
@@ -30,7 +30,7 @@ CAUSES = (CAUSE_LOCAL, CAUSE_DATABASE, CAUSE_UPSTREAM, CAUSE_UNKNOWN)
 #: follows for workloads, so a second manager needs no edit anywhere here.
 HANDLER_LABEL = "infra.handles"
 
-#: Causes nobody will ever fix, named per component so the dispatcher stops
+#: Causes nobody will ever fix, named per component so the overseer stops
 #: raising them. `upstream:vendor.example` mutes one target; `upstream` mutes all.
 MUTE_LABEL = "autoscale.mute_causes"
 
@@ -94,7 +94,7 @@ def verdict(cause, target, muted, claims):
 # ---------------------------------------------------------------------------
 # the performance verdict
 # ---------------------------------------------------------------------------
-# THE RULE LIVES HERE, ONCE. The dispatcher applies it and dispatches the
+# THE RULE LIVES HERE, ONCE. The overseer applies it and dispatches the
 # result; a manager receives the result and decides what to do about it. Before
 # the split the autoscaler applied the rule AND acted on it, which is why it had
 # to know what a MongoDB driver timer looked like.

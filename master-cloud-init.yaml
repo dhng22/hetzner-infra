@@ -58,7 +58,6 @@ write_files:
       HCLOUD_NETWORK_NAME=prod-net
       HCLOUD_SSH_KEY_NAME=my-laptop
       WORKER_IMAGE=ubuntu-24.04
-      WORKER_TYPE=cpx22              # shared worker pool
 
       # --- container registry: FIRST BOOT ONLY --------------------------------
       # Used once, for the initial `docker login` so the very first deploy can
@@ -98,12 +97,12 @@ write_files:
       # dispatching all still work; only the last hop is missing, and that is
       # the one state of this pipeline that looks healthy from the inside.
       #
-      # Both are rendered into config/alertmanager.yml (0600, root only) by
-      # bin/stack-deploy — not into a docker secret, because a secret cannot be
-      # absent and cannot be edited, and this has to be both. You can change it
-      # later in the panel under Settings.
-      ALERT_TELEGRAM_BOT_TOKEN=REPLACE_ME
-      ALERT_TELEGRAM_CHAT_ID=REPLACE_ME
+      # THERE IS NOTHING TO SET HERE ANY MORE. A destination used to be two keys
+      # in this file, which made "who gets alerted" a property of the cluster
+      # rather than a thing you have any of: no second channel, no deliberate
+      # none, and a second KIND of destination meant hand-editing YAML. Add them
+      # in the panel under Alerts > Targets instead; the config is generated from
+      # that list on every monitoring deploy, and every alert goes to all of them.
 
       # --- deploy access (OPTIONAL) -------------------------------------------
       # Your CI is your business, but whatever you build needs a way in that is
@@ -141,10 +140,11 @@ write_files:
       # How much fits on a node is NOT configured. It is measured: each node's
       # real CPU and memory, minus what Swarm has already reserved there,
       # against the reservations of the replicas that have to be placed. A new
-      # worker's size comes from the Hetzner catalogue for WORKER_TYPE. Change
-      # the worker type, resize the master, or create another component, and the
-      # arithmetic just follows. Existing workers are filled before another one
-      # is bought.
+      # machine's size comes from the Hetzner catalogue, and WHICH plan that is
+      # is not configured either: it is the smallest shared x86 type this
+      # location sells with at least 2 cores, 4 GB and 80 GB of disk. Resize the
+      # master or create another component and the arithmetic just follows.
+      # Existing workers are filled before another one is bought.
       MIN_WORKERS=0
       MAX_WORKERS=5                  # a BUDGET cap, not a capacity plan
 
@@ -155,14 +155,14 @@ write_files:
       # servers, so it cannot cap a change that raises the bill without changing
       # the count, and half a ceiling is no ceiling.
       #
-      # A CAPACITY, never a plan name. Hetzner adds and retires plans and does
-      # not sell the same family everywhere (cpx21 does not exist in hel1 at
-      # all), so the ladder is read from the API — same family, architecture and
-      # CPU type as WORKER_TYPE — and simply cut off here. WORKER_TYPE stays the
-      # floor a worker is created at and shrinks back to.
+      # A CAPACITY, never a plan name — and the floor is not a plan name either
+      # any more. Hetzner adds and retires plans and does not sell the same
+      # family everywhere, so BOTH ends are read from the API: the floor is the
+      # smallest type meeting the base requirement, and the ladder above it is
+      # the same family, architecture and CPU type, cut off here.
       #
-      #   WORKER_MAX_CORES=8 + WORKER_MAX_MEMORY_GB=16 with WORKER_TYPE=cpx22
-      #   allows cpx22 -> cpx32 -> cpx42, then buys a worker instead.
+      #   8 cores / 16 GB from a 2-core floor allows two rungs up before another
+      #   machine is bought instead. Naming the plans would date this comment.
       WORKER_MAX_CORES=8
       WORKER_MAX_MEMORY_GB=16
       # A resize power-cycles the machine, so it corrects the SHAPE of the fleet
@@ -186,6 +186,30 @@ write_files:
       SCHEDULE_FLOOR=                # UTC; "HH:MM-HH:MM=N" comma separated
       DRY_RUN=false
 
+      # --- databases ----------------------------------------------------------
+      # Dataguard's cluster-wide policy. Everything per component — how many
+      # members, the lag budget, whether reads may go to secondaries, where the
+      # backups go — lives on that component's own services as deploy labels and
+      # is edited on its page. Nothing about a specific database is here.
+      DATAGUARD_DRY_RUN=false
+      # THE CEILING ON A DATABASE'S MACHINE. A member is never resized in place:
+      # under sustained write or capacity pressure a member is started on the
+      # next plan up, synced, promoted, and the old one dropped. This is where
+      # that stops. Separate from WORKER_MAX_* because the mechanisms differ,
+      # and a capacity rather than a plan name because Hetzner retires plans.
+      DB_MAX_CORES=16
+      DB_MAX_MEMORY_GB=32
+      # HOURS. An initial sync reads the whole dataset off a live member, so a
+      # loop that reacts faster than the thing it controls simply oscillates.
+      TOPOLOGY_COOLDOWN_SECONDS=14400
+      PRESSURE_SUSTAIN_SECONDS=3600
+      # A topology change can lose data, so it is refused without a backup that
+      # has been proven to RESTORE — not merely taken — inside this window.
+      BACKUP_MAX_AGE_SECONDS=86400
+      # A data visualiser is full access to a database with no password of its
+      # own. The shorter it exists, the smaller that surface is.
+      VIEWER_IDLE_SECONDS=900
+
       # --- self-update --------------------------------------------------------
       # THE REPO IS THE SOURCE OF TRUTH. A timer polls this URL, compares the
       # commit it last applied against the branch head, and re-applies the
@@ -206,7 +230,7 @@ write_files:
       INFRA_REPO_BRANCH=master
       # WHERE THE IMAGES COME FROM — and there is nothing to fill in for it.
       # Nothing is built on this master: the repository above builds the
-      # autoscaler, the dispatcher and the panel on every push and publishes
+      # autoscaler, the overseer and the panel on every push and publishes
       # them to its own GHCR namespace tagged with the commit. Both halves of
       # every image name are therefore derived from things already on this
       # line — the path from INFRA_REPO_URL, the tag from the commit applied —
@@ -266,10 +290,10 @@ write_files:
       # This script is written by cloud-init, but the rest of the bundle is not.
       # Say so plainly instead of failing later on a missing stack file.
       for required in stacks/monitoring.yml stacks/ingress.yml stacks/admin.yml \
-                      config/vmagent.yml.tpl config/alertmanager.yml.tpl \
-                      config/alertmanager-none.yml config/alerts.yml \
+                      config/vmagent.yml.tpl config/alerts.yml \
                       bin/component bin/stack-deploy bin/panel-hostops \
-                      bin/render-fleet-env bin/infra-images; do
+                      bin/render-fleet-env bin/render-alertmanager bin/infra-images \
+                      pki/__init__.py signals/workloads.py; do
         if [ ! -e "/opt/infra/$required" ]; then
           echo "FATAL: /opt/infra/$required is missing." >&2
           echo "The bundle in /opt/infra is incomplete. Delete it and re-run this" >&2
@@ -307,16 +331,10 @@ write_files:
       # receiver that visibly drops everything, and `smoke-test` fails on it
       # until you fix it. The property worth keeping was never "refuse to boot"
       # — it was "never look like it is working when it is not".
-      ALERTING=0
-      case "${ALERT_TELEGRAM_BOT_TOKEN:-}${ALERT_TELEGRAM_CHAT_ID:-}" in
-        ""|*REPLACE_ME*) ;;
-        *) ALERTING=1 ;;
-      esac
-      if [ "$ALERTING" = "0" ]; then
+      if [ ! -s /opt/infra/state/alert_targets.json ]; then
         echo "WARNING: no alert destination is configured." >&2
-        echo "Alerts will be generated, grouped — and dropped. Set" >&2
-        echo "ALERT_TELEGRAM_BOT_TOKEN and ALERT_TELEGRAM_CHAT_ID in" >&2
-        echo "/etc/infra/infra.env and re-run: stack-deploy monitoring" >&2
+        echo "Alerts will be generated, grouped — and dropped. Add one in the" >&2
+        echo "panel under Alerts > Targets; nothing needs editing on this box." >&2
       fi
 
       # Scaling numbers that have to agree with each other. The autoscaler
@@ -520,7 +538,7 @@ write_files:
          /opt/infra/config/worker-cloud-init.yaml
 
       # --- infrastructure images: PULLED, never built --------------------------
-      # These three used to be built right here, which cost a fresh master several
+      # These used to be built right here, which cost a fresh master several
       # minutes of its boot and left the cluster running images that existed
       # nowhere else — so `docker stack deploy` could not resolve them to a digest,
       # and every later update had to work around a service spec that never
@@ -575,8 +593,20 @@ write_files:
       # declares it external and no component may own it. When it belonged to
       # the app stack, removing that stack took the network — and therefore the
       # tunnel's route to everything else — with it.
+      #
+      # `--opt encrypted` is defence in depth and NOT the mechanism. Once a
+      # database has members on more than one machine, replication — every write
+      # you have ever made — crosses this network, and the thing that protects it
+      # is TLS inside mongod, because an overlay's IPsec stops at the container
+      # boundary and proves nothing about who the peer is. This is the second
+      # layer under that one.
+      #
+      # It cannot be added to an existing network: changing it means recreating
+      # `edge`, which means removing every stack that declares it. So a cluster
+      # built before this line stays unencrypted at the overlay until it is
+      # rebuilt, and its databases are still TLS end to end.
       docker network inspect edge >/dev/null 2>&1 \
-        || docker network create --driver overlay --attachable edge
+        || docker network create --driver overlay --attachable --opt encrypted edge
 
       # --- monitoring first: it creates the `monitoring` network the other two
       # stacks declare external, and the autoscaler needs somewhere to read from.

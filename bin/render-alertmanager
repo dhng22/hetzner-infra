@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+"""
+Generate config/alertmanager.yml from the alert targets the panel manages.
+
+    render-alertmanager [path]
+
+Replaces an envsubst'd template with a generated file, because the template had
+exactly ONE destination baked into it: two rows on the Settings page, no way to
+have a second, no way to have none deliberately, and adding Slack meant editing
+YAML by hand and widening a check in bin/stack-deploy that nothing would have
+reminded you about.
+
+Every alert goes to EVERY target. Fan-out rather than routing, on purpose: a
+routing table is a thing that can be wrong in a way you only discover when the
+alert you needed went somewhere nobody reads. If you want two channels to get
+different alerts, that is a change worth making deliberately rather than a
+default nobody chose.
+
+NO TARGETS IS A REAL STATE and it is not an error — a cluster that has not been
+wired to anything yet is normal. The file it writes then drops everything, says
+so in a comment, and `smoke-test` reports it: alerting that quietly discards is
+the failure this whole path was rebuilt to avoid, and a config that refuses to
+start is a monitoring stack that will not deploy at all.
+
+Stdlib only. It runs on the master, where Flask is not installed.
+"""
+
+import json
+import os
+import re
+import sys
+import tempfile
+
+INFRA_DIR = os.environ.get("INFRA_DIR", "/opt/infra")
+TARGETS = os.path.join(INFRA_DIR, "state", "alert_targets.json")
+DEFAULT_OUT = os.path.join(INFRA_DIR, "config", "alertmanager.yml")
+
+HEADER = """# =============================================================================
+# ALERTMANAGER — GENERATED. Do not edit.
+# =============================================================================
+# Written by bin/render-alertmanager from state/alert_targets.json on every
+# monitoring deploy. Add and remove destinations under Alerts > Targets in the
+# panel; every alert goes to every one of them.
+#
+# 0600 and mounted read-only. The bot tokens are in here, which is the same
+# trade every component's credentials already make: a docker secret cannot be
+# absent, so referencing one would stop the monitoring stack deploying while
+# alerting is unconfigured, and it cannot be changed in place, so the panel
+# could never edit it. A bind mount also keeps it out of `docker service
+# inspect`, which an environment variable would not.
+#
+# parse_mode is OFF on purpose. Telegram rejects the whole message with a 400
+# when HTML does not parse, and alert text contains `<`, `>` and `&` routinely —
+# a service name, a PromQL fragment, an error string. Formatting is not worth an
+# alert that silently fails to arrive.
+# =============================================================================
+
+route:
+  receiver: default
+  group_by: [alertname, cluster]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+  routes:
+    # The heartbeat fires permanently by design, so it must not ride the 4h
+    # repeat with everything else. Its ABSENCE is the signal.
+    - matchers:
+        - alertname="Watchdog"
+      receiver: heartbeat
+      group_wait: 0s
+      repeat_interval: 24h
+
+receivers:
+"""
+
+MESSAGE = """        message: |-
+          [{{ .Status | toUpper }}{{ if eq .Status "firing" }} x{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }}
+          {{ range .Alerts }}{{ .Annotations.summary }}
+          {{ end }}
+"""
+
+HEARTBEAT = ('        message: "Watchdog: vmalert -> alertmanager -> this target is '
+             'working. Silence here means it is not."\n')
+
+EMPTY = """  # NOTHING IS CONFIGURED. Every alert is dropped here, deliberately and
+  # visibly, rather than left half-configured in a way that stops Alertmanager
+  # from starting. Add a destination under Alerts > Targets.
+  - name: default
+  - name: heartbeat
+"""
+
+
+#: What may reach the generated file, checked HERE as well as in the panel.
+#: This program is the last thing between a state file and a config Alertmanager
+#: has to parse, and it is not always the panel that wrote that file — an
+#: operator editing JSON on the master, or a version of the panel older than
+#: this validation, both produce input nothing else would catch. A target that
+#: fails is dropped and named on stdout, because the alternative is a monitoring
+#: stack that will not deploy at all and a message about YAML on line 41.
+TOKEN_RE = re.compile(r"^\d{4,}:[A-Za-z0-9_-]{20,}$")
+CHAT_RE = re.compile(r"^-?\d{1,20}$")
+
+
+def _quote(value):
+    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def usable(target):
+    """Whether this target can be rendered into YAML that means what it says."""
+    if target.get("kind") != "telegram":
+        return False
+    return bool(TOKEN_RE.match(str(target.get("bot_token", "")).strip())
+                and CHAT_RE.match(str(target.get("chat_id", "")).strip()))
+
+
+def telegram(target, resolved, message):
+    return (
+        "      - bot_token: " + _quote(str(target.get("bot_token", "")).strip()) + "\n"
+        "        chat_id: " + str(target.get("chat_id", "")).strip() + "\n"
+        "        parse_mode: ''\n"
+        f"        send_resolved: {'true' if resolved else 'false'}\n"
+        + message
+    )
+
+
+RENDERERS = {"telegram": ("telegram_configs", telegram)}
+
+
+def receiver(name, targets, resolved, message):
+    """
+    One receiver holding one config block per target, grouped by kind.
+
+    Grouped because Alertmanager keys them by type — three Telegram targets are
+    three entries under one `telegram_configs`, not three receivers — and a
+    second kind later is another key beside it rather than a rewrite.
+    """
+    by_kind = {}
+    for target in targets:
+        entry = RENDERERS.get(target.get("kind"))
+        if not entry:
+            continue
+        key, render = entry
+        by_kind.setdefault(key, []).append(render(target, resolved, message))
+    out = f"  - name: {name}\n"
+    for key, blocks in sorted(by_kind.items()):
+        out += f"    {key}:\n" + "".join(blocks)
+    return out
+
+
+def main():
+    out_path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_OUT
+    try:
+        with open(TARGETS) as fh:
+            targets = json.load(fh)
+    except (OSError, ValueError):
+        targets = []
+    targets = [t for t in targets if isinstance(t, dict) and t.get("kind") in RENDERERS]
+    good = [t for t in targets if usable(t)]
+    for target in targets:
+        if target not in good:
+            print(f"skipping alert target {target.get('name', '?')!r}: it is not a "
+                  "usable telegram destination", file=sys.stderr)
+    targets = good
+
+    body = EMPTY if not targets else (
+        receiver("default", targets, True, MESSAGE)
+        + "\n"
+        + receiver("heartbeat", targets, False, HEARTBEAT))
+
+    # Whole file, then rename. Alertmanager watches this path, and a deploy that
+    # read it halfway through a rewrite would start with half a configuration.
+    directory = os.path.dirname(out_path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".alertmanager-")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(HEADER + body)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, out_path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    print(f"{len(targets)} alert target(s) -> {out_path}")
+
+
+if __name__ == "__main__":
+    main()

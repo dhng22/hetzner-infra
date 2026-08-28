@@ -1,8 +1,9 @@
 <div class="page-head">
   <div>
     <h1>Alerts</h1>
-    <p>Rules evaluated by vmalert and routed by Alertmanager to Telegram.
-       Firing rules reach you; this page is for checking that the ones you expect exist.</p>
+    <p>Rules evaluated by vmalert, routed by Alertmanager, and delivered to every
+       target below. Firing rules reach you; this page is for checking that the ones
+       you expect exist and that they have somewhere to go.</p>
   </div>
 </div>
 
@@ -11,12 +12,88 @@
   <div>
     <strong>Alerts have nowhere to go.</strong>
     Every rule below is still evaluated, grouped and deduplicated — and then
-    dropped. Set the Telegram bot token and chat id under
-    <a href="{{ section_href({'key': 'settings'}) }}">Settings</a>; saving them
-    redeploys monitoring with the new destination.
+    dropped. Add a target below; saving one regenerates the Alertmanager config
+    and redeploys monitoring with it.
   </div>
 </div>
 {% endif %}
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Targets</h2>
+    <span class="spacer"></span>
+    <span class="eyebrow">every alert goes to every one of them</span>
+  </div>
+  <div class="panel-body">
+    {% if alert_targets %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Name</th><th>Kind</th><th>Where</th><th>Credential</th><th></th></tr></thead>
+        <tbody>
+        {% for t in alert_targets %}
+        <tr>
+          <td class="mono">{{ t.name }}</td>
+          <td>{{ t.kind }}</td>
+          <td class="mono small">{{ t.where }}</td>
+          <td class="mono small masked">{{ t.masked }}</td>
+          <td>
+            <form method="post" action="{{ alert_target_delete_href(t.name) }}"
+                  {% if preview %}data-preview{% endif %}>
+              <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+              <button class="btn btn-sm btn-danger" type="submit">Remove</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="hint">No targets. Every rule below is evaluated and then dropped —
+    which is the one state of this pipeline that looks healthy from the inside.</p>
+    {% endif %}
+  </div>
+  <form method="post" action="{{ alert_target_href() }}"
+        {% if preview %}data-preview{% endif %}>
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <div class="panel-body">
+      <div class="grid-2">
+        <div class="field">
+          <label for="at-name">Name</label>
+          <input id="at-name" name="name" type="text" required
+                 pattern="[a-z][a-z0-9-]{1,31}" placeholder="team-channel">
+        </div>
+        <div class="field">
+          <label for="at-kind">Kind</label>
+          <select id="at-kind" name="kind">
+            {% for kind in alert_kinds %}<option value="{{ kind }}">{{ kind }}</option>{% endfor %}
+          </select>
+          <p class="hint">Telegram today. The list is a list so a second kind is
+          one entry and one render function, not a redesign of this page.</p>
+        </div>
+        <div class="field">
+          <label for="at-token">Bot token</label>
+          <input id="at-token" name="bot_token" type="password" autocomplete="off">
+          <p class="hint">From @BotFather. Kept in a root-only file on the master and
+          mounted into Alertmanager — not a docker secret, because a secret cannot be
+          absent and cannot be edited, and this has to be both.</p>
+        </div>
+        <div class="field">
+          <label for="at-chat">Chat id</label>
+          <input id="at-chat" name="chat_id" type="text" autocomplete="off"
+                 placeholder="-1001234567890">
+          <p class="hint">A number, and a group's is negative. Message @userinfobot
+          from the chat if you are not sure.</p>
+        </div>
+      </div>
+    </div>
+    <div class="sticky-save">
+      <button class="btn btn-primary" type="submit">Add target</button>
+      <span class="muted">Saving regenerates the Alertmanager config and redeploys
+      monitoring.</span>
+    </div>
+  </form>
+</section>
 
 {% set firing = alerts|selectattr('state', 'equalto', 'firing')|rejectattr('name', 'equalto', 'Watchdog')|list %}
 {% set pending = alerts|selectattr('state', 'equalto', 'pending')|list %}

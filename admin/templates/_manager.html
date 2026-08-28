@@ -1,14 +1,27 @@
 <div class="page-head">
   <div>
-    <h1>Autoscaler</h1>
-    <p>Load is absorbed cheapest first: replicas in seconds, nodes in about two minutes.
-       Coming down the order reverses — shed replicas first, remove the node later.
-       The master is not a worker: it is the control plane, and while no worker
-       exists it carries your components itself and nothing is billed. Capacity is measured from real CPU and memory, never configured,
-       and each component's scaling policy travels with it as labels on its own service.</p>
+    <h1>Manager</h1>
+    <p>One process decides — what is slow, how many machines the cluster needs, which
+       may be deleted — and two apply it: the autoscaler to services, dataguard to
+       databases. The master is the control plane, not a worker, so the resting state
+       is one box and nothing billed.</p>
   </div>
 </div>
 
+
+{# Two tabs over one page: the fleet, and the databases. They belong together
+   because they are the same kind of thing — cluster-wide policy for a process
+   that changes the cluster on its own — and both post to /settings and redeploy
+   `monitoring`, so "change it and deploy" is one button in either. #}
+<div class="tabs" data-tabs role="tablist">
+  <a class="tab" role="tab" data-tab="fleet" href="{{ url_for('manager') }}?tab=fleet"
+     aria-selected="{{ 'true' if tab != 'dataguard' else 'false' }}">Autoscaler</a>
+  <a class="tab" role="tab" data-tab="dataguard" href="{{ url_for('manager') }}?tab=dataguard"
+     aria-selected="{{ 'true' if tab == 'dataguard' else 'false' }}">Dataguard</a>
+</div>
+
+<div data-panels>
+<div data-panel="fleet" {% if tab == 'dataguard' %}hidden{% endif %}>
 {% if not a.live %}
 <div class="banner bad">
   <div><strong>The autoscaler is not reporting.</strong> Every number below is unknown, not zero —
@@ -161,3 +174,10 @@
    renders every view into one document from a single context, so a shared
    variable name would silently give this page the whole Settings form. #}
 {% with groups = scaling_groups %}{% include "_settings_form.html" %}{% endwith %}
+
+</div>
+
+<div data-panel="dataguard" {% if tab != 'dataguard' %}hidden{% endif %}>
+{% include "_dataguard.html" %}
+</div>
+</div>

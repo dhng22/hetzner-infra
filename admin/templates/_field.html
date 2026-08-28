@@ -15,11 +15,25 @@
        and never OFF again. The marker says "this field was on the form", which
        is what distinguishes unchecked from absent. #}
     <input type="hidden" name="__bool__" value="{{ f.name }}">
+    {% if f.switch %}
+      {# A switch, not a checkbox, and the difference is not decoration: a
+         checkbox reads as one of several things you might also tick, while a
+         switch reads as a thing that is either on or off right now. Each of
+         these starts or stops a container on its own. #}
+      <label class="switch switch-inline">
+        <input type="checkbox" id="f-{{ f.name }}" name="{{ f.name }}" value="true"
+               {% if value %}checked{% endif %}>
+        <span class="switch-track" aria-hidden="true"></span>
+        <span class="switch-label">on</span>
+      </label>
+      {% if f.help %}<p class="hint">{{ f.help }}</p>{% endif %}
+    {% else %}
     <label class="check">
       <input type="checkbox" id="f-{{ f.name }}" name="{{ f.name }}" value="true"
              {% if value %}checked{% endif %}>
       <span>{{ f.help or "Enabled" }}</span>
     </label>
+    {% endif %}
 
   {% elif f.kind == "choice" %}
     <select id="f-{{ f.name }}" name="{{ f.name }}">

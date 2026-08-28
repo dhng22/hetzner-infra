@@ -47,7 +47,7 @@ class Field:
     def __init__(self, name, label, kind="text", default=None, help="",
                  required=False, choices=(), minimum=None, maximum=None,
                  placeholder="", secret=False, immutable=False, managed=None,
-                 group=None):
+                 group=None, switch=False):
         self.name = name
         self.label = label
         self.kind = kind          # text | number | bool | choice | port | cpu | memory
@@ -73,6 +73,12 @@ class Field:
         # panel, which is how the scaling policy stopped being twelve more
         # inputs in a list of twenty.
         self.group = group
+        # A bool rendered as a switch rather than a checkbox. Not decoration:
+        # a checkbox reads as one of several things you might also tick, and a
+        # switch reads as a thing that is either on or off right now. The
+        # exporter and the data visualiser are the second kind — each one starts
+        # or stops a container on its own.
+        self.switch = switch
 
     def coerce(self, raw):
         """Text (from a form or argv) to the stored type. Raises ValueError."""
@@ -212,6 +218,17 @@ class Component:
     #: group — a second database type is a new class and nothing else, and the
     #: create page grows a picker on its own.
     GROUP = "Application"
+    #: The field whose switch means "something else owns this component's
+    #: shape". `autoscale` for an application, `dataguard` for a database, None
+    #: for a type nothing manages. See `normalize`.
+    MANAGER_FIELD = None
+
+    #: (key, title, master field or None, note) for each grouped section of the
+    #: settings form, in order. Everything ungrouped renders as Configuration
+    #: above these. A group naming a master field gets a switch in its title and
+    #: its body is disabled when that switch is off.
+    GROUPS = ()
+
     #: True when this type owns a volume named `<component>-data`.
     #:
     #: `docker stack rm` does not delete volumes and neither do we — a mistyped
@@ -264,6 +281,44 @@ class Component:
                 problems.append(problem)
             spec[field.name] = value
         return spec, problems
+
+    def normalize(self, changed=()):
+        """
+        Repair a spec that says two contradictory things. Returns what it fixed.
+
+        There is exactly one such pair today, and it is one decision wearing two
+        hats: whether a manager owns this component, and where this component is
+        allowed to run. A manager that may not choose the machine cannot do its
+        job — dataguard's entire first move is putting a replica somewhere else
+        — and a placement somebody pinned by hand is a promise the manager would
+        break on its next loop.
+
+        So they are kept in step HERE, once. The create form, the settings tab
+        and `bin/component` all pass through this, which is what stops the three
+        of them disagreeing; the form's JavaScript mirrors it for feel, and this
+        is the authority.
+
+        `changed` names the fields this save actually touched, because the two
+        directions are not symmetric. Turning the switch ON is a request to be
+        managed, and the placement follows it. Pinning the placement is a request
+        to be left alone, and the switch follows THAT.
+        """
+        field = self.MANAGER_FIELD
+        if not field:
+            return []
+        managed = bool(self.spec.get(field))
+        mode = (self.spec.get("placement_mode") or "auto").strip()
+        changed = set(changed or ())
+        fixed = []
+        if managed and mode != "auto":
+            if field in changed and "placement_mode" not in changed:
+                self.spec["placement_mode"] = "auto"
+                fixed.append(f"Placement was set to auto: {field} owns where this runs.")
+            else:
+                self.spec[field] = False
+                fixed.append(f"{field.title()} was turned off: it cannot manage a "
+                             f"component pinned to {mode}.")
+        return fixed
 
     def validate(self):
         """Problems with the spec as it stands. Subclasses extend this."""
