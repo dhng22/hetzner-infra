@@ -315,9 +315,26 @@ else
     # A managed database's members are one mongod per volume. If one of them
     # ever carried infra.workload=app the autoscaler would scale it, and a
     # second mongod on one data directory is corruption rather than an outage.
+    # WHICH SERVICE HOLDS THE SERVER depends on whether dataguard manages it.
+    # A managed database is members `<name>_<type>-1..n`; an unmanaged one is
+    # the single unsuffixed `<name>_<type>` it has always been. Hardcoding the
+    # member name made both checks below inspect a service that does not exist
+    # on an unmanaged component, and then report the miss as a drifted password
+    # and an unexpanded shell variable -- two alarming, specific and wrong
+    # diagnoses for "you looked in the wrong place".
+    managed=no
     if docker service inspect "$svc" \
          --format '{{index .Spec.Labels "infra.managed_by"}}' 2>/dev/null \
          | grep -qx dataguard; then
+      managed=yes
+    fi
+    if [ "$managed" = yes ]; then
+      member="${name}_${type}-1"
+    else
+      member="$svc"
+    fi
+
+    if [ "$managed" = yes ]; then
       if docker service inspect "$svc" \
            --format '{{index .Spec.Labels "infra.workload"}}' 2>/dev/null | grep -qx app; then
         bad "$name is not both a database and an application" \
@@ -328,7 +345,7 @@ else
     fi
 
     if [ "$type" = "redis" ]; then
-      svc="${name}_redis-1"
+      svc="$member"
       want="$(grep -m1 '^REDIS_PASSWORD=' "$dir/secret.env" 2>/dev/null | cut -d= -f2-)"
       got="$(docker service inspect "$svc" \
              --format '{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{println .}}{{end}}' 2>/dev/null \
@@ -352,7 +369,7 @@ else
     # The same check the redis half has had all along, which mongo never did.
     # The panel shows you a password; the server has to be enforcing that one.
     if [ "$type" = "mongo" ]; then
-      msvc="${name}_mongo-1"
+      msvc="$member"
       want="$(grep -m1 '^MONGO_PASSWORD=' "$dir/secret.env" 2>/dev/null | cut -d= -f2-)"
       got="$(docker service inspect "$msvc" \
              --format '{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{println .}}{{end}}' 2>/dev/null \
