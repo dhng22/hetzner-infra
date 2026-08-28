@@ -1385,7 +1385,7 @@ class DatabaseCeilingTest(unittest.TestCase):
 
     def setUp(self):
         self._saved = (A.VERTICAL, A.WORKER_MAX_CORES, A.WORKER_MAX_MEMORY_GB,
-                       A.DB_MAX_CORES, A.DB_MAX_MEMORY_GB, A.DB_MAX_STORAGE_MB,
+                       A.DB_MAX_CORES, A.DB_MAX_MEMORY_GB, A.DB_MAX_STORAGE,
                        A.hcloud, A.LOCATION)
         A.VERTICAL = True
         A.LOCATION = "hel1"
@@ -1394,7 +1394,7 @@ class DatabaseCeilingTest(unittest.TestCase):
         # Set explicitly and generously here so the CORES/MEMORY cases are about
         # cores and memory. The storage ceiling has its own tests below, and its
         # real default is deliberately tighter than this.
-        A.DB_MAX_STORAGE_MB = 1024 * 1024
+        A.DB_MAX_STORAGE = 1024 * 1024
         A._catalogue.update({"at": time.time(), "types": list(HEL1),
                              "dc": {"types": HEL1_AVAILABLE}})
         byname = {t.name: t for t in HEL1}
@@ -1407,7 +1407,7 @@ class DatabaseCeilingTest(unittest.TestCase):
 
     def tearDown(self):
         (A.VERTICAL, A.WORKER_MAX_CORES, A.WORKER_MAX_MEMORY_GB,
-         A.DB_MAX_CORES, A.DB_MAX_MEMORY_GB, A.DB_MAX_STORAGE_MB,
+         A.DB_MAX_CORES, A.DB_MAX_MEMORY_GB, A.DB_MAX_STORAGE,
          A.hcloud, A.LOCATION) = self._saved
         A._catalogue.update({"at": 0.0, "types": None, "dc": {}})
 
@@ -1454,27 +1454,33 @@ class DatabaseCeilingTest(unittest.TestCase):
         headroom climbs onto storage nobody chose, and a plan's disk cannot be
         reduced afterwards.
         """
-        A.DB_MAX_STORAGE_MB = 320 * 1024
+        A.DB_MAX_STORAGE = 320 * 1024
         self.assertEqual(["cpx22", "cpx32", "cpx42"],
                          [t.name for t in A.db_ladder(HEL1_AVAILABLE)])
 
-    def test_the_shipped_storage_default_is_the_binding_one(self):
+    def test_the_shipped_storage_default_binds_nothing_on_its_own(self):
         """
-        With everything at its shipped default the ladder stops at cpx42, and it
-        is DISK that stops it, not cores or memory. Worth pinning: an operator
-        raising DB_MAX_CORES and seeing nothing change should find the reason
-        here rather than in a support thread.
+        At its shipped default the storage ceiling must not shorten the ladder.
+
+        640GB is the disk of cpx62, which is also exactly the cores and memory
+        ceiling — so out of the box the three defaults stop at the same rung and
+        storage is a cap to LOWER, not a third gate to trip over on the way to
+        the first two. Pinned because it is the kind of default that goes wrong
+        silently: set it below the largest allowed plan and an operator raising
+        DB_MAX_CORES sees nothing change, with nothing anywhere saying why.
         """
         # The literals, not settings_def: this suite runs against the OVERSEER
         # image, which does not carry admin/. Keeping these three numbers equal
         # to the panel's and the cloud-init's is `test_defaults_agree_everywhere`
         # in admin/tests, which scans all three files for exactly this reason.
-        A.DB_MAX_STORAGE_MB, A.DB_MAX_CORES, A.DB_MAX_MEMORY_GB = 327680, 16, 32
-        self.assertEqual(["cpx22", "cpx32", "cpx42"],
-                         [t.name for t in A.db_ladder(HEL1_AVAILABLE)])
+        A.DB_MAX_STORAGE, A.DB_MAX_CORES, A.DB_MAX_MEMORY_GB = 655360, 16, 32
+        with_storage = [t.name for t in A.db_ladder(HEL1_AVAILABLE)]
+        A.DB_MAX_STORAGE = 1024 * 1024          # effectively no storage ceiling
+        self.assertEqual([t.name for t in A.db_ladder(HEL1_AVAILABLE)], with_storage)
+        self.assertEqual(["cpx22", "cpx32", "cpx42", "cpx52", "cpx62"], with_storage)
 
     def test_a_storage_ceiling_of_zero_is_a_ladder_of_nothing(self):
-        A.DB_MAX_STORAGE_MB = 0
+        A.DB_MAX_STORAGE = 0
         self.assertEqual([], A.db_ladder(HEL1_AVAILABLE))
 
     def test_the_storage_ceiling_does_not_touch_workers(self):
@@ -1483,7 +1489,7 @@ class DatabaseCeilingTest(unittest.TestCase):
         plan the cpu and memory ceilings land on, and the database's storage
         budget has no business narrowing it.
         """
-        A.DB_MAX_STORAGE_MB = 81 * 1024        # barely above the base plan's 80GB
+        A.DB_MAX_STORAGE = 81 * 1024        # barely above the base plan's 80GB
         self.assertEqual(["cpx22", "cpx32", "cpx42"],
                          [t.name for t in A.worker_ladder(HEL1_AVAILABLE)])
         self.assertEqual(["cpx22"], [t.name for t in A.db_ladder(HEL1_AVAILABLE)])

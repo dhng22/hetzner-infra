@@ -276,15 +276,22 @@ HANDOVER_STALL_SECONDS = 900
 # whole thing again next cooldown. Forever, and billed each time.
 DB_MAX_CORES = _env("DB_MAX_CORES", "16", int)
 DB_MAX_MEMORY_GB = _env("DB_MAX_MEMORY_GB", "32", float)
+# MEGABYTES. The only setting here whose name does not carry its unit, and it
+# sits directly under one that does — so read the number, not the name: 655360
+# is 640 GB, and anything in the low hundreds here is a ceiling below the base
+# plan's own disk, which empties the ladder rather than capping it.
+#
 # The third dimension, and the one that bites differently from the other two.
 # CPU and memory being too small makes a database slow; disk being too small
 # stops it, and on a plan ladder disk is not something you can add afterwards —
-# it arrives welded to the plan. So this is a ceiling on which PLANS a member may
-# be moved onto, expressed in MB to match how storage is quoted everywhere else
-# in the panel, and named for its unit like every other sized setting here
-# because 320 next to `DB_MAX_MEMORY_GB = 32` would be read as gigabytes by
-# anyone in a hurry.
-DB_MAX_STORAGE_MB = _env("DB_MAX_STORAGE_MB", "327680", int)
+# it arrives welded to the plan. So this is a ceiling on which PLANS a member
+# may be moved onto, not a quota on what it may store.
+#
+# The default is deliberately the disk of the largest plan the cores/memory
+# ceiling already allows, so out of the box this bounds nothing the other two
+# did not already bound. It is a cap to LOWER when storage is what you are
+# watching, not a third gate to trip over on the way to the first two.
+DB_MAX_STORAGE = _env("DB_MAX_STORAGE", "655360", int)
 
 VERTICAL = WORKER_MAX_CORES > 0 and WORKER_MAX_MEMORY_GB > 0
 if not VERTICAL and (WORKER_MAX_CORES > 0 or WORKER_MAX_MEMORY_GB > 0):
@@ -1162,7 +1169,7 @@ def db_ladder(available=None):
     gets granted, and still buys a machine.
     """
     return _ladder(DB_MAX_CORES, DB_MAX_MEMORY_GB, available,
-                   max_disk_gb=DB_MAX_STORAGE_MB / 1024.0)
+                   max_disk_gb=DB_MAX_STORAGE / 1024.0)
 
 
 def _ladder(max_cores, max_memory_gb, available=None, max_disk_gb=None):

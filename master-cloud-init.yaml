@@ -199,7 +199,7 @@ write_files:
       # and a capacity rather than a plan name because Hetzner retires plans.
       DB_MAX_CORES=16
       DB_MAX_MEMORY_GB=32
-      DB_MAX_STORAGE_MB=327680
+      DB_MAX_STORAGE=655360
       # HOURS. An initial sync reads the whole dataset off a live member, so a
       # loop that reacts faster than the thing it controls simply oscillates.
       TOPOLOGY_COOLDOWN_SECONDS=14400
