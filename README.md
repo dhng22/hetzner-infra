@@ -87,8 +87,13 @@ four on the day you make it, while only the one on the master is running. The
 driver ignores a seed it cannot resolve and discovers the set from the ones it
 can — which is what lets the database move onto its own machines later without
 anything that talks to it changing. A `redis` does the same trick with a
-sentinel URL. **Raising the pool afterwards is the one change that does alter
-the string, so pick the ceiling when you create it.**
+sentinel URL: three sentinel services are declared and ONE of them runs, because
+a quorum watching a server that has no replica to promote is three containers
+buying nothing — and on a single-node cluster all three would sit on the machine
+they are watching. Dataguard starts the other two when it starts the second
+server, immediately before it, and stops them again when the set shrinks back.
+**Raising the pool afterwards is the one change that does alter the string, so
+pick the ceiling when you create it.**
 
 Create them in the panel (**Components → New app**) or on the master:
 

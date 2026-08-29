@@ -132,6 +132,13 @@ DISK_HEADROOM = _env("DB_DISK_HEADROOM", "2.5", float)
 DG = "dataguard."
 L_ENABLED = DG + "enabled"
 L_MEMBER = DG + "member"
+#: What a service IS, not which one it is. A Redis sentinel carries the same
+#: component, type and member index as a data member, so the index alone is not
+#: a key — this is what separates them. Absent means member: a component
+#: deployed before the label existed must keep reading correctly.
+L_ROLE = DG + "role"
+ROLE_MEMBER = "member"
+ROLE_SENTINEL = "sentinel"
 L_POOL = DG + "pool"
 L_MAX_MEMBERS = DG + "max_members"
 L_LAG_BUDGET = DG + "lag_budget_seconds"
@@ -371,10 +378,13 @@ class Component:
     running, which is the same reason the autoscaler reads policy from there.
     """
 
-    def __init__(self, name, kind, services):
+    def __init__(self, name, kind, services, sentinels=None):
         self.name = name
         self.kind = kind                    # "mongo" | "redis"
         self.services = services            # {member index: docker service}
+        # Redis only, and empty for Mongo — a replica set votes with its own
+        # members, so there is no separate quorum to keep in step.
+        self.sentinels = sentinels or {}    # {sentinel index: docker service}
         first = next(iter(services.values()))
         labels = (first.attrs.get("Spec", {}) or {}).get("Labels") or {}
         self.labels = labels
@@ -426,14 +436,18 @@ class Component:
     def lease(self, index):
         return f"{self.name}/{index}"
 
+    @staticmethod
+    def _scaled_up(service):
+        mode = (service.attrs.get("Spec", {}).get("Mode") or {})
+        return (mode.get("Replicated") or {}).get("Replicas", 0) >= 1
+
     def live_members(self):
         """Member indices whose service is scaled above zero."""
-        out = []
-        for index, service in self.services.items():
-            mode = (service.attrs.get("Spec", {}).get("Mode") or {})
-            if (mode.get("Replicated") or {}).get("Replicas", 0) >= 1:
-                out.append(index)
-        return sorted(out)
+        return sorted(i for i, svc in self.services.items() if self._scaled_up(svc))
+
+    def live_sentinels(self):
+        """Sentinel indices whose service is scaled above zero. Redis only."""
+        return sorted(i for i, svc in self.sentinels.items() if self._scaled_up(svc))
 
     def env(self, key):
         """
@@ -462,6 +476,7 @@ def managed_components():
     put a component that no longer exists into the metrics forever.
     """
     found = {}
+    sentinels = {}
     try:
         services = dkr.services.list()
     except Exception as exc:                                     # noqa: BLE001
@@ -477,11 +492,26 @@ def managed_components():
         index = labels.get(L_MEMBER)
         if not (name and kind and index):
             continue
+        # Absent means member, because that is what every member service was
+        # before this label existed. A sentinel is NOT a member and must not
+        # land in the same map: it shares the component, the type and the index,
+        # so `found[(name, kind)][1]` was whichever of the two Docker happened to
+        # list last.
+        role = labels.get(L_ROLE) or ROLE_MEMBER
+        if role == ROLE_SENTINEL:
+            try:
+                sentinels.setdefault((name, kind), {})[int(index)] = service
+            except ValueError:
+                pass
+            continue
+        if role != ROLE_MEMBER:
+            continue
         try:
             found.setdefault((name, kind), {})[int(index)] = service
         except ValueError:
             continue
-    return {name: Component(name, kind, members)
+    return {name: Component(name, kind, members,
+                            sentinels=sentinels.get((name, kind)) or {})
             for (name, kind), members in found.items()}
 
 
@@ -603,6 +633,62 @@ def stop_member(component, index):
     log.info("%s: member %d stopped; its volume is kept", component.name, index)
 
 
+def sentinels_wanted(component):
+    """
+    One sentinel while there is one server; all of them once there are two.
+
+    A sentinel quorum exists to agree the primary is gone and elect a
+    replacement. With a single server there is nothing to elect, so the other
+    two watch a failure they could not act on — and on a single-node cluster all
+    three sit on the machine they are watching, which is three copies of one
+    point of failure rather than a quorum. So the count follows the SET, the way
+    a member's replica count does, instead of being fixed by the renderer.
+
+    The quorum written into the sentinel config is 2 in both cases and that is
+    deliberate: while one sentinel runs the set has one member, and a sentinel
+    that cannot reach quorum over a server with no possible replacement is
+    behaving correctly.
+    """
+    if not component.sentinels:
+        return 0
+    return len(component.sentinels) if len(component.live_members()) > 1 else 1
+
+
+def reconcile_sentinels(component, want=None):
+    """
+    Start or stop sentinels, lowest index first, so exactly `want` are running.
+
+    `want` is passed explicitly on the way INTO a growth: the sentinels must be
+    up before the second server is, never after, or there is a window in which a
+    two-member set has no quorum able to fail it over. Everywhere else the count
+    is derived from what is actually running, which is also what puts them away
+    again after a shrink.
+    """
+    if not component.sentinels or not component.enabled:
+        return
+    want = sentinels_wanted(component) if want is None else want
+    live = set(component.live_sentinels())
+    members = len(component.live_members())
+    for index in sorted(component.sentinels):
+        should = index <= want
+        if should == (index in live):
+            continue
+        service = f"{component.name}_sentinel-{index}"
+        try:
+            _service_update(service, "--replicas", "1" if should else "0")
+        except Exception as exc:                                 # noqa: BLE001
+            # Everything, not just Refused: this runs outside the per-component
+            # try below, so an unhandled subprocess timeout here would take out
+            # the loop for every OTHER database as well.
+            C_ERRORS.labels(stage="sentinel").inc()
+            log.warning("could not scale %s: %s", service, exc)
+            return
+        C_ACTIONS.labels(action="start_sentinel" if should else "stop_sentinel").inc()
+        log.info("%s: sentinel %d %s — %d server%s in the set", component.name,
+                 index, "started" if should else "stopped",
+                 members, "" if members == 1 else "s")
+
+
 def index_of_host(component, host):
     name = host.split(":")[0]
     prefix = f"{component.name}_{component.kind}-"
@@ -638,7 +724,14 @@ def engine_for(component):
     from redis.sentinel import Sentinel
 
     password = component.env("REDIS_PASSWORD")
-    sentinels = [(f"{component.name}_sentinel-{i}", 26379) for i in range(1, 4)]
+    # The ones that are RUNNING, discovered, not a hardcoded range. Sentinels 2
+    # and 3 do not exist while the component is a single server, and listing a
+    # name that does not resolve costs a DNS timeout on every topology read.
+    # Falling back to every declared sentinel keeps this working in the one case
+    # the live count is wrong: nothing running at all, where trying is better
+    # than deciding in advance that it is hopeless.
+    running = component.live_sentinels() or sorted(component.sentinels) or [1]
+    sentinels = [(f"{component.name}_sentinel-{i}", 26379) for i in running]
 
     def sentinel():
         return Sentinel(sentinels, socket_timeout=5.0,
@@ -1123,9 +1216,8 @@ def apply(component, engine, action, topology):
         index = action.index
         on_master = getattr(action, "on_master", False)
         lease = component.lease(index)
-        if on_master:
-            start_member(component, index, None)
-        else:
+        hostname = None
+        if not on_master:
             hold_lease(lease, action.node_type, f"{component.name} member {index}")
             sync_leases()
             if not lease_ready(lease):
@@ -1133,7 +1225,15 @@ def apply(component, engine, action, topology):
                          "%s: waiting for a machine for member %d (%s)",
                          component.name, index, action.reason)
                 return False
-            start_member(component, index, _lease_nodes[lease]["hostname"])
+            hostname = _lease_nodes[lease]["hostname"]
+        # IMMEDIATELY before the server and not a moment earlier. A second Redis
+        # server with one sentinel watching it is a set that cannot fail over,
+        # and the loop that would correct that is a minute away — but doing it
+        # above the lease wait would leave three sentinels running for however
+        # long a machine takes to arrive, and stop them again when it does not.
+        if index > 1:
+            reconcile_sentinels(component, want=len(component.sentinels))
+        start_member(component, index, hostname)
         # The member is running but not in the set yet. Adding it is what starts
         # the initial sync, and only one of those may run in the whole cluster.
         _syncing = component.name
@@ -1276,6 +1376,10 @@ def loop():
 
         state = plan.current_state(component, topology)
         _publish(component, topology, state)
+        # Read state, so it never fights the explicit call in `apply` below: the
+        # service objects here were fetched at the top of the loop and a member
+        # started this pass still reads as stopped until the next one.
+        reconcile_sentinels(component)
         if hasattr(engine, "collection_stats"):
             data_bytes, _storage = engine.collection_stats()
             if data_bytes is not None:

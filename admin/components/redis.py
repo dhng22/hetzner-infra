@@ -42,8 +42,22 @@ from .base import Component, Field, Secret
 EXPORTER_IMAGE = "oliver006/redis_exporter:v1.66.0"
 VIEWER_IMAGE = "redis/redisinsight:2.60"
 
-#: How many sentinels exist. Odd, always: an even quorum tolerates the same
-#: number of failures as the odd one below it while costing another container.
+#: How many sentinels exist ONCE THERE IS SOMETHING TO FAIL OVER TO. Odd,
+#: always: an even quorum tolerates the same number of failures as the odd one
+#: below it while costing another container.
+#:
+#: All three are DECLARED from the first deploy and only the first one RUNS while
+#: the component is a single server on the master — the same live-count-wins
+#: contract the data members already have, so dataguard starts the other two when
+#: it starts the second member and stops them again when it shrinks back. Three
+#: sentinels pinned to one machine is not a quorum, it is three copies of the
+#: same single point of failure, and it was costing three containers to watch a
+#: server that had no replica to be promoted in its place.
+#:
+#: The quorum below stays 2 in every case, and that is deliberate rather than an
+#: oversight: while one sentinel is running the set has one member, so there is
+#: nothing a failover could promote and a sentinel that cannot reach quorum is
+#: exactly the right behaviour.
 SENTINEL_COUNT = 3
 
 
@@ -352,6 +366,20 @@ class RedisComponent(Component):
             return live
         return 1 if index == 1 else 0
 
+    def _sentinel_replicas(self, index):
+        """
+        Live count wins, and sentinel 1 is the floor. Same rule as a member.
+
+        Dataguard owns whether sentinels 2 and 3 are running, because it owns
+        whether there is a second server for them to fail over to. Applying this
+        file's idea of that would stop a sentinel quorum mid-failover at whatever
+        moment an unrelated setting was saved.
+        """
+        live = self.live_replicas(self.sentinel_service(index))
+        if live is not None:
+            return live
+        return 1 if index == 1 else 0
+
     def _server_command(self, index):
         """
         The server, following replica 1 unless it IS replica 1.
@@ -425,6 +453,16 @@ class RedisComponent(Component):
         s = self.spec
         labels = {
             "infra.managed_by": "dataguard",
+            # ROLE FIRST, because `dataguard.member` alone is ambiguous.
+            # Redis sentinels carry the same `infra.component`, `infra.type` and
+            # `dataguard.member` as the data members do, so dataguard's discovery
+            # key matched both and whichever service Docker listed second won —
+            # it read three running sentinels as three running data members and
+            # believed a single-server component was already a three-member set.
+            # The role is what separates them; anything without one is a member,
+            # so a component deployed before this label existed still reads
+            # correctly.
+            "dataguard.role": "member",
             "dataguard.member": str(index),
             "dataguard.pool": str(self.pool),
             "dataguard.set": self.stack,
@@ -483,7 +521,7 @@ class RedisComponent(Component):
             "networks": [base.EDGE_NETWORK],
             "logging": self.loki_logging(),
             "deploy": {
-                "replicas": 1,
+                "replicas": self._sentinel_replicas(index),
                 # Sentinels are cheap and must be able to see a failure that
                 # takes out a machine, so they spread rather than following the
                 # servers. Nothing pins them to the master: a quorum that lives
@@ -539,6 +577,8 @@ class RedisComponent(Component):
             }
 
         if s.get("visualizer"):
+            if base.MONITORING_NETWORK not in networks:
+                networks.append(base.MONITORING_NETWORK)
             services["viewer"] = {
                 "image": VIEWER_IMAGE,
                 "environment": {
@@ -547,7 +587,16 @@ class RedisComponent(Component):
                     "RI_REDIS_PASSWORD": self.password(),
                     "RI_PROXY_PATH": f"/components/{self.name}/viewer",
                 },
-                "networks": [base.EDGE_NETWORK],
+                # BOTH networks, and `monitoring` is the one that makes View
+                # work. `edge` is where Redis is; `monitoring` is where the PANEL
+                # is, and the panel proxying to a name it cannot resolve is a 502
+                # with nothing in any log to say why. The visualiser is infra,
+                # not an application, so it belongs on the infra network beside
+                # the exporter rather than the panel being moved onto `edge` —
+                # putting a root console on the network every application
+                # container shares would buy the same feature at a much worse
+                # price.
+                "networks": [base.EDGE_NETWORK, base.MONITORING_NETWORK],
                 "logging": self.loki_logging(),
                 "deploy": {
                     # Starts at zero. It does not exist until somebody asks for

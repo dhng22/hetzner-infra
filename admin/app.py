@@ -917,12 +917,18 @@ def alerts():
 @auth.login_required
 def save_alert_target():
     """
-    Add a destination, then regenerate and redeploy.
+    Add a destination, prove it works, then regenerate and redeploy.
 
-    Both, and in that order: the file the panel writes is not what Alertmanager
+    All three, in that order: the file the panel writes is not what Alertmanager
     reads — `bin/render-alertmanager` turns the list into a config on the next
     monitoring deploy — so saving without deploying would leave the panel
     showing a target that receives nothing.
+
+    The proof is in the middle because it is the part with a real answer. The
+    deploy tells you the stack accepted a config; only a message that ARRIVED
+    tells you the credential is right, and Alertmanager's own Watchdog would not
+    tell you that for up to a day. A failed probe does not undo the save — a
+    target somebody meant to create is kept, and the failure is said out loud.
     """
     _require_csrf()
     _no_writes_in_preview()
@@ -937,6 +943,14 @@ def save_alert_target():
         for problem in problems:
             flash(problem, "bad")
         return redirect(url_for("alerts"))
+    sent, detail = alerttargets.probe(target)
+    if sent:
+        flash(f"Test message sent to {target['name']} — if it did not arrive, "
+              "the token and chat id are right but the chat is not the one you "
+              "are watching.", "ok")
+    else:
+        flash(f"{target['name']} was saved, but the test message did NOT go "
+              f"out: {detail}", "bad")
     ok, output = envstore.deploy_stack("monitoring")
     flash(f"{target['name']} added. " + (output or
           ("Monitoring redeployed with it." if ok else "The redeploy failed.")),

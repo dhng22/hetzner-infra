@@ -63,8 +63,13 @@
       <div class="grid-2">
         <div class="field">
           <label for="at-name">Name</label>
-          <input id="at-name" name="name" type="text" required
-                 pattern="[a-z][a-z0-9-]{1,31}" placeholder="team-channel">
+          {# No `pattern`. This was the browser-side half of a rule that has
+             been removed from `alerttargets.check` — it rejected "Team Alerts"
+             before the form was ever submitted, so the fix on the server would
+             have been invisible with this still here. The name never reaches
+             the generated config; it is a label on this page. #}
+          <input id="at-name" name="name" type="text" required maxlength="64"
+                 placeholder="Team alerts">
         </div>
         <div class="field">
           <label for="at-kind">Kind</label>

@@ -310,6 +310,50 @@ class ComponentTest(unittest.TestCase):
         placement = rendered["services"]["sentinel-1"]["deploy"]["placement"]
         self.assertNotIn("node.role == manager", placement.get("constraints", []))
 
+    def test_only_one_sentinel_runs_while_there_is_one_server(self):
+        """
+        Three sentinels were STARTING immediately, and on a single-node cluster
+        all three landed on the master — three containers watching the machine
+        they live on, which is one point of failure counted three times, for a
+        server that had no replica to be promoted in its place anyway.
+
+        They are declared from the first deploy and only the first one runs, the
+        same live-count-wins contract the data members already had. Dataguard
+        starts the other two when it starts the second server.
+        """
+        rendered = self.make_redis().render()
+        self.assertEqual(rendered["services"]["sentinel-1"]["deploy"]["replicas"], 1)
+        for key in ("sentinel-2", "sentinel-3"):
+            self.assertEqual(rendered["services"][key]["deploy"]["replicas"], 0, key)
+
+    def test_a_running_sentinel_is_not_stopped_by_an_unrelated_save(self):
+        """
+        The live count wins over this file's opinion, or saving a maxmemory
+        change mid-failover would take the quorum away while it was voting.
+        """
+        component = self.make_redis()
+        component.live_replicas = lambda service=None: 1
+        rendered = component.render()
+        for key in ("sentinel-1", "sentinel-2", "sentinel-3"):
+            self.assertEqual(rendered["services"][key]["deploy"]["replicas"], 1, key)
+
+    def test_a_sentinel_says_it_is_a_sentinel_and_a_member_says_it_is_a_member(self):
+        """
+        A sentinel carries the same component, type and member index as a data
+        member does, so the index alone was never a key: dataguard read three
+        running sentinels as three running data members and believed a
+        single-server component was already a three-member set. The ROLE is what
+        separates them.
+        """
+        rendered = self.make_redis().render()
+        member = rendered["services"]["redis-2"]["deploy"]["labels"]
+        sentinel = rendered["services"]["sentinel-2"]["deploy"]["labels"]
+        self.assertEqual(member["dataguard.role"], "member")
+        self.assertEqual(sentinel["dataguard.role"], "sentinel")
+        # The collision itself, spelled out: everything else about them matches.
+        for key in ("infra.component", "infra.type", "dataguard.member"):
+            self.assertEqual(member[key], sentinel[key], key)
+
     def test_redis_exporter_is_optional_and_scraped(self):
         with_exporter = self.make_redis("c1").render()
         self.assertIn("redis-exporter", with_exporter["services"])
@@ -416,7 +460,28 @@ class ComponentTest(unittest.TestCase):
         viewer = self.make_mongo(visualizer=True).render()["services"]["viewer"]
         self.assertNotIn("ports", viewer)
         self.assertEqual(viewer["deploy"]["replicas"], 0)
-        self.assertEqual(viewer["networks"], ["edge"])
+
+    def test_the_view_button_can_actually_reach_the_visualiser(self):
+        """
+        `edge` alone was a 502 every time, and this test asserted it.
+
+        The panel is on `monitoring` and nothing else; the visualiser was on
+        `edge` and nothing else. So the proxy resolved a name that did not exist
+        for it, `requests` raised, and the route rendered its 502 page with a DNS
+        error nobody would connect to a missing network. It has to be on the
+        network the PANEL is on, because the panel is its only client.
+
+        Both types, and the top-level network list too — a service on a network
+        the stack does not declare will not deploy at all, and with the exporter
+        switched off nothing else was pulling `monitoring` in.
+        """
+        for component in (self.make_mongo("d1", visualizer=True, exporter=False),
+                          self.make_redis("c1", visualizer=True, exporter=False)):
+            rendered = component.render()
+            viewer = rendered["services"]["viewer"]
+            self.assertIn("monitoring", viewer["networks"], component.TYPE)
+            self.assertIn("edge", viewer["networks"], component.TYPE)
+            self.assertIn("monitoring", rendered["networks"], component.TYPE)
 
     def test_a_managed_database_carries_its_whole_policy_as_labels(self):
         """

@@ -1337,6 +1337,111 @@ class DatabasePanelTest(PanelTest):
         [row] = alerttargets.described()
         self.assertEqual(token, row["token"])
 
+    # --- proving it works, now rather than tomorrow -----------------------
+
+    def _adding_a_target(self, reply, status=200, raises=None):
+        """
+        Add a target through the real route with Telegram's reply faked.
+
+        Returns (flash messages, what was POSTed to Telegram).
+        """
+        import alerttargets
+        import envstore
+        sent = {}
+
+        class Reply:
+            status_code = status
+
+            @staticmethod
+            def json():
+                if isinstance(reply, Exception):
+                    raise reply
+                return reply
+
+        def post(url, json=None, timeout=None):
+            sent["url"] = url
+            sent["json"] = json
+            if raises:
+                raise raises
+            return Reply()
+
+        saved = (alerttargets.requests.post, envstore.deploy_stack)
+        alerttargets.requests.post = post
+        envstore.deploy_stack = lambda name: (True, f"{name} redeployed")
+        self.addCleanup(alerttargets.remove, "Team Alerts")
+        csrf = self.login()
+        try:
+            page = self.client.post(
+                "/alerts/targets",
+                data={"csrf": csrf, "name": "Team Alerts", "kind": "telegram",
+                      "bot_token": "8140000000:AAF-the-secret-part",
+                      "chat_id": "-1001234567890"},
+                follow_redirects=True).get_data(as_text=True)
+        finally:
+            alerttargets.requests.post, envstore.deploy_stack = saved
+        return page, sent
+
+    def test_the_form_does_not_reimpose_the_rule_in_the_browser(self):
+        """
+        `pattern="[a-z][a-z0-9-]{1,31}"` was sitting on this input, which is the
+        browser-side half of the name rule that was removed from `check`. With
+        it still here the server-side fix is invisible: "Team Alerts" never gets
+        as far as being accepted.
+        """
+        self.login()
+        page = self.client.get("/alerts").get_data(as_text=True)
+        form = page.split('action="/alerts/targets"')[1]
+        self.assertNotIn("pattern=", form.split("</form>")[0])
+
+    def test_adding_a_target_sends_it_a_message_immediately(self):
+        """
+        Alertmanager already sends a Watchdog, and its 24h repeat means "did I
+        paste the right token" was up to a day from being answered — a day of
+        believing you are covered. This asks Telegram directly, on the way past.
+        """
+        page, sent = self._adding_a_target({"ok": True})
+        self.assertIn("8140000000:AAF-the-secret-part", sent["url"])
+        self.assertEqual(sent["json"]["chat_id"], "-1001234567890")
+        self.assertIn("Watchdog", sent["json"]["text"])
+        self.assertIn("Team Alerts", sent["json"]["text"])
+        self.assertIn("Test message sent to Team Alerts", page)
+        # And it is still saved and deployed, not replaced by the test.
+        import alerttargets
+        self.assertIn("Team Alerts", alerttargets.names())
+
+    def test_a_target_telegram_rejects_is_kept_and_the_reason_is_shown(self):
+        """
+        `chat not found` is the whole diagnosis and it is Telegram's own words —
+        no wrapper of ours improves on it. The target stays: somebody meant to
+        create it, and throwing away a pasted credential over one API reply is
+        the same second-guessing that made this page unusable before.
+        """
+        page, _ = self._adding_a_target({"ok": False, "description": "chat not found"})
+        self.assertIn("did NOT go out", page)
+        self.assertIn("chat not found", page)
+        import alerttargets
+        self.assertIn("Team Alerts", alerttargets.names())
+
+    def test_the_bot_token_never_reaches_the_error_message(self):
+        """
+        The token is IN the URL for this API, and `requests` puts the URL in its
+        exception messages — so an unreachable api.telegram.org would print the
+        bot token into a flash message, the browser, and the panel's log. It is
+        redacted on the way out.
+        """
+        token = "8140000000:AAF-the-secret-part"
+        page, _ = self._adding_a_target(
+            None, raises=RuntimeError(
+                f"HTTPSConnectionPool: /bot{token}/sendMessage failed"))
+        # The banner only. The token IS elsewhere on this page, behind the same
+        # click-to-reveal as every other secret the panel shows — that is
+        # deliberate and is a different test. What must not happen is it leaking
+        # into a message that also goes to the log.
+        banner = page.split('<div class="banner bad">')[1].split("</div>")[0]
+        self.assertIn("could not reach Telegram", banner)
+        self.assertNotIn(token, banner)
+        self.assertIn("&lt;token&gt;", banner)
+
 
     # --- the database map --------------------------------------------------
 

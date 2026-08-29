@@ -27,6 +27,8 @@ import json
 import os
 import re
 
+import requests
+
 from components import store
 
 STATE_DIR = os.path.join(store.INFRA_DIR, "state")
@@ -95,6 +97,78 @@ def check(target):
                 "though Telegram itself accepts one. Forward a message from the "
                 "chat to @userinfobot if you need the number.")
     return problems
+
+
+#: One test message, sent the moment a target is created.
+#:
+#: Alertmanager already sends a Watchdog — an alert that fires permanently, so
+#: that its SILENCE is the signal — but it rides a 24h `repeat_interval`, and a
+#: receiver added to a config Alertmanager reloads does not restart that clock.
+#: So the honest answer to "did I paste the right token" was up to a day away,
+#: which is a day of believing you are covered when you may not be.
+#:
+#: This goes STRAIGHT to Telegram rather than through Alertmanager, and that is
+#: the point rather than a shortcut: Telegram's own reply is the diagnosis. It
+#: says `chat not found` or `Unauthorized` or `bot was blocked by the user` —
+#: each of which names the thing to fix — where the same failure through
+#: Alertmanager is a line in a log nobody is reading yet. What it does NOT prove
+#: is the rest of the chain, so the message says which half it tested.
+PROBE_URL = "https://api.telegram.org/bot{token}/sendMessage"
+PROBE_TIMEOUT = 10
+
+
+def _redact(text, *secrets):
+    """
+    Never let the token out in an error string.
+
+    `requests` puts the full URL in its exception messages, and the token is IN
+    the URL for this API — so an unreachable api.telegram.org would otherwise
+    print the bot token into a flash message, the browser and the panel's log.
+    """
+    for secret in secrets:
+        if secret:
+            text = text.replace(secret, "<token>")
+    return text
+
+
+def probe(target):
+    """
+    (ok, detail) — send this target one message now and report what happened.
+
+    Never raises and never blocks the save. A target that cannot be reached is
+    still a target somebody meant to create, and a transient DNS failure is not
+    a reason to throw away a pasted credential; the caller says so out loud
+    instead.
+    """
+    if target.get("kind") != KIND_TELEGRAM:
+        return False, f"there is no test for a {target.get('kind')!r} target yet"
+    token = (target.get("bot_token") or "").strip()
+    chat = str(target.get("chat_id") or "").strip()
+    name = (target.get("name") or "").strip()
+    text = (
+        f"Watchdog: {name} was just added in the infra panel, and this message "
+        "is the panel proving it can reach you.\n\n"
+        "It came straight from the panel, so it confirms the bot token and the "
+        "chat id. Alertmanager's own daily Watchdog confirms the rest of the "
+        "chain — if THAT one stops arriving, alerting is broken even though "
+        "this worked.")
+    try:
+        resp = requests.post(PROBE_URL.format(token=token),
+                             json={"chat_id": chat, "text": text},
+                             timeout=PROBE_TIMEOUT)
+    except Exception as exc:                                     # noqa: BLE001
+        return False, _redact(f"could not reach Telegram: {exc}", token)
+    try:
+        body = resp.json()
+    except ValueError:
+        body = {}
+    if body.get("ok"):
+        return True, ""
+    # Telegram's own words. They name the fix — a wrong token, a chat the bot
+    # was never added to, a group it was removed from — in a way no wrapper of
+    # ours would improve on.
+    detail = body.get("description") or f"HTTP {resp.status_code}"
+    return False, _redact(str(detail), token)
 
 
 def save(target):
