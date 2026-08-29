@@ -1575,6 +1575,46 @@ class DatabasePanelTest(PanelTest):
         alone = {k.lower(): v for k, v in seen.items() if k != "_url"}
         self.assertNotIn("cookie", alone)
 
+    def test_the_console_is_asked_for_the_path_it_was_told_it_lives_at(self):
+        """
+        The prefix is not ours to strip.
+
+        Both consoles are configured to serve UNDER this path — RedisInsight by
+        `RI_PROXY_PATH`, mongo-express by `ME_CONFIG_SITE_BASEURL` — because
+        that is what makes their asset URLs land back here instead of colliding
+        with the panel's own `/static`. Forwarding the stripped remainder asked
+        RedisInsight for `/` and got `{"message":"Cannot GET /"}`; the same
+        container answers 200 at the full path. A redirect comes back carrying
+        that prefix already, so the rewrite drops the origin and keeps the path
+        rather than prepending it a second time.
+        """
+        import app as panel
+        self.make_mongo("prefixed")
+        seen = {}
+
+        class Upstream:
+            status_code = 302
+            headers = {"Location": "http://prefixed_viewer:8081"
+                                   "/components/prefixed/viewer/db/admin"}
+
+            @staticmethod
+            def iter_content(chunk_size=0):
+                return iter([b""])
+
+        real_request, real_ensure = panel.requests.request, panel.data.ensure_viewer
+        panel.requests.request = lambda method, url, **kw: (
+            seen.update(url=url) or Upstream())
+        panel.data.ensure_viewer = lambda service: (True, "")
+        try:
+            r = self.client.get("/components/prefixed/viewer/api/info")
+        finally:
+            panel.requests.request, panel.data.ensure_viewer = real_request, real_ensure
+
+        self.assertTrue(seen["url"].endswith("/components/prefixed/viewer/api/info"),
+                        seen["url"])
+        self.assertEqual("/components/prefixed/viewer/db/admin",
+                         r.headers["Location"])
+
     def test_the_view_button_only_appears_when_the_visualiser_is_on(self):
         self.make_mongo("withviewer")
         page = self.client.get("/components/withviewer").get_data(as_text=True)

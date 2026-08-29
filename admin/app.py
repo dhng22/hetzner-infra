@@ -1047,9 +1047,12 @@ VIEWER_MAX_BYTES = 32 * 1024 * 1024
 @app.route("/components/<name>/viewer/<path:sub>",
            methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 @auth.login_required
-def component_viewer(name, sub):
+def component_viewer(name, sub):        # noqa: ARG001 — `sub` is the URL capture
     """
     Proxy one request to a component's visualiser, starting it if it is asleep.
+
+    `sub` exists to make the route match; the request is forwarded at its FULL
+    path, for the reason spelled out where it is built.
 
     `_require_csrf` is deliberately NOT applied. A request through here carries
     the UPSTREAM application's CSRF token, not the panel's, and demanding ours
@@ -1090,9 +1093,16 @@ def component_viewer(name, sub):
                        if k != app.config["SESSION_COOKIE_NAME"])
     if theirs:
         headers["Cookie"] = theirs
+    # THE WHOLE PATH, not `sub`. Both consoles are told they live at this prefix
+    # — RedisInsight by `RI_PROXY_PATH`, mongo-express by `ME_CONFIG_SITE_BASEURL`
+    # — and a console told that SERVES there: stripping the prefix off and asking
+    # for `/` got `{"message":"Cannot GET /","statusCode":404}` while
+    # `/components/<name>/viewer/` got the application. The prefix is not ours to
+    # remove; it is the one thing making the console's own asset URLs land back
+    # here instead of colliding with the panel's `/static`.
     try:
         upstream = requests.request(
-            request.method, f"http://{service}:{port}/{sub}",
+            request.method, f"http://{service}:{port}{request.path}",
             params=request.args, data=body, headers=headers,
             allow_redirects=False, stream=True, timeout=60)
     except requests.RequestException as exc:
@@ -1105,10 +1115,10 @@ def component_viewer(name, sub):
         if key.lower() in HOP_BY_HOP:
             continue
         if key.lower() == "location":
-            # Rewrite an absolute redirect back into our own path, or the
-            # console sends the browser to a hostname that does not resolve.
-            value = value.replace(f"http://{service}:{port}",
-                                  f"/components/{name}/viewer")
+            # Drop the origin and keep the path. The upstream path is already
+            # ours — it is the same prefix we forwarded — so re-adding it here
+            # would send the browser to `/components/x/viewer/components/x/viewer`.
+            value = value.replace(f"http://{service}:{port}", "")
         out.headers[key] = value
     return out
 
