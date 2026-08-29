@@ -10,6 +10,7 @@ sake: the panel is a root console, so "does this route refuse what it should
 refuse" is a correctness property worth pinning.
 """
 
+import errno
 import os
 import importlib.machinery
 import shutil
@@ -762,6 +763,56 @@ class PanelTest(unittest.TestCase):
         # The documentation on the line that already existed survives.
         with open(path) as fh:
             self.assertIn("# the free floor", fh.read())
+
+    def test_a_setting_saves_even_though_infra_env_cannot_be_renamed_over(self):
+        """
+        Every settings save was a 500, and the panel had never done otherwise.
+
+            OSError: [Errno 16] Device or resource busy:
+                '/etc/infra/infra.env.tmp' -> '/etc/infra/infra.env'
+
+        `/etc/infra/infra.env` is bind-mounted into the panel container as a
+        FILE, and you cannot rename onto a mount point. Every other file this
+        panel writes lives under `/opt/infra`, which is mounted as a directory,
+        so the temp-and-swap that is correct everywhere else is the one thing
+        that can never work here — and nothing noticed, because a test writing
+        to an ordinary file in a tmpdir renames perfectly happily.
+
+        So the failure is what gets faked, not the file: `os.replace` refuses
+        with the kernel's own errno, exactly as the mount does.
+        """
+        import envstore
+
+        path = os.path.join(self.tmp, "mounted.env")
+        with open(path, "w") as fh:
+            fh.write("DATAGUARD_DRY_RUN=true         # do not act\n")
+
+        def refuse(src, dst):
+            raise OSError(errno.EBUSY, "Device or resource busy", src, None, dst)
+
+        real_path, real_replace = envstore.INFRA_ENV, envstore.os.replace
+        real_dir = envstore.INFRA_DIR
+        envstore.INFRA_ENV = path
+        envstore.INFRA_DIR = self.tmp
+        envstore.os.replace = refuse
+        try:
+            changed = envstore.save_infra({"DATAGUARD_DRY_RUN": "false"})
+            after = envstore.load_infra()
+        finally:
+            envstore.INFRA_ENV, envstore.INFRA_DIR = real_path, real_dir
+            envstore.os.replace = real_replace
+
+        self.assertEqual(changed, ["DATAGUARD_DRY_RUN"])
+        self.assertEqual(after["DATAGUARD_DRY_RUN"], "false")
+        with open(path) as fh:
+            body = fh.read()
+        # Written THROUGH the same file, not beside it, and no trailing wreckage
+        # of the longer line it replaced.
+        self.assertEqual(body, "DATAGUARD_DRY_RUN=false         # do not act\n")
+        self.assertFalse(os.path.exists(f"{path}.tmp"))
+        # And what was there before is somewhere that outlives the container.
+        with open(os.path.join(self.tmp, "state", "infra.env.previous")) as fh:
+            self.assertIn("DATAGUARD_DRY_RUN=true", fh.read())
 
     def test_ci_publishes_exactly_the_images_this_cluster_pulls(self):
         """

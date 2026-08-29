@@ -10,6 +10,7 @@ infra.env is edited in place, comments and ordering preserved, so the file stays
 the readable document it is in the repo rather than a machine-written blob.
 """
 
+import errno
 import os
 import subprocess
 
@@ -146,9 +147,67 @@ def save_infra(updates):
             changed.append(key)
 
     if changed:
-        tmp = f"{INFRA_ENV}.tmp"
-        with open(tmp, "w") as fh:
-            fh.write("\n".join(out) + "\n")
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, INFRA_ENV)
+        _write_infra("\n".join(out) + "\n")
     return changed
+
+
+def _write_infra(text):
+    """
+    Replace infra.env, which usually cannot be renamed over.
+
+    `/etc/infra/infra.env` is bind-mounted into this container AS A FILE, and a
+    mount point is not a directory entry you can rename onto — the kernel
+    answers `EBUSY`, so the tidy write-a-temp-and-swap that every other file in
+    this panel uses turned every single settings save into a 500. The rename is
+    still tried first, because in tests and on the host itself the path is an
+    ordinary file and atomicity is free there.
+
+    When it is refused, the only way in is THROUGH THE INODE THE MOUNT POINTS
+    AT: open it, write, truncate. That is not atomic, so a copy of what was
+    there before goes somewhere durable first — `/opt/infra` is a directory
+    mount, so a file written inside it survives this container. The window is
+    small and the file is short, but the file is the cluster's configuration,
+    and "recoverable from a backup nobody has to know exists" is a much better
+    failure than "truncated, and the next boot reads whatever is left".
+    """
+    tmp = f"{INFRA_ENV}.tmp"
+    with open(tmp, "w") as fh:
+        fh.write(text)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.chmod(tmp, 0o600)
+    try:
+        os.replace(tmp, INFRA_ENV)
+        return
+    except OSError as exc:
+        if exc.errno not in (errno.EBUSY, errno.EXDEV, errno.EINVAL):
+            raise
+    _keep_a_copy()
+    # `r+`, never `w`: `w` truncates on open, so a failure between opening and
+    # writing leaves an EMPTY cluster configuration. This way nothing is lost
+    # until there is something to replace it with.
+    with open(INFRA_ENV, "r+") as fh:
+        fh.write(text)
+        fh.truncate()
+        fh.flush()
+        os.fsync(fh.fileno())
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+
+
+def _keep_a_copy():
+    """The previous infra.env, somewhere that outlives this container."""
+    backup = os.path.join(INFRA_DIR, "state", "infra.env.previous")
+    try:
+        os.makedirs(os.path.dirname(backup), exist_ok=True)
+        with open(INFRA_ENV) as fh:
+            previous = fh.read()
+        with open(backup, "w") as fh:
+            fh.write(previous)
+        os.chmod(backup, 0o600)
+    except OSError:
+        # Best effort. Refusing to save the setting because the backup could
+        # not be written would be the panel breaking itself out of caution.
+        pass
