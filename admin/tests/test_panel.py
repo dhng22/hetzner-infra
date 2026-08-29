@@ -1735,6 +1735,61 @@ class DatabasePanelTest(PanelTest):
                      if (e.get("ui") or {}).get("kind") == panel.catalog.UI_TUNNEL]
         self.assertEqual(tunnelled, ["admin"], tunnelled)
 
+    def test_a_login_through_the_proxy_keeps_every_cookie_it_was_given(self):
+        """
+        Grafana said "logged in" and the next page was the login page again.
+
+        A login sets more than one cookie — `grafana_session` and
+        `grafana_session_expiry` — and each is its own `Set-Cookie` header.
+        `requests` exposes response headers as a mapping, which folds repeats
+        into one comma-joined value, and RFC 6265 forbids exactly that: a
+        cookie value may contain a comma, so nothing downstream can split them
+        back apart. The browser read one cookie whose attributes were the
+        second cookie's text, kept nothing usable, and asked to log in again.
+
+        So the proxy reads the raw headers, where each occurrence is separate,
+        and ADDS them rather than assigning — assigning keeps only the last.
+        """
+        import app as panel
+        self.login()
+        sent = ["grafana_session=abc; Path=/grafana; HttpOnly; SameSite=Lax",
+                "grafana_session_expiry=1788000541; Path=/grafana; SameSite=Lax"]
+
+        class Raw:
+            # What urllib3 hands back: repeats preserved, one item each.
+            class headers:
+                @staticmethod
+                def items():
+                    return [("Content-Type", "application/json")] + [
+                        ("Set-Cookie", c) for c in sent]
+
+        class Upstream:
+            status_code = 200
+            raw = Raw
+            # The FOLDED view, which is what the bug read. If the proxy ever
+            # goes back to this, the test fails rather than quietly passing.
+            headers = {"Content-Type": "application/json",
+                       "Set-Cookie": ", ".join(sent)}
+
+            @staticmethod
+            def iter_content(chunk_size=0):
+                return iter([b"{}"])
+
+        real = panel.requests.request
+        panel.requests.request = lambda method, url, **kw: Upstream()
+        try:
+            r = self.client.post("/grafana/login", json={"user": "admin"})
+        finally:
+            panel.requests.request = real
+
+        # The panel refreshes its own session cookie on the way out too; the
+        # upstream's are the ones under test.
+        got = [c for c in r.headers.getlist("Set-Cookie")
+               if not c.startswith(panel.app.config["SESSION_COOKIE_NAME"] + "=")]
+        self.assertEqual(len(got), 2, got)
+        self.assertTrue(any(c.startswith("grafana_session=") for c in got), got)
+        self.assertTrue(any(c.startswith("grafana_session_expiry=") for c in got), got)
+
     def test_grafana_is_reachable_through_the_panel_session(self):
         """
         Grafana used to be reachable one way only — a `grafana-<app>.<root>`

@@ -1086,7 +1086,7 @@ def _forward(origin):
 
     out = Response(upstream.iter_content(chunk_size=64 * 1024),
                    status=upstream.status_code)
-    for key, value in upstream.headers.items():
+    for key, value in _upstream_headers(upstream):
         if key.lower() in HOP_BY_HOP:
             continue
         if key.lower() == "location":
@@ -1095,8 +1095,37 @@ def _forward(origin):
             # to `/components/x/viewer/components/x/viewer`. A redirect to the
             # public URL is left exactly as it is: that one is already correct.
             value = value.replace(origin, "")
-        out.headers[key] = value
+        if key.lower() == "set-cookie":
+            # `add`, never `[]=`. A login sets more than one cookie and each one
+            # is its own header; assigning would keep only the last.
+            out.headers.add(key, value)
+        else:
+            out.headers[key] = value
     return out
+
+
+def _upstream_headers(upstream):
+    """
+    The response headers as they were actually sent, repeats and all.
+
+    `requests` exposes `.headers` as a case-insensitive MAPPING, so headers that
+    legitimately appear more than once are folded into one comma-joined value.
+    For `Set-Cookie` that is not a lossy convenience, it is wrong — RFC 6265
+    says the header may not be folded, because a cookie's value can contain a
+    comma and nothing can tell the two apart afterwards.
+
+    Grafana's login sends `grafana_session` and `grafana_session_expiry` as two
+    headers. Folded, the browser reads one cookie whose attribute list is the
+    second cookie's text, keeps nothing usable, and shows the login page again
+    on the next request — while the panel's log shows the login succeeding.
+
+    urllib3 keeps the raw headers and yields each occurrence separately, so the
+    fix is simply to read them from there. A response with no `raw` is a test
+    double, which never has duplicates to lose.
+    """
+    raw = getattr(upstream, "raw", None)
+    headers = getattr(raw, "headers", None)
+    return list(headers.items() if headers is not None else upstream.headers.items())
 
 
 def _seed_viewer(component, service, port):
