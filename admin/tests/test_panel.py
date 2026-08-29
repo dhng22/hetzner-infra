@@ -1289,21 +1289,45 @@ class DatabasePanelTest(PanelTest):
         self.assertIn("<h2>Targets</h2>", page)
         self.assertLess(page.index("<h2>Targets</h2>"), page.index("<h2>Rules</h2>"))
 
-    def test_a_telegram_chat_id_must_be_a_number(self):
-        import alerttargets
-        problems = alerttargets.check({"name": "team", "kind": "telegram",
-                                       "bot_token": "123:AAA", "chat_id": "@mychannel"})
-        self.assertTrue(any("number" in p for p in problems), problems)
-
     def test_a_target_with_no_token_is_refused(self):
         import alerttargets
         self.assertTrue(alerttargets.check(
             {"name": "team", "kind": "telegram", "chat_id": "-100"}))
 
-    def test_the_token_is_masked_in_the_listing(self):
+    def test_the_form_does_not_second_guess_the_credential(self):
         """
-        The page has to show WHICH credential is there without showing it. A
-        bot token is enough to post as you into every chat the bot is in.
+        The token is whatever BotFather issued, and nothing here second-guesses
+        it. There was a regex doing so and it rejected correctly pasted tokens,
+        which is a worse failure than anything it prevented: "that does not look
+        like a token" when it plainly is one leaves the operator nowhere to go.
+
+        The YAML safety that regex was justified by belongs to the renderer's
+        quoting, which covers every input rather than the predicted ones. The
+        chat id is the one exception and it is not a guess — see CHAT_RE.
+        """
+        import alerttargets
+        for chat in ("-1001234567890", "12345"):
+            self.assertEqual([], alerttargets.check(
+                {"name": "team", "kind": "telegram",
+                 "bot_token": "8140000000:AAF-whatever-botfather-said",
+                 "chat_id": chat}), chat)
+
+    def test_a_name_is_not_forced_into_a_slug(self):
+        """
+        The name never reaches the generated config — it is a label on a page.
+        Demanding lowercase-and-dashes of it was a rule with nothing behind it.
+        """
+        import alerttargets
+        self.assertEqual([], alerttargets.check(
+            {"name": "Team Alerts (on call)", "kind": "telegram",
+             "bot_token": "8140000000:AAF-whatever", "chat_id": "-100"}))
+
+    def test_the_token_can_be_read_back(self):
+        """
+        The panel stored this for you; being unable to read back what you pasted
+        makes "is this the right token" unanswerable without a shell on the
+        master. It is behind the same click-to-reveal as every other secret the
+        panel shows.
         """
         import alerttargets
         token = "8140000000:AAF-this-is-the-secret-part"
@@ -1311,12 +1335,7 @@ class DatabasePanelTest(PanelTest):
             {"name": "team", "kind": "telegram", "bot_token": token,
              "chat_id": "-100"}))
         [row] = alerttargets.described()
-        self.assertNotIn(token, row["masked"])
-        self.assertTrue(row["masked"].endswith("t-part"))
-        # And the whole row, not just the one field a template happens to use:
-        # the raw token used to ride along under another key, unread, one edit
-        # away from being rendered.
-        self.assertNotIn(token, str(row))
+        self.assertEqual(token, row["token"])
 
 
     # --- the database map --------------------------------------------------
@@ -1524,19 +1543,29 @@ class AlertmanagerRenderTest(unittest.TestCase):
 
     def test_a_token_with_a_newline_cannot_break_the_file(self):
         """
-        The failure this prevents is not subtle once it happens and impossible
-        to see before: an unparseable alertmanager.yml stops the monitoring
-        stack deploying, which takes the alerting down with it.
+        NEUTRALISED, NOT REFUSED, and that is the stronger property.
+
+        The failure being prevented is an unparseable alertmanager.yml, which
+        stops the monitoring stack deploying and takes alerting down with it.
+        This used to be prevented by dropping any token that did not match a
+        guessed pattern — which also dropped valid ones, and left a correctly
+        pasted credential rejected with no recourse.
+
+        Quoting handles it for every input instead: the target is KEPT, the
+        injected `bot_token:` line becomes part of a string value rather than a
+        second config entry, and the file still parses. Two targets in, two
+        configs out, nothing dropped and nothing escaped into the structure.
         """
-        text, noise = self.render([
+        evil = '1234:x"\n      - bot_token: "y'
+        text, _ = self.render([
             self.GOOD,
             {"name": "evil", "kind": "telegram", "chat_id": "1",
-             "bot_token": '1234:x"\n      - bot_token: "y'},
+             "bot_token": evil},
         ])
         got = self.parsed(text)
-        receivers = {r["name"]: r for r in got["receivers"]}
-        self.assertEqual(1, len(receivers["default"]["telegram_configs"]))
-        self.assertIn("evil", noise)
+        configs = {r["name"]: r for r in got["receivers"]}["default"]["telegram_configs"]
+        self.assertEqual(2, len(configs))
+        self.assertIn(evil, [c["bot_token"] for c in configs])
 
     def test_a_chat_id_that_is_not_a_number_is_dropped(self):
         text, _ = self.render([

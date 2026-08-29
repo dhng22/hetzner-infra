@@ -91,32 +91,58 @@ EMPTY = """  # NOTHING IS CONFIGURED. Every alert is dropped here, deliberately 
 """
 
 
-#: What may reach the generated file, checked HERE as well as in the panel.
-#: This program is the last thing between a state file and a config Alertmanager
-#: has to parse, and it is not always the panel that wrote that file — an
-#: operator editing JSON on the master, or a version of the panel older than
-#: this validation, both produce input nothing else would catch. A target that
-#: fails is dropped and named on stdout, because the alternative is a monitoring
-#: stack that will not deploy at all and a message about YAML on line 41.
-TOKEN_RE = re.compile(r"^\d{4,}:[A-Za-z0-9_-]{20,}$")
+def _quote(value):
+    """
+    A YAML double-quoted scalar. THIS is what makes arbitrary input safe here.
+
+    There were two regexes above this, guessing the shape of a bot token and a
+    chat id and dropping anything that did not match, on the reasoning that this
+    file must not produce YAML Alertmanager cannot parse. Quoting is what
+    achieves that, and it achieves it for every input rather than for the ones
+    somebody predicted — including the correctly pasted tokens and the
+    `@channelname` chat ids the patterns were rejecting.
+
+    Newlines and tabs are escaped rather than passed through, because those are
+    the characters that would otherwise end the scalar early and put the rest of
+    a credential on its own line as a key.
+    """
+    text = str(value)
+    for old, new in (("\\", "\\\\"), ('"', '\\"'),
+                     ("\n", "\\n"), ("\r", "\\r"), ("\t", "\\t")):
+        text = text.replace(old, new)
+    return '"' + text + '"'
+
+
+#: Alertmanager types telegram `chat_id` as an int64, so this is not a guess
+#: about the format of somebody's credential — it is the one value on this page
+#: that provably cannot be anything else. `amtool check-config` rejects both
+#: `chat_id: "-100123"` and `chat_id: "@channel"` with an unmarshal error, and a
+#: rejected config is a monitoring stack that will not start.
 CHAT_RE = re.compile(r"^-?\d{1,20}$")
 
 
-def _quote(value):
-    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
 def usable(target):
-    """Whether this target can be rendered into YAML that means what it says."""
+    """
+    Whether this renders into a config Alertmanager will actually load.
+
+    The token is not inspected at all: it is quoted, so any bytes are safe here,
+    and guessing its shape only ever rejected valid ones. The chat id is checked
+    because it is written unquoted and must be an integer.
+    """
     if target.get("kind") != "telegram":
         return False
-    return bool(TOKEN_RE.match(str(target.get("bot_token", "")).strip())
+    return bool(str(target.get("bot_token", "")).strip()
                 and CHAT_RE.match(str(target.get("chat_id", "")).strip()))
 
 
 def telegram(target, resolved, message):
     return (
         "      - bot_token: " + _quote(str(target.get("bot_token", "")).strip()) + "\n"
+        # UNQUOTED, and the only field here that is. Alertmanager types this as
+        # an int64: `chat_id: "-100123"` fails to unmarshal exactly as
+        # `chat_id: "@channel"` does, verified with `amtool check-config`. So
+        # this one field genuinely must be a number, which is why `usable()`
+        # still checks it — that is Alertmanager's rule, not a guess about it.
         "        chat_id: " + str(target.get("chat_id", "")).strip() + "\n"
         "        parse_mode: ''\n"
         f"        send_resolved: {'true' if resolved else 'false'}\n"
@@ -159,8 +185,8 @@ def main():
     good = [t for t in targets if usable(t)]
     for target in targets:
         if target not in good:
-            print(f"skipping alert target {target.get('name', '?')!r}: it is not a "
-                  "usable telegram destination", file=sys.stderr)
+            print(f"skipping alert target {target.get('name', '?')!r}: it needs a "
+                  "bot token and a numeric chat id", file=sys.stderr)
     targets = good
 
     body = EMPTY if not targets else (

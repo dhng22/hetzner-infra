@@ -35,7 +35,10 @@
           <td class="mono">{{ t.name }}</td>
           <td>{{ t.kind }}</td>
           <td class="mono small">{{ t.where }}</td>
-          <td class="mono small masked">{{ t.masked }}</td>
+          <td class="secret-val">
+            <code class="masked mono small" data-secret-text="{{ t.token }}">••••••••••••</code>
+            <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
+          </td>
           <td>
             <form method="post" action="{{ alert_target_delete_href(t.name) }}"
                   {% if preview %}data-preview{% endif %}>
