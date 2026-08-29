@@ -499,6 +499,23 @@ class ComponentTest(unittest.TestCase):
         self.assertEqual(env["ME_CONFIG_MONGODB_SSL"], "true")
         self.assertEqual(env["NODE_EXTRA_CA_CERTS"], "/run/secrets/tls-ca.crt")
 
+    def test_the_mongo_visualiser_does_not_ask_for_a_password_it_never_set(self):
+        """
+        The console answered 401, and the only credentials that opened it were
+        `admin:pass` — the mongo-express image's own shipped defaults.
+
+        The renderer set `ME_CONFIG_BASICAUTHENABLED=false`, which is the name
+        mongo-express used in 0.x and reads as nothing in 1.0; the image's
+        Dockerfile sets `ME_CONFIG_BASICAUTH=true`, so the switch that was
+        supposed to turn its login off never touched it. A setting that is
+        ignored is worse than one that is wrong — it reports the thing it did
+        not do.
+        """
+        env = self.make_mongo(visualizer=True).render()[
+            "services"]["viewer"]["environment"]
+        self.assertEqual(env["ME_CONFIG_BASICAUTH"], "false")
+        self.assertNotIn("ME_CONFIG_BASICAUTHENABLED", env)
+
     def test_the_visualiser_is_given_the_authority_it_is_told_to_read(self):
         """The path above is a mount, and a mount that is not there is a crash."""
         viewer = self.make_mongo(visualizer=True).render()["services"]["viewer"]

@@ -891,8 +891,19 @@ class MongoComponent(Component):
                 "NODE_EXTRA_CA_CERTS": "/run/secrets/tls-ca.crt",
                 # Its own auth is off ON PURPOSE. Two passwords for one door is
                 # one password nobody rotates; the door is the panel's session,
-                # and the service has no published port for anything else to knock on.
-                "ME_CONFIG_BASICAUTHENABLED": "false",
+                # and the service has no published port for anything else to
+                # knock on. Nor does this widen `edge`: every application
+                # container there already holds the root connection string, so
+                # a console reachable from it grants nothing it did not have.
+                #
+                # `ME_CONFIG_BASICAUTH` and nothing else. `…BASICAUTHENABLED`
+                # was the name in mongo-express 0.x, 1.0 renamed it, and the
+                # image ships `ME_CONFIG_BASICAUTH=true` in its own Dockerfile —
+                # so setting the old name read as "off" here while the console
+                # actually sat behind the shipped defaults, `admin:pass`. A
+                # setting that is ignored is worse than one that is wrong: it
+                # says the thing it did not do.
+                "ME_CONFIG_BASICAUTH": "false",
                 "ME_CONFIG_SITE_BASEURL": f"/components/{self.name}/viewer/",
             },
             "secrets": [{"source": self.secret_name("tls-ca"),
