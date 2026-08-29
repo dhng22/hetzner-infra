@@ -24,6 +24,11 @@ import logging
 
 log = logging.getLogger("dataguard")
 
+#: What mongod answers with while it is running `--replSet` and has never been
+#: given a configuration. The one error that means "say the word", as opposed to
+#: every other one, which means "do not touch this".
+NOT_YET_INITIALIZED = 94
+
 #: Replica set member states worth naming. Everything else is transitional.
 PRIMARY = "PRIMARY"
 SECONDARY = "SECONDARY"
@@ -116,6 +121,16 @@ class Engine:
     def topology(self):
         raise NotImplementedError
 
+    def initiate(self, host):
+        """
+        Bring an empty set into existence as one member, if it has none yet.
+
+        Returns True only if this call is what created it. The default is
+        False: for engines where a lone server is already a working primary
+        there is nothing to create.
+        """
+        return False
+
     def add_member(self, host):
         raise NotImplementedError
 
@@ -150,8 +165,14 @@ class MongoEngine(Engine):
 
     VOTING_MEMBERS = True
 
-    def __init__(self, client_factory, set_name):
+    def __init__(self, client_factory, set_name, direct_factory=None):
         self._client = client_factory
+        # A SECOND way in, connected to exactly one member and doing no topology
+        # discovery. `initiate` is the one thing that cannot use the pooled
+        # client: a set with no configuration has no primary, so the driver
+        # will not select any of its servers for a command, and the seed list
+        # times out instead of reporting what is wrong.
+        self._direct = direct_factory
         self.set_name = set_name
 
     def _admin(self):
@@ -195,6 +216,53 @@ class MongoEngine(Engine):
             if member.state == PRIMARY:
                 primary = member
         return Topology(members, primary=primary, ok=True)
+
+    def initiate(self, host):
+        """
+        Create the one-member configuration a fresh set is missing.
+
+        `mongod --replSet` starts a server that REFUSES EVERY COMMAND until it
+        has been given a configuration — including the reads a client makes to
+        discover a primary. So a brand new component is not slow or degraded,
+        it is inert: nothing on the connection string works, and the only thing
+        it will say is `NotYetInitialized`. Somebody has to say the word once,
+        and it is this process, because it is the one that owns the shape of
+        the set for the rest of the component's life.
+
+        ONE MEMBER, always, whatever the pool is. The connection string names
+        every member the component will ever have, but the configuration names
+        only the ones that exist — a set configured with four members while one
+        is running is a set that cannot reach a majority and therefore cannot
+        elect anybody. Members 2..n join later, one at a time, through
+        `add_member`.
+
+        Refuses unless the server says NotYetInitialized (94), so a set that
+        already exists is never rebuilt on top of its own data, and a server
+        that is merely unreachable is left alone.
+        """
+        if self._direct is None:
+            return False
+        try:
+            admin = self._direct(host).admin
+        except Exception as exc:                                 # noqa: BLE001
+            raise Unavailable(str(exc)) from exc
+        try:
+            admin.command("replSetGetStatus")
+        except Exception as exc:                                 # noqa: BLE001
+            # The SERVER'S OWN code, not the text of the message. `mongod`
+            # answers an uninitiated set with 94 and nothing else does; the
+            # English beside it is free to change between releases.
+            if getattr(exc, "code", None) != NOT_YET_INITIALIZED:
+                raise Unavailable(str(exc)) from exc
+        else:
+            return False
+        try:
+            admin.command("replSetInitiate", {
+                "_id": self.set_name, "version": 1,
+                "members": [{"_id": 0, "host": host}]})
+        except Exception as exc:                                 # noqa: BLE001
+            raise Refused(str(exc)) from exc
+        return True
 
     def _reconfig(self, mutate):
         """

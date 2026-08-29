@@ -461,6 +461,32 @@ class ComponentTest(unittest.TestCase):
         self.assertNotIn("ports", viewer)
         self.assertEqual(viewer["deploy"]["replicas"], 0)
 
+    def test_the_mongo_visualiser_agrees_with_itself_about_tls(self):
+        """
+        mongo-express crash-looped on exit 1 with an empty log, and the panel
+        reported a 502.
+
+        Its own driver options carry an `ssl` key whether or not anybody set it,
+        and the connection string this platform writes carries `tls=true`. The
+        Mongo driver treats the pair as one setting and refuses to construct a
+        client when they disagree, so the process died before it opened a port.
+        The CA is a second, separate refusal waiting behind the first: the
+        members present a certificate from this component's own authority, and
+        the option mongo-express exposes for that (`sslCA`) has not been read by
+        the driver since version 5 — so it goes to Node, which both of them use.
+        """
+        env = self.make_mongo(visualizer=True).render()[
+            "services"]["viewer"]["environment"]
+        self.assertIn("tls=true", env["ME_CONFIG_MONGODB_URL"])
+        self.assertEqual(env["ME_CONFIG_MONGODB_SSL"], "true")
+        self.assertEqual(env["NODE_EXTRA_CA_CERTS"], "/run/secrets/tls-ca.crt")
+
+    def test_the_visualiser_is_given_the_authority_it_is_told_to_read(self):
+        """The path above is a mount, and a mount that is not there is a crash."""
+        viewer = self.make_mongo(visualizer=True).render()["services"]["viewer"]
+        targets = [s["target"] for s in viewer["secrets"]]
+        self.assertIn("tls-ca.crt", targets)
+
     def test_the_view_button_can_actually_reach_the_visualiser(self):
         """
         `edge` alone was a 502 every time, and this test asserted it.

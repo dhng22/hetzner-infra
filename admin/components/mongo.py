@@ -876,6 +876,19 @@ class MongoComponent(Component):
             "environment": {
                 "ME_CONFIG_MONGODB_URL": self.connection_url(),
                 "ME_CONFIG_MONGODB_ENABLE_ADMIN": "true",
+                # The URL says `tls=true` and mongo-express ALSO hands the
+                # driver an `ssl` option of its own. The driver treats the two
+                # as one setting and refuses to start when they disagree —
+                # `All values of tls/ssl must be the same` — so leaving this
+                # unset is a crash loop, not a default.
+                "ME_CONFIG_MONGODB_SSL": "true",
+                # And the certificate the members present is signed by this
+                # component's own authority, which is in no public root store.
+                # mongo-express only exposes the driver's `sslCA` option, which
+                # the driver stopped reading two major versions ago, so the CA
+                # is given to Node itself instead — the one place both the
+                # console and its driver are guaranteed to look.
+                "NODE_EXTRA_CA_CERTS": "/run/secrets/tls-ca.crt",
                 # Its own auth is off ON PURPOSE. Two passwords for one door is
                 # one password nobody rotates; the door is the panel's session,
                 # and the service has no published port for anything else to knock on.

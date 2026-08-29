@@ -710,15 +710,25 @@ def engine_for(component):
 
         user = component.env("MONGO_INITDB_ROOT_USERNAME") or "root"
         password = component.env("MONGO_INITDB_ROOT_PASSWORD")
-        ca = os.path.join(STATE_DIR, "dataguard", component.name, "ca.crt")
+        # `tls_dir`, which is where the authority ACTUALLY is: the panel issues
+        # it beside the component it belongs to and this process renews it in
+        # the same place. Reading it from anywhere else finds nothing, and
+        # nothing is not an error to pymongo — it falls back to the public root
+        # store, which cannot vouch for a private CA, so every member looks
+        # unreachable and dataguard goes quietly blind to the whole component.
+        ca = os.path.join(tls_dir(component), "ca.crt")
+        ca = ca if os.path.exists(ca) else None
 
-        def client():
+        def connect(hosts, direct):
             return pymongo.MongoClient(
-                host=component.seed_hosts(), username=user, password=password,
-                authSource="admin", replicaSet=None, directConnection=False,
-                tls=True, tlsCAFile=ca if os.path.exists(ca) else None,
+                host=hosts, username=user, password=password,
+                authSource="admin", replicaSet=None, directConnection=direct,
+                tls=True, tlsCAFile=ca,
                 serverSelectionTimeoutMS=10000, connectTimeoutMS=10000)
-        return engines.MongoEngine(client, component.set_name)
+
+        return engines.MongoEngine(
+            lambda: connect(component.seed_hosts(), False), component.set_name,
+            direct_factory=lambda host: connect([host], True))
 
     import redis
     from redis.sentinel import Sentinel
@@ -1373,6 +1383,41 @@ def loop():
             C_ERRORS.labels(stage="engine").inc()
             log.warning("%s: cannot read its topology: %s", name, exc)
             continue
+
+        # BEFORE the state machine, because there is no state to read yet. A
+        # `--replSet` server that has never been configured answers nothing at
+        # all, so `topology()` reports the component unreachable and every gate
+        # below would refuse on that — leaving a database that looks merely
+        # unhealthy but can never recover on its own.
+        #
+        # Not gated on the component's dataguard switch, unlike everything else
+        # here. Turning dataguard off means "the topology is yours"; it cannot
+        # mean "the set is never created", because the renderer starts every
+        # member with `--replSet` and writes `replicaSet=` into the connection
+        # string whether the switch is on or off. A set of one is what that
+        # component was always promised, and only this process can say so.
+        if not topology.ok:
+            # SAY IT OUT LOUD. An unreadable component used to fall straight
+            # through to the gates, which refuse silently, so a database that
+            # had never worked at all looked exactly like one that was simply
+            # settled.
+            say_once((name, "unreadable"), "%s: cannot be read: %s",
+                     name, topology.detail)
+            if component.dry_run:
+                say_once((name, "initiate"),
+                         "[dry-run] would create %s as a one-member set if it "
+                         "has no configuration yet", name)
+            else:
+                try:
+                    if engine.initiate(component.master_host):
+                        C_ACTIONS.labels(action="initiate").inc()
+                        log.info("%s: had no replica set configuration; created "
+                                 "it with %s as its only member", name,
+                                 component.master_member)
+                        continue
+                except (engines.Unavailable, engines.Refused) as exc:
+                    C_ERRORS.labels(stage="initiate").inc()
+                    log.warning("%s: could not create the set: %s", name, exc)
 
         state = plan.current_state(component, topology)
         _publish(component, topology, state)
