@@ -1684,6 +1684,57 @@ class DatabasePanelTest(PanelTest):
         self.assertEqual("/components/prefixed/viewer/db/admin",
                          r.headers["Location"])
 
+    def test_the_open_button_goes_where_grafana_actually_is(self):
+        """
+        The Open button kept pointing at `https://grafana-<app>.<root>` after
+        Grafana moved behind the panel, so removing that tunnel hostname — the
+        entire point of the move — turned the button into a dead link.
+
+        The catalog's own comment says an Open button that leads nowhere is
+        worse than saying a service is not published, and a hostname somebody
+        has to remember to create in a dashboard is exactly that: the button
+        pointed at it whether or not it existed. So the assertion is not that
+        the URL reads a certain way, it is that the panel WILL SERVE IT — the
+        button and the route have to be the same fact.
+        """
+        import app as panel
+        entry = next(e for e in panel.catalog.SYSTEM if e["key"] == "grafana")
+        access = panel.system_access(entry)
+        self.assertTrue(access["reachable"])
+        self.assertEqual(access["url"], "/grafana/")
+
+        self.login()
+        reached = []
+
+        class Upstream:
+            status_code = 200
+            headers = {}
+
+            @staticmethod
+            def iter_content(chunk_size=0):
+                return iter([b"grafana"])
+
+        real = panel.requests.request
+        panel.requests.request = lambda method, url, **kw: (
+            reached.append(url) or Upstream())
+        try:
+            r = self.client.get(access["url"])
+        finally:
+            panel.requests.request = real
+
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(reached, ["http://grafana:3000/grafana/"])
+
+    def test_no_infrastructure_ui_promises_a_hostname_nobody_creates(self):
+        """
+        Every remaining tunnel link has to be one the setup actually tells you
+        to add. Only the panel's own hostname qualifies now.
+        """
+        import app as panel
+        tunnelled = [e["key"] for e in panel.catalog.SYSTEM
+                     if (e.get("ui") or {}).get("kind") == panel.catalog.UI_TUNNEL]
+        self.assertEqual(tunnelled, ["admin"], tunnelled)
+
     def test_grafana_is_reachable_through_the_panel_session(self):
         """
         Grafana used to be reachable one way only — a `grafana-<app>.<root>`

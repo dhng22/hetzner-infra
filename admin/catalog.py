@@ -18,9 +18,13 @@ editing it.
 # "Open" button that leads nowhere is worse than saying it is not published.
 #   tunnel   — a public hostname on the Cloudflare tunnel
 #   host     — published on the master's private IP at `port`
+#   panel    — a path on this panel, proxied behind the session you are already
+#              signed in to. The service itself is overlay-only; the panel is
+#              what makes it reachable, so the link is always live and never
+#              depends on a hostname somebody has to remember to create.
 #   internal — overlay network only. Not reachable from your laptop; we say so
 #              rather than linking to an address that will time out.
-UI_TUNNEL, UI_HOST, UI_INTERNAL = "tunnel", "host", "internal"
+UI_TUNNEL, UI_HOST, UI_PANEL, UI_INTERNAL = "tunnel", "host", "panel", "internal"
 
 SYSTEM = [
     {
@@ -39,7 +43,12 @@ SYSTEM = [
         "service": "monitoring_grafana",
         "category": "Observability",
         "blurb": "Dashboards over VictoriaMetrics and Loki.",
-        "ui": {"kind": UI_TUNNEL, "prefix": "grafana-"},
+        # `grafana-<app>.<root>` was a hostname somebody had to create in
+        # Cloudflare, and the Open button pointed at it whether or not they
+        # ever did — which is the failure this file's own comment above warns
+        # about. It is served through the panel now, so the link is as reliable
+        # as the page it is on.
+        "ui": {"kind": UI_PANEL, "path": "/grafana/"},
     },
     {
         "key": "victoriametrics",

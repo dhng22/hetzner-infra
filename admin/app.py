@@ -94,6 +94,10 @@ def system_access(entry):
     if ui["kind"] == catalog.UI_TUNNEL:
         return {"url": f"https://{ui.get('prefix', '')}{APP_NAME}.{ROOT_DOMAIN}",
                 "reachable": True, "note": "Public hostname on the Cloudflare tunnel."}
+    if ui["kind"] == catalog.UI_PANEL:
+        return {"url": ui["path"], "reachable": True,
+                "note": "Served through this panel, behind the session you are "
+                        "already signed in to. No public hostname of its own."}
     if ui["kind"] == catalog.UI_HOST:
         return {"url": f"http://{data.master_ip()}:{ui['port']}", "reachable": True,
                 "note": "Published on the master's private address. Reachable from "
