@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Grafana · {{ cluster_name }}{% endblock %}
+{% block crumb %}{{ cluster_name }} · grafana{% endblock %}
+{% block main %}
+<div class="page-head">
+  <div>
+    <h1>Grafana did not answer</h1>
+    <p class="hint">The panel reaches it over the <code>monitoring</code> network, which is
+    the only way anything reaches it — it has no published port and no tunnel hostname of
+    its own. If it is restarting this clears on its own; if it is not, the monitoring stack
+    is where to look.</p>
+  </div>
+</div>
+{% if detail %}
+<div class="banner bad"><div>{{ detail }}</div></div>
+{% endif %}
+<div class="btn-row">
+  <a class="btn btn-primary" href="{{ url_for('grafana', sub='') }}">Try again</a>
+  <a class="btn" href="{{ url_for('cluster') }}">Cluster</a>
+</div>
+{% endblock %}

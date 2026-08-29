@@ -138,10 +138,14 @@ name stays at the third level and extra services take a dash:
 |---|---|
 | `<app>.<root>` | `http://api_app:8080` — an `app` component named `api` |
 | `staging-<app>.<root>` | `http://api-staging_app:8080` — a second component |
-| `grafana-<app>.<root>` | `http://grafana:3000` |
 | `admin-<app>.<root>` | `http://<master-private-ip>:3000` |
 
-Put the last two behind Cloudflare Access. They control your cluster.
+Grafana is not on that list. It is served through the panel at `/grafana/`,
+behind the session you are already signed in to, the same way the database
+consoles are — so it needs no hostname, no second login page on the public
+internet, and no Access policy of its own.
+
+Put the panel behind Cloudflare Access. It controls your cluster.
 
 ## Scaling policy
 
@@ -610,14 +614,15 @@ rolls production back:
    docker node ls                                 # just the master
    docker service logs -f monitoring_autoscaler   # "0 component(s)", 0 workers
    ```
-6. **Add the two infrastructure hostnames** in Cloudflare:
+6. **Add the panel's hostname** in Cloudflare:
 
    | Hostname | Target |
    |---|---|
-   | `grafana-<app>.<root>` | `http://grafana:3000` |
    | `admin-<app>.<root>` | `http://<master-private-ip>:3000` |
 
-7. **Put both behind Cloudflare Access.** The panel holds the docker socket and
+   Grafana does not need one — it is reached through the panel at `/grafana/`.
+
+7. **Put it behind Cloudflare Access.** The panel holds the docker socket and
    can read your Hetzner token, so its password is one factor and Access is the
    second. **Exempt `/hooks/deploy/*`** or give CI an Access service token, or
    your pipeline will be blocked before it reaches the panel.

@@ -101,6 +101,10 @@ class PanelTest(unittest.TestCase):
     def test_every_page_requires_a_session(self):
         for path in ("/", "/components", "/cluster", "/manager", "/alerts",
                      "/settings", "/api/topology", "/components/new",
+                     # Grafana too. It has no hostname of its own any more, so
+                     # this session is the only thing in front of every metric
+                     # the cluster has ever recorded.
+                     "/grafana/", "/grafana/d/abc/dash",
                      "/cluster/nodes/k39dl2mzq018"):
             r = self.client.get(path)
             self.assertEqual(r.status_code, 302, path)
@@ -1679,6 +1683,87 @@ class DatabasePanelTest(PanelTest):
                         seen["url"])
         self.assertEqual("/components/prefixed/viewer/db/admin",
                          r.headers["Location"])
+
+    def test_grafana_is_reachable_through_the_panel_session(self):
+        """
+        Grafana used to be reachable one way only — a `grafana-<app>.<root>`
+        hostname on the tunnel, which is a second public login page guarding
+        every metric this cluster has recorded. It now goes through the same
+        proxy the database consoles use, at its own full path, because Grafana
+        is told it serves under that prefix.
+        """
+        import app as panel
+        self.login()
+        seen = {}
+
+        class Upstream:
+            status_code = 200
+            headers = {"Content-Type": "text/html"}
+
+            @staticmethod
+            def iter_content(chunk_size=0):
+                return iter([b"<html>"])
+
+        real = panel.requests.request
+        panel.requests.request = lambda method, url, **kw: (
+            seen.update(url=url, headers=kw.get("headers") or {}) or Upstream())
+        try:
+            r = self.client.get("/grafana/d/abc/dashboard")
+        finally:
+            panel.requests.request = real
+
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(seen["url"], "http://grafana:3000/grafana/d/abc/dashboard")
+
+    def test_the_panel_session_cookie_never_reaches_grafana(self):
+        """
+        Same rule as the database consoles, and the same reason: the browser
+        attaches this origin's cookie to every request on this route, and that
+        cookie is the key to the console that runs the cluster. Grafana's own
+        cookie has to survive, or it cannot hold a login.
+        """
+        import app as panel
+        self.login()
+        seen = {}
+
+        class Upstream:
+            status_code = 200
+            headers = {}
+
+            @staticmethod
+            def iter_content(chunk_size=0):
+                return iter([b""])
+
+        self.client.set_cookie("grafana_session", "theirs")
+        real = panel.requests.request
+        panel.requests.request = lambda method, url, **kw: (
+            seen.update(kw.get("headers") or {}) or Upstream())
+        try:
+            self.client.get("/grafana/api/org")
+        finally:
+            panel.requests.request = real
+
+        cookie = {k.lower(): v for k, v in seen.items()}.get("cookie", "")
+        # By NAME. `grafana_session=` contains `session=`, so a substring check
+        # here passes whether or not the panel's cookie was actually dropped —
+        # which is the one thing this test exists to prove.
+        names = [part.split("=", 1)[0].strip() for part in cookie.split(";")]
+        self.assertIn("grafana_session", names)
+        self.assertNotIn(panel.app.config["SESSION_COOKIE_NAME"], names)
+        self.assertIn("grafana_session=theirs", cookie)
+
+    def test_grafana_is_told_the_prefix_the_panel_serves_it_at(self):
+        """
+        THE TWO HAVE TO AGREE. The route forwards the full path, so Grafana has
+        to be the kind of Grafana that serves there — `serve_from_sub_path`
+        without a matching `root_url` (or either one alone) gives a page whose
+        assets resolve to `/public/...`, which is the panel's origin and a 404.
+        """
+        with open(os.path.join(os.path.dirname(_ADMIN), "stacks", "monitoring.yml")) as fh:
+            monitoring = fh.read()
+        self.assertIn('GF_SERVER_SERVE_FROM_SUB_PATH: "true"', monitoring)
+        self.assertIn("/grafana/", monitoring.split("GF_SERVER_ROOT_URL:")[1]
+                      .splitlines()[0])
 
     def test_opening_a_redis_console_registers_the_database_for_you(self):
         """

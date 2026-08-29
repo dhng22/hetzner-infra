@@ -18,7 +18,10 @@ version: "3.8"
 # always service DNS on the `edge` network:
 #
 #   <app>.<root>            ->  http://<component>_app:<port>
-#   grafana-<app>.<root>    ->  http://grafana:3000
+#
+# Grafana is NOT in that list any more. It is served through the admin panel at
+# `/grafana/`, behind the session you are already signed in to, so it needs no
+# hostname of its own — see `GF_SERVER_ROOT_URL` in stacks/monitoring.yml.
 #   admin-<app>.<root>      ->  http://<master-private-ip>:3000   (host port)
 #
 # Cloudflare's free Universal SSL covers one subdomain level only, which is why

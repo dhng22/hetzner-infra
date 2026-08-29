@@ -72,6 +72,7 @@ NAV = [
     {"key": "cluster", "label": "Cluster", "endpoint": "cluster"},
     {"key": "manager", "label": "Manager", "endpoint": "manager"},
     {"key": "alerts", "label": "Alerts", "endpoint": "alerts"},
+    {"key": "grafana", "label": "Grafana", "endpoint": "grafana"},
     {"key": "storage", "label": "Storage", "endpoint": "storage"},
     {"key": "settings", "label": "Settings", "endpoint": "settings"},
 ]
@@ -1039,7 +1040,59 @@ HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authoriza
 #: rebuilt below with the panel's own cookie removed and the visualiser's kept,
 #: because the visualiser does need its own session back.
 NEVER_FORWARD = {"cookie", "authorization"}
-VIEWER_MAX_BYTES = 32 * 1024 * 1024
+PROXY_MAX_BYTES = 32 * 1024 * 1024
+
+#: Grafana, reached the same way and for the same reason. It is on `monitoring`
+#: and nothing else, so this name resolves for the panel and for nobody outside
+#: the cluster. See `grafana()` below for what this buys.
+GRAFANA_ORIGIN = "http://grafana:3000"
+
+
+def _forward(origin):
+    """
+    Hand this request to `origin` unchanged, at its own path, and stream it back.
+
+    THE PATH IS NOT OURS TO STRIP. Everything proxied here is told it lives at
+    the prefix the panel serves it under — RedisInsight by `RI_PROXY_PATH`,
+    mongo-express by `ME_CONFIG_SITE_BASEURL`, Grafana by `root_url` plus
+    `serve_from_sub_path` — and a program told that SERVES there: asking
+    RedisInsight for `/` returned `{"message":"Cannot GET /"}` while the full
+    path returned the application. The prefix is also the only thing keeping
+    their asset URLs from colliding with the panel's own `/static`.
+
+    Raises `requests.RequestException` rather than rendering its own failure:
+    a database console that is still waking up and a Grafana that is missing
+    are different problems and deserve different pages.
+    """
+    body = request.get_data(cache=False, as_text=False)
+    if len(body) > PROXY_MAX_BYTES:
+        abort(413, "That is larger than this proxy will forward.")
+    headers = {k: v for k, v in request.headers.items()
+               if k.lower() not in HOP_BY_HOP and k.lower() not in NEVER_FORWARD}
+    # Their own cookies, and only those. `SESSION_COOKIE_NAME` rather than the
+    # literal "session" so this keeps working if that is ever changed.
+    theirs = "; ".join(f"{k}={v}" for k, v in request.cookies.items()
+                       if k != app.config["SESSION_COOKIE_NAME"])
+    if theirs:
+        headers["Cookie"] = theirs
+    upstream = requests.request(
+        request.method, f"{origin}{request.path}",
+        params=request.args, data=body, headers=headers,
+        allow_redirects=False, stream=True, timeout=60)
+
+    out = Response(upstream.iter_content(chunk_size=64 * 1024),
+                   status=upstream.status_code)
+    for key, value in upstream.headers.items():
+        if key.lower() in HOP_BY_HOP:
+            continue
+        if key.lower() == "location":
+            # Drop the INTERNAL origin and keep the path — the upstream path is
+            # already ours, so re-adding the prefix here would send the browser
+            # to `/components/x/viewer/components/x/viewer`. A redirect to the
+            # public URL is left exactly as it is: that one is already correct.
+            value = value.replace(origin, "")
+        out.headers[key] = value
+    return out
 
 
 def _seed_viewer(component, service, port):
@@ -1116,45 +1169,53 @@ def component_viewer(name, sub):        # noqa: ARG001 — `sub` is the URL capt
         # else, so it does not survive being put away for idleness.
         _seed_viewer(component, service, port)
 
-    body = request.get_data(cache=False, as_text=False)
-    if len(body) > VIEWER_MAX_BYTES:
-        abort(413, "That is larger than the visualiser proxy will forward.")
-    headers = {k: v for k, v in request.headers.items()
-               if k.lower() not in HOP_BY_HOP and k.lower() not in NEVER_FORWARD}
-    # The visualiser's own cookies, and only those. `SESSION_COOKIE_NAME` rather
-    # than the literal "session" so this keeps working if that is ever changed.
-    theirs = "; ".join(f"{k}={v}" for k, v in request.cookies.items()
-                       if k != app.config["SESSION_COOKIE_NAME"])
-    if theirs:
-        headers["Cookie"] = theirs
-    # THE WHOLE PATH, not `sub`. Both consoles are told they live at this prefix
-    # — RedisInsight by `RI_PROXY_PATH`, mongo-express by `ME_CONFIG_SITE_BASEURL`
-    # — and a console told that SERVES there: stripping the prefix off and asking
-    # for `/` got `{"message":"Cannot GET /","statusCode":404}` while
-    # `/components/<name>/viewer/` got the application. The prefix is not ours to
-    # remove; it is the one thing making the console's own asset URLs land back
-    # here instead of colliding with the panel's `/static`.
     try:
-        upstream = requests.request(
-            request.method, f"http://{service}:{port}{request.path}",
-            params=request.args, data=body, headers=headers,
-            allow_redirects=False, stream=True, timeout=60)
+        return _forward(f"http://{service}:{port}")
     except requests.RequestException as exc:
         return render_template("page_viewer_wait.html", section="components",
                                component=component, detail=str(exc)), 502
 
-    out = Response(upstream.iter_content(chunk_size=64 * 1024),
-                   status=upstream.status_code)
-    for key, value in upstream.headers.items():
-        if key.lower() in HOP_BY_HOP:
-            continue
-        if key.lower() == "location":
-            # Drop the origin and keep the path. The upstream path is already
-            # ours — it is the same prefix we forwarded — so re-adding it here
-            # would send the browser to `/components/x/viewer/components/x/viewer`.
-            value = value.replace(f"http://{service}:{port}", "")
-        out.headers[key] = value
-    return out
+
+@app.route("/grafana/", defaults={"sub": ""},
+           methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+@app.route("/grafana/<path:sub>",
+           methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+@auth.login_required
+def grafana(sub):                       # noqa: ARG001 — `sub` is the URL capture
+    """
+    Grafana, behind the panel session instead of behind a public hostname.
+
+    It used to be reachable one way only: a `grafana-<app>.<root>` hostname on
+    the Cloudflare tunnel, which is a second login page on the public internet
+    guarding every metric this cluster has ever recorded. The database consoles
+    already solved this — no published port, no tunnel entry, reached only
+    through a session the operator already holds — and there was no reason
+    Grafana should be the exception.
+
+    Grafana is told it lives here (`root_url` plus `serve_from_sub_path` in
+    `stacks/monitoring.yml`), so it serves under this prefix and its own asset
+    URLs land back on this route. Its `<base href>` is the prefix and everything
+    below it is relative, which is why nothing has to be rewritten on the way
+    out.
+
+    IT STILL ASKS FOR ITS OWN LOGIN, once. Injecting the admin credential here
+    would mean mounting Grafana's docker secret into the panel to read a
+    password the panel can only write — a real widening, to save typing a
+    password a browser remembers. Its session cookie is forwarded like any
+    other, so this is once per browser, not once per visit.
+
+    `_require_csrf` is deliberately not applied, for the reason spelled out on
+    `component_viewer`: the token on a request through here is Grafana's, not
+    ours. Live-streaming panels do not work, because `Upgrade` is not forwarded
+    by anything on this route; dashboards poll and are unaffected.
+    """
+    if PREVIEW:
+        abort(400, "This is a preview build with dummy data — nothing is proxied.")
+    try:
+        return _forward(GRAFANA_ORIGIN)
+    except requests.RequestException as exc:
+        return render_template("page_grafana_down.html", section="grafana",
+                               detail=str(exc)), 502
 
 
 # --- storage ---------------------------------------------------------------
