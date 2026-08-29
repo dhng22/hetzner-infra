@@ -433,6 +433,18 @@ class RedisComponent(Component):
         quorum = SENTINEL_COUNT // 2 + 1
         conf = "\n".join([
             "port 26379",
+            # THE SENTINEL'S OWN DOOR, which is not the same door as the one
+            # below. `auth-pass` is the password sentinel uses to reach the
+            # master; `requirepass` is the one a client has to present to reach
+            # SENTINEL — and the connection string this platform publishes
+            # sends a password to the sentinel hosts, because that is what
+            # `redis+sentinel://default:<pw>@…` means. Without this line the
+            # sentinel answers that AUTH with an error, so every client that
+            # honours the published URL is refused before it can even ask where
+            # the primary is, and dataguard reads the component as having no
+            # master at all. It is also the only thing standing between
+            # `SENTINEL FAILOVER` and anything else that can reach `edge`.
+            "requirepass $$REDIS_PASSWORD",
             f"sentinel monitor {self.stack} {self.member_service(1)} 6379 {quorum}",
             f"sentinel auth-pass {self.stack} $$REDIS_PASSWORD",
             f"sentinel down-after-milliseconds {self.stack} 5000",

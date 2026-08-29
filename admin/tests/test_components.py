@@ -461,6 +461,24 @@ class ComponentTest(unittest.TestCase):
         self.assertNotIn("ports", viewer)
         self.assertEqual(viewer["deploy"]["replicas"], 0)
 
+    def test_the_sentinel_asks_for_the_password_the_url_sends_it(self):
+        """
+        `redis+sentinel://default:<pw>@…` sends the password to the SENTINEL
+        hosts, and the sentinel port had none configured — so it answered that
+        AUTH with an error and refused every client that honoured the published
+        URL before it could ask where the primary was. Dataguard read the same
+        refusal as "this component has no master".
+
+        `auth-pass` is a different door: that is how sentinel reaches the
+        master. Both lines are needed and neither substitutes for the other.
+        """
+        component = self.make_redis("c2")
+        conf = " ".join(component.render()["services"]["sentinel-1"]["command"])
+        self.assertIn("requirepass $$REDIS_PASSWORD", conf)
+        self.assertIn("sentinel auth-pass", conf)
+        self.assertTrue(component.connection_url().startswith(
+            "redis+sentinel://default:"))
+
     def test_the_mongo_visualiser_agrees_with_itself_about_tls(self):
         """
         mongo-express crash-looped on exit 1 with an empty log, and the panel
