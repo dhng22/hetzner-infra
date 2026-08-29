@@ -1042,6 +1042,31 @@ NEVER_FORWARD = {"cookie", "authorization"}
 VIEWER_MAX_BYTES = 32 * 1024 * 1024
 
 
+def _seed_viewer(component, service, port):
+    """
+    Give the console the component's own connection, so it opens on the data.
+
+    Best effort, and deliberately: a console you have to add a database to by
+    hand is a poor experience, and a 502 because this failed is a worse one.
+
+    The check is what makes it idempotent — the console is asked what it already
+    has before anything is added, so reopening it does not accumulate duplicate
+    entries of the same server.
+    """
+    wanted = component.viewer_databases()
+    if not wanted:
+        return
+    base = f"http://{service}:{port}/components/{component.name}/viewer"
+    try:
+        if requests.get(f"{base}/api/databases", timeout=10).json():
+            return
+        for database in wanted:
+            requests.post(f"{base}/api/databases", json=database, timeout=20)
+    except Exception as exc:                                     # noqa: BLE001
+        # Never the body — it holds the database password.
+        app.logger.warning("could not set up %s: %s", service, exc)
+
+
 @app.route("/components/<name>/viewer/", defaults={"sub": ""},
            methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 @app.route("/components/<name>/viewer/<path:sub>",
@@ -1081,6 +1106,15 @@ def component_viewer(name, sub):        # noqa: ARG001 — `sub` is the URL capt
         return render_template("page_viewer_wait.html", section="components",
                                component=component, detail=detail), 503
     data.touch_viewer(component.name)
+    if not sub:
+        # The landing request, and only that one. This is the request the View
+        # button makes; every asset and API call the console then fires has a
+        # non-empty `sub`, so the cost is one round trip each time you open it
+        # rather than one per resource. Doing it here rather than once at wake
+        # also means it re-asserts itself if the console was restarted
+        # underneath us — its database list lives in the container and nowhere
+        # else, so it does not survive being put away for idleness.
+        _seed_viewer(component, service, port)
 
     body = request.get_data(cache=False, as_text=False)
     if len(body) > VIEWER_MAX_BYTES:

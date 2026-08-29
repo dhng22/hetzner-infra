@@ -537,6 +537,26 @@ class RedisComponent(Component):
             },
         }
 
+    def viewer_databases(self):
+        """
+        What RedisInsight is connected to the moment you open it.
+
+        Registered through its REST API by the proxy route, because no
+        environment variable in this image can carry an authenticated
+        connection — see the note on the viewer service above. This is the same
+        call the console's own "add database" form makes.
+
+        Replica 1, not the sentinel list: the console browses ONE server, and
+        this is the one that always exists and the one writes go to while the
+        set is a single member. A sentinel-aware console would be better and
+        RedisInsight is not one.
+        """
+        return [{"name": self.name,
+                 "host": self.member_service(1),
+                 "port": 6379,
+                 "username": "default",
+                 "password": self.password()}]
+
     def render(self):
         s = self.spec
         self.ensure_password()
@@ -581,10 +601,16 @@ class RedisComponent(Component):
                 networks.append(base.MONITORING_NETWORK)
             services["viewer"] = {
                 "image": VIEWER_IMAGE,
+                # ONLY the proxy path. `RI_REDIS_HOST`, `RI_REDIS_PORT` and
+                # `RI_REDIS_PASSWORD` were here and are read by NOTHING in this
+                # image — grep the bundle and they do not appear. So the console
+                # opened on an empty "add a database" form, and the password sat
+                # in `docker service inspect` buying nothing. What this build
+                # does read is `RI_REDIS_STACK_DATABASE_*`, which applies only
+                # when RI_BUILD_TYPE is REDIS_STACK and has no password field at
+                # all, so it cannot describe a server with `requirepass` set.
+                # `viewer_databases` below is the mechanism that works.
                 "environment": {
-                    "RI_REDIS_HOST": self.member_service(1),
-                    "RI_REDIS_PORT": "6379",
-                    "RI_REDIS_PASSWORD": self.password(),
                     "RI_PROXY_PATH": f"/components/{self.name}/viewer",
                 },
                 # BOTH networks, and `monitoring` is the one that makes View

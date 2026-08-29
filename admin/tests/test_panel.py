@@ -1139,6 +1139,20 @@ class DatabasePanelTest(PanelTest):
         self.assertEqual(r.status_code, expect)
         return csrf
 
+    def make_redis_component(self, name="cache", **spec):
+        """A managed redis with a visualiser, through the real route."""
+        csrf = self.login()
+        form = {"csrf": csrf, "type": "redis", "name": name,
+                "version": "7.4-alpine", "replica_pool": "3",
+                "maxmemory_mb": "256", "maxmemory_policy": "allkeys-lru",
+                "placement_mode": "auto", "lag_budget_seconds": "10",
+                "__bool__": ["exporter", "visualizer", "dataguard", "appendonly"],
+                "visualizer": "true", "dataguard": "true"}
+        form.update(spec)
+        r = self.client.post("/components", data=form, follow_redirects=True)
+        self.assertEqual(r.status_code, 200)
+        return self.components.load(name)
+
     # --- the invariant ----------------------------------------------------
 
     def test_pinning_the_placement_turns_the_manager_off(self):
@@ -1614,6 +1628,82 @@ class DatabasePanelTest(PanelTest):
                         seen["url"])
         self.assertEqual("/components/prefixed/viewer/db/admin",
                          r.headers["Location"])
+
+    def test_opening_a_redis_console_registers_the_database_for_you(self):
+        """
+        RedisInsight opened on an empty "add a database" form.
+
+        `RI_REDIS_HOST`, `RI_REDIS_PORT` and `RI_REDIS_PASSWORD` were set on the
+        service and are read by NOTHING in that image — the only bootstrap it
+        implements is `RI_REDIS_STACK_DATABASE_*`, which applies to the bundled
+        Redis Stack build and has no password field, so it cannot describe a
+        server with `requirepass`. Its REST API can, and that is what the
+        console's own form uses.
+
+        Landing request only, and only when it has nothing yet, so reopening it
+        does not accumulate duplicates of the same server.
+        """
+        import app as panel
+        component = self.make_redis_component("consoled")
+        calls = []
+
+        class Upstream:
+            status_code = 200
+            headers = {"Content-Type": "text/html"}
+
+            @staticmethod
+            def iter_content(chunk_size=0):
+                return iter([b"<html>"])
+
+        real = (panel.requests.request, panel.requests.get, panel.requests.post,
+                panel.data.ensure_viewer)
+        panel.requests.request = lambda method, url, **kw: Upstream()
+        panel.requests.get = lambda url, **kw: type(
+            "R", (), {"json": staticmethod(lambda: [])})()
+        panel.requests.post = lambda url, **kw: calls.append(kw.get("json")) or Upstream()
+        panel.data.ensure_viewer = lambda service: (True, "")
+        try:
+            self.client.get("/components/consoled/viewer/")
+            landing = list(calls)
+            calls.clear()
+            # An asset request must NOT re-run it.
+            self.client.get("/components/consoled/viewer/assets/index.js")
+        finally:
+            (panel.requests.request, panel.requests.get, panel.requests.post,
+             panel.data.ensure_viewer) = real
+
+        self.assertEqual(1, len(landing), landing)
+        self.assertEqual("consoled_redis-1", landing[0]["host"])
+        self.assertEqual(6379, landing[0]["port"])
+        self.assertEqual(component.password(), landing[0]["password"])
+        self.assertEqual([], calls)
+
+    def test_a_console_that_already_has_the_database_is_left_alone(self):
+        """Reopening it must not add the same server a second time."""
+        import app as panel
+        self.make_redis_component("consoled2")
+        posted = []
+        real = (panel.requests.request, panel.requests.get, panel.requests.post,
+                panel.data.ensure_viewer)
+        panel.requests.request = lambda method, url, **kw: type(
+            "U", (), {"status_code": 200, "headers": {},
+                      "iter_content": staticmethod(lambda chunk_size=0: iter([b""]))})()
+        panel.requests.get = lambda url, **kw: type(
+            "R", (), {"json": staticmethod(lambda: [{"id": "already-there"}])})()
+        panel.requests.post = lambda url, **kw: posted.append(url)
+        panel.data.ensure_viewer = lambda service: (True, "")
+        try:
+            self.client.get("/components/consoled2/viewer/")
+        finally:
+            (panel.requests.request, panel.requests.get, panel.requests.post,
+             panel.data.ensure_viewer) = real
+        self.assertEqual([], posted)
+
+    def test_a_mongo_console_needs_no_registration(self):
+        """mongo-express is handed its URL and connects itself."""
+        self.make_mongo("selfconnecting")
+        self.assertEqual(
+            [], self.components.load("selfconnecting").viewer_databases())
 
     def test_the_view_button_only_appears_when_the_visualiser_is_on(self):
         self.make_mongo("withviewer")

@@ -477,6 +477,18 @@ class Component:
             out["limits"] = limits
         return out
 
+    def viewer_databases(self):
+        """
+        Connections to register in the visualiser once it has started, if any.
+
+        Most consoles need none: mongo-express is handed a URL in an environment
+        variable and connects itself. RedisInsight has no equivalent — see the
+        override on the Redis component — so it gets told through its own API
+        instead. Returning a list rather than a flag because "which server" is a
+        decision the component owns and the proxy route should not be making.
+        """
+        return []
+
     def base_labels(self):
         """Labels every component's services carry, whatever the type."""
         return {"infra.component": self.name, "infra.type": self.TYPE}
