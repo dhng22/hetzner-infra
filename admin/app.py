@@ -72,7 +72,6 @@ NAV = [
     {"key": "cluster", "label": "Cluster", "endpoint": "cluster"},
     {"key": "manager", "label": "Manager", "endpoint": "manager"},
     {"key": "alerts", "label": "Alerts", "endpoint": "alerts"},
-    {"key": "grafana", "label": "Grafana", "endpoint": "grafana"},
     {"key": "storage", "label": "Storage", "endpoint": "storage"},
     {"key": "settings", "label": "Settings", "endpoint": "settings"},
 ]
@@ -1247,7 +1246,9 @@ def grafana(sub):                       # noqa: ARG001 — `sub` is the URL capt
     try:
         return _forward(GRAFANA_ORIGIN)
     except requests.RequestException as exc:
-        return render_template("page_grafana_down.html", section="grafana",
+        # `components`, because that is the page whose Open button sent you here
+        # — Grafana has no rail entry of its own.
+        return render_template("page_grafana_down.html", section="components",
                                detail=str(exc)), 502
 
 
