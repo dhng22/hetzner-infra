@@ -192,10 +192,25 @@ services:
     # and cannot be changed in place (Swarm secrets are immutable, so the panel
     # could never edit it). The file is 0600 on the master, which is the same
     # trade every component's credentials make.
+    environment:
+      # Not read by Alertmanager. It is here so that the SERVICE SPEC changes
+      # when the mounted config does — Swarm rolls a task on a spec change and
+      # is blind to a bind mount, so without this a re-rendered config never
+      # reached the running process and alerting kept using whatever it loaded
+      # at startup. bin/stack-deploy computes it.
+      ALERTMANAGER_CONFIG_SHA: "${ALERTMANAGER_CONFIG_SHA}"
     networks: [monitoring]
     deploy:
       replicas: 1
       <<: *manager-only
+      labels:
+        # Scraped so that FAILING TO DELIVER is a number somebody can alert on.
+        # Alertmanager was the one service in the monitoring stack nothing
+        # watched, which is how a notifier that had been answering 401 for two
+        # days looked exactly like a quiet cluster.
+        prometheus.scrape: "true"
+        prometheus.port: "9093"
+        prometheus.path: "/metrics"
       resources:
         reservations: { cpus: "0.02", memory: 32M }
 

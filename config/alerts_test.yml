@@ -536,6 +536,34 @@ tests:
         alertname: ThrottledByUnownedDependency
         exp_alerts: []
 
+  # --- AlertDeliveryFailing -----------------------------------------------
+  # A notifier answering 401 on every attempt. This is the two days of silence
+  # the rule was written for.
+  - interval: 1m
+    input_series:
+      - series: 'alertmanager_notifications_failed_total{integration="telegram"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: AlertDeliveryFailing
+        exp_alerts:
+          - exp_labels: { severity: critical, integration: telegram }
+            exp_annotations:
+              summary: "alerts are NOT being delivered — telegram is rejecting them"
+              description: "Alertmanager has failed to deliver a notification for fifteen minutes. Every other alert in this cluster is being raised and discarded at the last hop. The usual cause is a credential the destination has since revoked: check `docker service logs monitoring_alertmanager` for the reply the provider actually gave, then re-enter the target under Alerts > Targets, which re-tests it and rolls Alertmanager onto the new config."
+
+  # Delivering normally: the counter never moves, and silence is correct. A flat
+  # counter rather than an absent one, so the rule is shown to read the RATE and
+  # not merely the presence of the series.
+  - interval: 1m
+    input_series:
+      - series: 'alertmanager_notifications_failed_total{integration="telegram"}'
+        values: '7x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: AlertDeliveryFailing
+        exp_alerts: []
+
   # --- OverseerSilent -----------------------------------------------------
   # Nothing arriving: the safe failure, made visible.
   - interval: 1m

@@ -244,6 +244,33 @@ groups:
       # it. But it is INVISIBLE from the outside: a cluster nobody is scaling
       # looks exactly like a cluster nothing is happening to. This rule is what
       # makes the safe failure a noticed one.
+      # THE ALERT ABOUT THE ALERTS, and the reason it exists is the failure it
+      # is named for: a bot token was revoked, Alertmanager answered 401 on
+      # every notification for two days, and nothing anywhere said so. Every
+      # other rule in this file was firing correctly the whole time and being
+      # dropped on the floor at the last hop.
+      #
+      # It cannot reach you through the channel it is reporting on — that is the
+      # nature of it. It is here to be VISIBLE: on the panel's Alerts tab, in
+      # Grafana, and in `smoke-test`. The other half of the answer is the
+      # Watchdog's silence, which is the only signal that survives the notifier
+      # being broken, and which nobody notices for a day.
+      - alert: AlertDeliveryFailing
+        expr: increase(alertmanager_notifications_failed_total[15m]) > 0
+        for: 15m
+        labels: { severity: critical }
+        annotations:
+          summary: "alerts are NOT being delivered — {{ $labels.integration }} is rejecting them"
+          description: >-
+            Alertmanager has failed to deliver a notification for fifteen
+            minutes. Every other alert in this cluster is being raised and
+            discarded at the last hop. The usual cause is a credential the
+            destination has since revoked: check
+            `docker service logs monitoring_alertmanager` for the reply the
+            provider actually gave, then re-enter the target under
+            Alerts > Targets, which re-tests it and rolls Alertmanager onto the
+            new config.
+
       - alert: OverseerSilent
         expr: autoscaler_services_awaiting_dispatch > 0
         for: 10m

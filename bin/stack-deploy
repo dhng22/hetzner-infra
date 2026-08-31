@@ -109,6 +109,24 @@ if [ "$stack" = "monitoring" ]; then
   # when bumping the pin in stacks/monitoring.yml.
   chown 0:65534 "$INFRA_DIR/config/alertmanager.yml"
   chmod 640 "$INFRA_DIR/config/alertmanager.yml"
+
+  # WHAT MAKES THE NEW CONFIG ACTUALLY RUN.
+  #
+  # Swarm restarts a task when its SPEC changes, and a bind-mounted file is not
+  # part of the spec. So rendering a new alertmanager.yml and running `docker
+  # stack deploy` was a no-op for the one service that had to notice: the file
+  # on disk was correct, `docker service inspect` was correct, and the process
+  # went on serving the config it read at startup. Alerting was pointed at a
+  # destination that had been replaced days earlier, and every surface a person
+  # would check to find that out agreed with the change rather than with the
+  # process.
+  #
+  # Putting the config's own digest in the environment makes the spec change
+  # exactly when the config does, so the task rolls when — and only when —
+  # there is something new to read.
+  ALERTMANAGER_CONFIG_SHA="$(sha256sum "$INFRA_DIR/config/alertmanager.yml" \
+    | cut -c1-16)"
+  export ALERTMANAGER_CONFIG_SHA
 fi
 
 echo "deploying $stack"
