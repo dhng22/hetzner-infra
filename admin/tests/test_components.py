@@ -469,23 +469,38 @@ class ComponentTest(ComponentCase):
         self.assertNotIn("ports", viewer)
         self.assertEqual(viewer["deploy"]["replicas"], 0)
 
-    def test_the_sentinel_asks_for_the_password_the_url_sends_it(self):
+    def test_the_sentinel_takes_no_password_because_no_client_can_send_one(self):
         """
-        `redis+sentinel://default:<pw>@…` sends the password to the SENTINEL
-        hosts, and the sentinel port had none configured — so it answered that
-        AUTH with an error and refused every client that honoured the published
-        URL before it could ask where the primary was. Dataguard read the same
+        The sentinel had `requirepass` for exactly one deploy, on the theory that
+        `redis+sentinel://default:<pw>@…` sends that password to the sentinel
+        hosts. It does not. Lettuce, redis-py, ioredis and go-redis all read the
+        userinfo password as the DATA NODE's and none of them offers a way to put
+        the sentinel's in a URL, so the string this panel publishes had no place
+        to carry one — and every client that honoured it was refused with
+        "NOAUTH HELLO must be called with the client already authenticated"
+        before it could ask where the primary was. Dataguard read the same
         refusal as "this component has no master".
 
-        `auth-pass` is a different door: that is how sentinel reaches the
-        master. Both lines are needed and neither substitutes for the other.
+        `auth-pass` is a different door and stays: that is how the sentinel
+        reaches the master, and nothing about it is visible to a client.
         """
         component = self.make_redis("c2")
         conf = " ".join(component.render()["services"]["sentinel-1"]["command"])
-        self.assertIn("requirepass $$REDIS_PASSWORD", conf)
+        self.assertNotIn("requirepass", conf)
         self.assertIn("sentinel auth-pass", conf)
         self.assertTrue(component.connection_url().startswith(
             "redis+sentinel://default:"))
+
+    def test_the_data_nodes_still_take_a_password(self):
+        """
+        The pair to the test above, and the reason it is safe. Dropping auth at
+        the sentinel gave up the failover verbs, not the data: a member without
+        `requirepass` would be an open Redis on a network every application can
+        reach.
+        """
+        member = " ".join(self.make_redis("c2").render()["services"]["redis-1"]["command"])
+        self.assertIn("--requirepass", member)
+        self.assertIn("--masterauth", member)
 
     def test_the_mongo_visualiser_agrees_with_itself_about_tls(self):
         """

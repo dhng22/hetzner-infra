@@ -744,9 +744,13 @@ def engine_for(component):
     sentinels = [(f"{component.name}_sentinel-{i}", 26379) for i in running]
 
     def sentinel():
-        return Sentinel(sentinels, socket_timeout=5.0,
-                        sentinel_kwargs={"password": password},
-                        password=password)
+        # `password` is the DATA NODE's, and there is deliberately no
+        # `sentinel_kwargs={"password": ...}` beside it: the sentinels take no
+        # password of their own (see the sentinel config in
+        # `admin/components/redis.py`), and redis-py sending an AUTH they never
+        # asked for is refused with "Client sent AUTH, but no password is set",
+        # which reads here as a component with no master at all.
+        return Sentinel(sentinels, socket_timeout=5.0, password=password)
     return engines.RedisEngine(sentinel, component.set_name)
 
 

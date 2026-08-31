@@ -318,7 +318,13 @@ class RedisComponent(Component):
                 "client.",
                 "ioredis and Lettuce want the parts rather than the URL: "
                 f"sentinels={self.sentinel_hosts()}, name=\"{self.stack}\", "
-                "and the same password for both the sentinels and the servers.",
+                "and this password.",
+                "THE SENTINELS THEMSELVES TAKE NO PASSWORD; the one above is the "
+                "server's. That is not a gap left open by accident — no client "
+                "reads a sentinel password out of a sentinel URL, so requiring "
+                "one would make the string above unusable in every language. "
+                "Reaching the sentinels means being on this cluster's private "
+                "network already.",
             ],
         }
 
@@ -439,18 +445,30 @@ class RedisComponent(Component):
         quorum = SENTINEL_COUNT // 2 + 1
         conf = "\n".join([
             "port 26379",
-            # THE SENTINEL'S OWN DOOR, which is not the same door as the one
-            # below. `auth-pass` is the password sentinel uses to reach the
-            # master; `requirepass` is the one a client has to present to reach
-            # SENTINEL — and the connection string this platform publishes
-            # sends a password to the sentinel hosts, because that is what
-            # `redis+sentinel://default:<pw>@…` means. Without this line the
-            # sentinel answers that AUTH with an error, so every client that
-            # honours the published URL is refused before it can even ask where
-            # the primary is, and dataguard reads the component as having no
-            # master at all. It is also the only thing standing between
-            # `SENTINEL FAILOVER` and anything else that can reach `edge`.
-            "requirepass $$REDIS_PASSWORD",
+            # NO `requirepass` HERE, AND IT IS NOT AN OVERSIGHT. It was tried
+            # and it broke every client. `auth-pass` below is the password
+            # sentinel presents to the MASTER, which is a different door from
+            # the one a client knocks on to ask sentinel where the master is.
+            #
+            # The password in `redis+sentinel://default:<pw>@…` is the DATA
+            # NODE's, in every client that reads such a URL — Lettuce, redis-py,
+            # ioredis, go-redis all agree on that and none of them sends it to
+            # the sentinel hosts. A sentinel password is a separate field none
+            # of them will read out of a URL (Lettuce needs
+            # `RedisURI.getSentinels()` mutated by hand). So a platform cannot
+            # publish one working string AND require sentinel auth; asking for
+            # both is how the last deploy left every client stuck on
+            # `NOAUTH HELLO must be called with the client already authenticated`
+            # and dataguard reading the component as having no master at all.
+            #
+            # What that gives up, exactly: anything already on `edge` can call
+            # `SENTINEL FAILOVER`. It cannot read or write a key — the data
+            # nodes keep `requirepass` and `masterauth` — and anything on `edge`
+            # is an application container that already holds a database password
+            # of its own. Redis ACLs could keep the failover verbs behind auth
+            # while leaving discovery open, but the same `default` user is what
+            # sentinels use to gossip with each other, and a mistake there is a
+            # split brain rather than an error message.
             f"sentinel monitor {self.stack} {self.member_service(1)} 6379 {quorum}",
             f"sentinel auth-pass {self.stack} $$REDIS_PASSWORD",
             f"sentinel down-after-milliseconds {self.stack} 5000",

@@ -2129,7 +2129,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-31T11:07:04Z" data-localtime>2026-08-31T11:07:04Z</time>
+          <time datetime="2026-08-31T14:54:20Z" data-localtime>2026-08-31T14:54:20Z</time>
           
         </div>
       </div>
@@ -3463,7 +3463,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-31T11:07:04Z" data-localtime>2026-08-31T11:07:04Z</time>
+          <time datetime="2026-08-31T14:54:20Z" data-localtime>2026-08-31T14:54:20Z</time>
           
         </div>
       </div>
@@ -4710,7 +4710,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-31T11:07:04Z" data-localtime>2026-08-31T11:07:04Z</time>
+          <time datetime="2026-08-31T14:54:20Z" data-localtime>2026-08-31T14:54:20Z</time>
           
         </div>
       </div>
@@ -4729,7 +4729,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <button class="btn btn-sm" type="button" data-copy
                   data-copy-text="cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379">Copy</button>
         </div>
-        <p class="hint">These are the SENTINELS, and they are what your client should be given, with master name `cache`. Reachable from any component on the edge network. Do not put this behind the tunnel — the tunnel speaks HTTP.</p>
+        <p class="hint">These are the same hosts the connection string on the Credentials tab names, in the same order — this box leaves out the scheme, the password and the options because it is not behind a reveal, and the Overview tab must not put a password on screen. Connect with the string, not with this; this is here for a client that wants the hosts as a list rather than as a URL. These are the SENTINELS, and they are what your client should be given, with master name `cache`. Reachable from any component on the edge network. Do not put this behind the tunnel — the tunnel speaks HTTP.</p>
       </div>
     </section>
     
@@ -4907,9 +4907,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis+sentinel://default:aed1a1bed59788efb64b73ecc5861a2a25303d7f2e8cc573@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
+              <code>redis+sentinel://default:ced64e2ea72e04155838c02c1b8c572c2ccd4e0ba988c64e@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis+sentinel://default:aed1a1bed59788efb64b73ecc5861a2a25303d7f2e8cc573@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
+                      data-copy-text="redis+sentinel://default:ced64e2ea72e04155838c02c1b8c572c2ccd4e0ba988c64e@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -4920,7 +4920,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="aed1a1bed59788efb64b73ecc5861a2a25303d7f2e8cc573">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="ced64e2ea72e04155838c02c1b8c572c2ccd4e0ba988c64e">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -4946,9 +4946,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="panel-body stack">
           
           <div class="conn">
-            <code>redis://default:aed1a1bed59788efb64b73ecc5861a2a25303d7f2e8cc573@10.0.0.2:46379</code>
+            <code>redis://default:ced64e2ea72e04155838c02c1b8c572c2ccd4e0ba988c64e@10.0.0.2:46379</code>
             <button class="btn btn-sm" type="button" data-copy
-                    data-copy-text="redis://default:aed1a1bed59788efb64b73ecc5861a2a25303d7f2e8cc573@10.0.0.2:46379">Copy</button>
+                    data-copy-text="redis://default:ced64e2ea72e04155838c02c1b8c572c2ccd4e0ba988c64e@10.0.0.2:46379">Copy</button>
           </div>
           <div class="table-wrap">
             <table>
@@ -5750,7 +5750,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-31T11:07:04Z" data-localtime>2026-08-31T11:07:04Z</time>
+          <time datetime="2026-08-31T14:54:20Z" data-localtime>2026-08-31T14:54:20Z</time>
           
         </div>
       </div>
@@ -5769,7 +5769,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <button class="btn btn-sm" type="button" data-copy
                   data-copy-text="documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017">Copy</button>
         </div>
-        <p class="hint">Every member is reachable from any component on the edge network by these names, whether it exists yet or not — the driver ignores the ones it cannot resolve. Do not put this behind the tunnel; the tunnel speaks HTTP.</p>
+        <p class="hint">These are the same hosts the connection string on the Credentials tab names, in the same order — this box leaves out the scheme, the password and the options because it is not behind a reveal, and the Overview tab must not put a password on screen. Connect with the string, not with this; this is here for a client that wants the hosts as a list rather than as a URL. Every member is reachable from any component on the edge network by these names, whether it exists yet or not — the driver ignores the ones it cannot resolve. Do not put this behind the tunnel; the tunnel speaks HTTP.</p>
       </div>
     </section>
     
@@ -5935,9 +5935,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>mongodb://root:1736325010405a035207fe6563b656c8c584c7233852658f@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
+              <code>mongodb://root:63838a8ec16d83188535aecb3573a3304c08c35a0f33662d@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:1736325010405a035207fe6563b656c8c584c7233852658f@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
+                      data-copy-text="mongodb://root:63838a8ec16d83188535aecb3573a3304c08c35a0f33662d@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -5948,7 +5948,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="1736325010405a035207fe6563b656c8c584c7233852658f">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="63838a8ec16d83188535aecb3573a3304c08c35a0f33662d">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -10019,7 +10019,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788170824.671881" data-localtime-epoch>1788170824</time>
+              <time datetime="1788184460.071302" data-localtime-epoch>1788184460</time>
             
           </td>
           <td>
@@ -10703,7 +10703,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788170824.671881" data-localtime-epoch>1788170824</time>
+              <time datetime="1788184460.071302" data-localtime-epoch>1788184460</time>
             
           </td>
           <td>

@@ -453,6 +453,23 @@ class MongoComponent(Component):
             "adds `tlsCAFile=` pointing at wherever it saved it. The external "
             "URL leaves that option out precisely because only you know that "
             "path.",
+            "THE JAVA DRIVER IS THE EXCEPTION, and it fails quietly. It does not "
+            "implement `tlsCAFile` — it logs \"Connection string contains "
+            "unsupported option 'tlscafile'\" at WARN, uses the JVM's own trust "
+            "store instead, and every operation then fails with \"PKIX path "
+            "building failed\". Java's equivalent is an SSLContext on the client: "
+            "load this CA into a KeyStore, hand it to MongoClientSettings via "
+            "applyToSslSettings, and do NOT set -Djavax.net.ssl.trustStore, which "
+            "would replace trust for the whole process.",
+            "A JAVA CLIENT ALSO HAS TO ALLOW THE HOST NAME. Swarm names every "
+            "service `<stack>_<service>`, and the JDK rejects a host name "
+            "containing an underscore before it reads the certificate at all "
+            f"(\"Illegal given domain name: {self.member_service(1)}\"), even "
+            "though that exact name is in the certificate. Set "
+            "invalidHostNameAllowed on the same SSL settings. It gives up less "
+            "than it sounds: this authority signs nothing but this component's "
+            "own members, so a chain that validates already proves the peer is "
+            "one of them.",
         ]
         if self.spec.get("secondary_reads"):
             notes.append(
