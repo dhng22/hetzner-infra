@@ -207,6 +207,47 @@ def action(run, label, confirm=None, tone="", when=None):
     return {"run": run, "label": label, "confirm": confirm, "tone": tone, "when": when}
 
 
+#: A component's certificate authority, as Swarm names it. Anything matching
+#: this IS a component CA — the name is the registry, so nothing has to keep a
+#: second list of which components issue certificates.
+_CA_SECRET_RE = re.compile(r"^(?P<component>.+)-tls-ca-v(?P<version>\d+)$")
+
+
+def tls_ca_secrets():
+    """
+    Every component authority currently in the cluster: {component: secret}.
+
+    Read from Docker rather than from disk, for the same reason `secret_name`
+    is: dataguard can issue a new version between two deploys, and a stack that
+    referenced the remembered name would fail to deploy against a secret that no
+    longer exists.
+    """
+    newest = {}
+    for line in docker_out(["secret", "ls", "--format", "{{.Name}}"]).splitlines():
+        found = _CA_SECRET_RE.match(line.strip())
+        if not found:
+            continue
+        component = found.group("component")
+        version = int(found.group("version"))
+        if version >= newest.get(component, (0, ""))[0]:
+            newest[component] = (version, found.group(0))
+    return {name: secret for name, (_, secret) in newest.items()}
+
+
+def ca_file_for(component_name):
+    """
+    Where a CLIENT finds that component's authority, in any container that
+    mounts it. One path, chosen once: it is written into the connection string
+    the panel publishes, so every consumer — the component's own exporter, its
+    console, and an application on the edge network — satisfies it the same way.
+
+    Named after the component rather than a bare `ca.crt` because an application
+    talking to two databases mounts two of these, and two files cannot share one
+    target.
+    """
+    return f"/run/secrets/{component_name}-ca.crt"
+
+
 class Component:
     """Subclasses set TYPE/LABEL/BLURB and implement fields() and render()."""
 
@@ -428,6 +469,29 @@ class Component:
                 "created_at": self.created_at, "spec": dict(self.spec)}
 
     # --- rendering ----------------------------------------------------------
+
+    def secret_versions(self, suffix):
+        prefix = f"{self.name}-{suffix}-v"
+        out = []
+        for line in docker_out(["secret", "ls", "--format", "{{.Name}}"]).splitlines():
+            line = line.strip()
+            if line.startswith(prefix):
+                try:
+                    out.append((int(line[len(prefix):]), line))
+                except ValueError:
+                    continue
+        return sorted(out)
+
+    def secret_name(self, suffix):
+        """
+        The newest existing version of one of this component's Swarm secrets.
+
+        Read from Docker rather than remembered, because dataguard creates new
+        versions during a renewal and this file must render whatever is current —
+        the same reason the running image and replica count are read back.
+        """
+        versions = self.secret_versions(suffix)
+        return versions[-1][1] if versions else f"{self.name}-{suffix}-v1"
 
     def render(self):
         raise NotImplementedError

@@ -377,6 +377,21 @@ class MongoComponent(Component):
         hosts = f"{host}:{port or 27017}" if host else ",".join(self.seed_hosts())
         options = [f"replicaSet={self.stack}", "authSource=admin", "tls=true",
                    "retryWrites=true", "w=majority", "readConcernLevel=majority"]
+        if not host:
+            # The authority is this component's own, so nothing can verify it
+            # from the public root store — which is why every consumer needed a
+            # workaround of its own and an application handed this string got
+            # nothing but "self-signed certificate in certificate chain".
+            # Naming the file IN the string is what makes it work by
+            # construction: `tlsCAFile` is a driver option, so pymongo, the Node
+            # driver and mongosh all honour it, and the panel mounts the
+            # authority at this exact path in every container that needs it.
+            #
+            # In-cluster only. A client OUTSIDE the cluster downloads the
+            # authority from the Credentials tab and puts it where it likes, so
+            # a path inside a container it will never run in would be a string
+            # that cannot be pasted anywhere.
+            options.insert(3, f"tlsCAFile={base.ca_file_for(self.name)}")
         if self.spec.get("secondary_reads"):
             # maxStalenessSeconds is the DRIVER's own guard and cannot go below
             # 90 by protocol. Dataguard's lag budget is the tight one — it hides
@@ -389,7 +404,12 @@ class MongoComponent(Component):
         port = self.spec.get("external_port")
         return {
             "password": self.password(),
-            "internal_host": self.member_service(1),
+            # Derived from the SAME list the URL is built from, so the two can
+            # never disagree. It used to name only the first member, while the URL beside it and
+            # the "How to reach it" panel both named all of them — one component
+            # described three different ways on one page.
+            "internal_host": ", ".join(h.rsplit(":", 1)[0]
+                                       for h in self.seed_hosts()),
             "internal_port": "27017",
             "internal_url": self.connection_url(),
             "external_port": port,
@@ -423,8 +443,16 @@ class MongoComponent(Component):
             "resolve and discovers the real set from the ones it can, which is what "
             "lets this database move onto its own machines without you changing "
             "anything.",
-            "TLS is required. A client outside the cluster needs the CA certificate "
-            "above; one inside it gets the same file mounted already.",
+            "TLS is required, and the string above already names the authority "
+            "file, so an application on the edge network needs nothing added to "
+            "it. That file is mounted into every application component in this "
+            "cluster — but only as of its next deploy, so an app that was "
+            "running before this database existed has to be redeployed once "
+            "before it can connect.",
+            "A client OUTSIDE the cluster downloads the CA certificate below and "
+            "adds `tlsCAFile=` pointing at wherever it saved it. The external "
+            "URL leaves that option out precisely because only you know that "
+            "path.",
         ]
         if self.spec.get("secondary_reads"):
             notes.append(
@@ -524,29 +552,6 @@ class MongoComponent(Component):
     @staticmethod
     def cluster_name():
         return os.environ.get("APP_NAME", "cluster")
-
-    def secret_versions(self, suffix):
-        prefix = f"{self.name}-{suffix}-v"
-        out = []
-        for line in base.docker_out(["secret", "ls", "--format", "{{.Name}}"]).splitlines():
-            line = line.strip()
-            if line.startswith(prefix):
-                try:
-                    out.append((int(line[len(prefix):]), line))
-                except ValueError:
-                    continue
-        return sorted(out)
-
-    def secret_name(self, suffix):
-        """
-        The newest existing version of one of this component's Swarm secrets.
-
-        Read from Docker rather than remembered, because dataguard creates new
-        versions during a renewal and this file must render whatever is current —
-        the same reason the running image and replica count are read back.
-        """
-        versions = self.secret_versions(suffix)
-        return versions[-1][1] if versions else f"{self.name}-{suffix}-v1"
 
     def _ensure_secret(self, suffix, payload, replace=False):
         """
@@ -769,7 +774,7 @@ class MongoComponent(Component):
                 # member it was pointed at when it started.
                 "environment": {"MONGODB_URI": self.connection_url()},
                 "secrets": [{"source": self.secret_name("tls-ca"),
-                             "target": "tls-ca.crt", "mode": 0o444}],
+                             "target": f"{self.name}-ca.crt", "mode": 0o444}],
                 "networks": [base.EDGE_NETWORK, base.MONITORING_NETWORK],
                 "logging": self.loki_logging(),
                 "deploy": {
@@ -824,7 +829,7 @@ class MongoComponent(Component):
                 "environment": {"PBM_MONGODB_URI": uri},
                 "volumes": [f"{self.name}-{index}-data:/data/db"],
                 "secrets": [{"source": self.secret_name("tls-ca"),
-                             "target": "tls-ca.crt", "mode": 0o444}],
+                             "target": f"{self.name}-ca.crt", "mode": 0o444}],
                 "networks": [base.EDGE_NETWORK],
                 "logging": self.loki_logging(),
                 "deploy": {
@@ -846,7 +851,7 @@ class MongoComponent(Component):
             "command": ["sh", "-c", "exec sleep infinity"],
             "environment": {"PBM_MONGODB_URI": uri},
             "secrets": [{"source": self.secret_name("tls-ca"),
-                         "target": "tls-ca.crt", "mode": 0o444}],
+                         "target": f"{self.name}-ca.crt", "mode": 0o444}],
             "networks": [base.EDGE_NETWORK],
             "logging": self.loki_logging(),
             "deploy": {
@@ -888,7 +893,7 @@ class MongoComponent(Component):
                 # the driver stopped reading two major versions ago, so the CA
                 # is given to Node itself instead — the one place both the
                 # console and its driver are guaranteed to look.
-                "NODE_EXTRA_CA_CERTS": "/run/secrets/tls-ca.crt",
+                "NODE_EXTRA_CA_CERTS": base.ca_file_for(self.name),
                 # Its own auth is off ON PURPOSE. Two passwords for one door is
                 # one password nobody rotates; the door is the panel's session,
                 # and the service has no published port for anything else to
@@ -907,7 +912,7 @@ class MongoComponent(Component):
                 "ME_CONFIG_SITE_BASEURL": f"/components/{self.name}/viewer/",
             },
             "secrets": [{"source": self.secret_name("tls-ca"),
-                         "target": "tls-ca.crt", "mode": 0o444}],
+                         "target": f"{self.name}-ca.crt", "mode": 0o444}],
             # BOTH networks, and `monitoring` is the one that makes View work.
             # `edge` is where the database is; `monitoring` is where the PANEL
             # is, and the panel proxying to a name it cannot resolve is a 502

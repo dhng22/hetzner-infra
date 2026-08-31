@@ -1091,6 +1091,92 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(written, {"MIN_WORKERS": "3"})
 
 
+    # --- deployments and logs ----------------------------------------------
+
+    def test_the_deploy_button_does_not_wait_for_the_rollout(self):
+        """
+        It called the ATTACHED update, which waits for the whole rollout —
+        parallelism x (monitor + delay) x replicas, minutes even for two
+        replicas. This panel is served through Cloudflare, whose 100-second
+        origin timeout cannot be raised, so the button returned a 524 error
+        page every time while the deploy it was reporting on went on to
+        succeed. That is what "manual deploy is not working" was: it worked,
+        and said it had not.
+
+        The webhook was fixed for exactly this reason and the button was left
+        behind, so this asserts the button takes the same path.
+        """
+        csrf, _ = self.create_app("deployer")
+        called = []
+        real_sync = self.panel.data.deploy_image
+        real_async = self.panel.data.deploy_image_async
+        self.panel.data.deploy_image = lambda service, image: (
+            called.append(("blocking", service, image)) or (True, ""))
+        self.panel.data.deploy_image_async = lambda service, image: (
+            called.append(("detached", service, image)) or (True, "accepted"))
+        try:
+            r = self.client.post("/components/deployer/action", data={
+                "csrf": csrf, "action": "deploy-image",
+                "image": "ghcr.io/you/app:sha-beef123"})
+        finally:
+            self.panel.data.deploy_image = real_sync
+            self.panel.data.deploy_image_async = real_async
+
+        self.assertEqual(302, r.status_code)
+        self.assertEqual([c[0] for c in called], ["detached"])
+        self.assertEqual(called[0][2], "ghcr.io/you/app:sha-beef123")
+
+    def test_an_accepted_deploy_is_recorded_as_pending_not_done(self):
+        """
+        A detached update returns as soon as Swarm accepts it. Recording DONE
+        there would be a green tick for a rollout that can still roll back —
+        the exact lie the webhook's status model exists to remove.
+        """
+        csrf, _ = self.create_app("pendings")
+        real = self.panel.data.deploy_image_async
+        self.panel.data.deploy_image_async = lambda service, image: (True, "accepted")
+        try:
+            self.client.post("/components/pendings/action", data={
+                "csrf": csrf, "action": "deploy-image",
+                "image": "ghcr.io/you/app:sha-cafe456"})
+        finally:
+            self.panel.data.deploy_image_async = real
+        last = self.panel.state.history("pendings")[0]
+        self.assertEqual(last["status"], self.panel.state.PENDING)
+        self.assertEqual(last["source"], "panel")
+
+    def test_the_logs_tab_asks_for_the_depth_you_picked(self):
+        self.create_app("noisy")
+        asked = []
+        real = self.panel.data.logs
+        self.panel.data.logs = lambda service, lines=200: (
+            asked.append(lines) or "a line")
+        try:
+            self.client.get("/components/noisy?tab=logs")
+            self.client.get("/components/noisy?tab=logs&lines=1000")
+            # Not on the list, and not a number at all: both fall back rather
+            # than reaching Loki with whatever was in the query string.
+            self.client.get("/components/noisy?tab=logs&lines=999999")
+            self.client.get("/components/noisy?tab=logs&lines=drop+table")
+        finally:
+            self.panel.data.logs = real
+        self.assertEqual(asked, [200, 1000, 200, 200])
+
+    def test_the_logs_tab_offers_every_depth_it_accepts(self):
+        """A choice the form offers and the route refuses is a dead control."""
+        self.create_app("optioned")
+        real = self.panel.data.logs
+        self.panel.data.logs = lambda service, lines=200: "a line"
+        try:
+            page = self.client.get(
+                "/components/optioned?tab=logs&lines=500").get_data(as_text=True)
+        finally:
+            self.panel.data.logs = real
+        for choice in self.panel.LOG_LINE_CHOICES:
+            self.assertIn(f'value="{choice}"', page)
+        self.assertIn('value="500" selected', page)
+
+
 class DatabasePanelTest(PanelTest):
     """
     The surfaces the database work added: the placement/manager invariant, the

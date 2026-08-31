@@ -160,6 +160,23 @@ def _section_href(item):
     return url_for(next(n["endpoint"] for n in NAV if n["key"] == item["key"]))
 
 
+#: How many log lines the Logs tab may ask for. An ALLOW-LIST rather than a
+#: range: the value is handed to Loki as a limit and to `docker service logs`
+#: as `--tail`, and a number the user picks is not a number either of them has
+#: to be protected from guessing about.
+LOG_LINE_CHOICES = (100, 200, 500, 1000, 2000)
+LOG_LINES_DEFAULT = 200
+
+
+def _log_lines():
+    """The requested log depth, or the default for anything not on the list."""
+    try:
+        want = int(request.args.get("lines", LOG_LINES_DEFAULT))
+    except (TypeError, ValueError):
+        return LOG_LINES_DEFAULT
+    return want if want in LOG_LINE_CHOICES else LOG_LINES_DEFAULT
+
+
 def _component_href(name, tab=None):
     kwargs = {"name": name}
     if tab:
@@ -541,7 +558,9 @@ def component_detail(name):
     # Credentials tabs came to render blank while their data was one URL away.
     extra = {}
     if tab == "logs":
-        extra["logs"] = data.logs(component.service)
+        extra["log_lines"] = _log_lines()
+        extra["log_line_choices"] = LOG_LINE_CHOICES
+        extra["logs"] = data.logs(component.service, extra["log_lines"])
     if tab == "deployments":
         extra["webhook"] = webhook_for(name)
         extra["deployments"], extra["rollout"] = data.deployments(name, component.service)
@@ -680,11 +699,23 @@ def component_action(name):
         if problem:
             flash(problem, "bad")
             return redirect(_component_href(name, "deployments"))
-        ok, output = data.deploy_image(component.service, image)
+        # Detached, for the same reason the CI webhook is: an attached update
+        # waits for the whole rollout — parallelism x (monitor + delay) x
+        # replicas, minutes even for two replicas — and this panel is served
+        # through Cloudflare, whose 100-second origin timeout is not
+        # configurable. The waiting call could not answer in time, so the button
+        # returned a 524 error page while the deploy it was reporting on went on
+        # to succeed. That is what "manual deploy does not work" was.
+        #
+        # The verdict is not lost, only moved: it is PENDING here, and the
+        # "Currently running" panel on this same tab reads Swarm's own rollout
+        # state, which is the answer the attached call used to block for.
+        ok, output = data.deploy_image_async(component.service, image)
         state.record(name, image, "panel", ok, output,
-                     status=state.DONE if ok else state.FAILED,
+                     status=None if ok else state.FAILED,
                      actor=auth.current_user() or "")
-        flash(output or ("Deployed." if ok else "Failed."), "ok" if ok else "bad")
+        flash(output or ("Deploying. Swarm is rolling it out — this tab shows how "
+                         "it ends." if ok else "Failed."), "ok" if ok else "bad")
         return redirect(_component_href(name, "deployments"))
 
     chosen = component.actions().get(verb)

@@ -293,7 +293,13 @@ class RedisComponent(Component):
         port = self.spec.get("external_port")
         return {
             "password": self.password(),
-            "internal_host": ",".join(self.sentinel_hosts()),
+            # Derived from the SAME list the URL is built from, so the two can
+            # never disagree. It used to name each sentinel with its port already attached, beside a
+            # Port row repeating it, while the URL beside it and
+            # the "How to reach it" panel both named the hosts alone — one component
+            # described three different ways on one page.
+            "internal_host": ", ".join(h.rsplit(":", 1)[0]
+                                       for h in self.sentinel_hosts()),
             "internal_port": "26379",
             "internal_url": self.connection_url(),
             "external_port": port,

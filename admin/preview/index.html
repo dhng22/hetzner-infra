@@ -1817,7 +1817,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
         <span class="v num">1/1</span>
       </span>
       
-      <a class="btn btn-sm" href="https://grafana-aichat.acme.dev" target="_blank" rel="noopener">Open</a>
+      <a class="btn btn-sm" href="/grafana/" target="_blank" rel="noopener">Open</a>
       
       <span class="pill ok">healthy</span>
     </div>
@@ -2129,7 +2129,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-29T01:48:14Z" data-localtime>2026-08-29T01:48:14Z</time>
+          <time datetime="2026-08-31T11:07:04Z" data-localtime>2026-08-31T11:07:04Z</time>
           
         </div>
       </div>
@@ -3335,6 +3335,15 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         <h2>Logs</h2>
         <span class="spacer"></span>
         <span class="muted mono">api_app</span>
+        
+        <form method="get" action="#view-component-api" class="inline-form">
+          <input type="hidden" name="tab" value="logs">
+          <label class="sr-only" for="log-lines">Lines</label>
+          <select id="log-lines" name="lines">
+            
+          </select>
+          <button class="btn btn-sm" type="submit">Show</button>
+        </form>
       </div>
       <div class="panel-body">
         <pre class="logs">2026-08-12T14:02:11.881Z INFO  [main] com.acme.aichat.Application - Ktor started on 0.0.0.0:8080
@@ -3346,8 +3355,8 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
 2026-08-12T14:09:55.771Z INFO  [eventLoop-5] com.acme.aichat.Health - ok
 </pre>
         <p class="hint">
-          The last 200 lines, straight from the daemon. Everything is also in Loki —
-          use Grafana for search, filters and anything older than this.
+          The last  lines, newest at the bottom. Everything is also in
+          Loki — use Grafana for search, filters and anything older than this.
         </p>
       </div>
     </section>
@@ -3454,7 +3463,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-29T01:48:14Z" data-localtime>2026-08-29T01:48:14Z</time>
+          <time datetime="2026-08-31T11:07:04Z" data-localtime>2026-08-31T11:07:04Z</time>
           
         </div>
       </div>
@@ -4575,6 +4584,15 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <h2>Logs</h2>
         <span class="spacer"></span>
         <span class="muted mono">api-staging_app</span>
+        
+        <form method="get" action="#view-component-api-staging" class="inline-form">
+          <input type="hidden" name="tab" value="logs">
+          <label class="sr-only" for="log-lines">Lines</label>
+          <select id="log-lines" name="lines">
+            
+          </select>
+          <button class="btn btn-sm" type="submit">Show</button>
+        </form>
       </div>
       <div class="panel-body">
         <pre class="logs">2026-08-12T14:02:11.881Z INFO  [main] com.acme.aichat.Application - Ktor started on 0.0.0.0:8080
@@ -4586,8 +4604,8 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 2026-08-12T14:09:55.771Z INFO  [eventLoop-5] com.acme.aichat.Health - ok
 </pre>
         <p class="hint">
-          The last 200 lines, straight from the daemon. Everything is also in Loki —
-          use Grafana for search, filters and anything older than this.
+          The last  lines, newest at the bottom. Everything is also in
+          Loki — use Grafana for search, filters and anything older than this.
         </p>
       </div>
     </section>
@@ -4692,7 +4710,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-29T01:48:14Z" data-localtime>2026-08-29T01:48:14Z</time>
+          <time datetime="2026-08-31T11:07:04Z" data-localtime>2026-08-31T11:07:04Z</time>
           
         </div>
       </div>
@@ -4889,20 +4907,20 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis+sentinel://default:27d4f2c9ab0abf72c0068bc58e4056c7260a84d02cf81143@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
+              <code>redis+sentinel://default:aed1a1bed59788efb64b73ecc5861a2a25303d7f2e8cc573@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis+sentinel://default:27d4f2c9ab0abf72c0068bc58e4056c7260a84d02cf81143@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
+                      data-copy-text="redis+sentinel://default:aed1a1bed59788efb64b73ecc5861a2a25303d7f2e8cc573@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
             <table>
               <tbody>
-                <tr><th>Host</th><td class="mono">cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379</td></tr>
+                <tr><th>Host</th><td class="mono">cache_sentinel-1, cache_sentinel-2, cache_sentinel-3</td></tr>
                 <tr><th>Port</th><td class="mono">26379</td></tr>
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="27d4f2c9ab0abf72c0068bc58e4056c7260a84d02cf81143">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="aed1a1bed59788efb64b73ecc5861a2a25303d7f2e8cc573">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -4928,9 +4946,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="panel-body stack">
           
           <div class="conn">
-            <code>redis://default:27d4f2c9ab0abf72c0068bc58e4056c7260a84d02cf81143@10.0.0.2:46379</code>
+            <code>redis://default:aed1a1bed59788efb64b73ecc5861a2a25303d7f2e8cc573@10.0.0.2:46379</code>
             <button class="btn btn-sm" type="button" data-copy
-                    data-copy-text="redis://default:27d4f2c9ab0abf72c0068bc58e4056c7260a84d02cf81143@10.0.0.2:46379">Copy</button>
+                    data-copy-text="redis://default:aed1a1bed59788efb64b73ecc5861a2a25303d7f2e8cc573@10.0.0.2:46379">Copy</button>
           </div>
           <div class="table-wrap">
             <table>
@@ -5606,6 +5624,15 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <h2>Logs</h2>
         <span class="spacer"></span>
         <span class="muted mono">cache_redis-1</span>
+        
+        <form method="get" action="#view-component-cache" class="inline-form">
+          <input type="hidden" name="tab" value="logs">
+          <label class="sr-only" for="log-lines">Lines</label>
+          <select id="log-lines" name="lines">
+            
+          </select>
+          <button class="btn btn-sm" type="submit">Show</button>
+        </form>
       </div>
       <div class="panel-body">
         <pre class="logs">2026-08-12T14:02:11.881Z INFO  [main] com.acme.aichat.Application - Ktor started on 0.0.0.0:8080
@@ -5617,8 +5644,8 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 2026-08-12T14:09:55.771Z INFO  [eventLoop-5] com.acme.aichat.Health - ok
 </pre>
         <p class="hint">
-          The last 200 lines, straight from the daemon. Everything is also in Loki —
-          use Grafana for search, filters and anything older than this.
+          The last  lines, newest at the bottom. Everything is also in
+          Loki — use Grafana for search, filters and anything older than this.
         </p>
       </div>
     </section>
@@ -5723,7 +5750,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-29T01:48:14Z" data-localtime>2026-08-29T01:48:14Z</time>
+          <time datetime="2026-08-31T11:07:04Z" data-localtime>2026-08-31T11:07:04Z</time>
           
         </div>
       </div>
@@ -5908,20 +5935,20 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>mongodb://root:6745cef55cdeea2254d6f95423eb8502ba2c59fb1a7e882b@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
+              <code>mongodb://root:1736325010405a035207fe6563b656c8c584c7233852658f@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:6745cef55cdeea2254d6f95423eb8502ba2c59fb1a7e882b@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
+                      data-copy-text="mongodb://root:1736325010405a035207fe6563b656c8c584c7233852658f@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
             <table>
               <tbody>
-                <tr><th>Host</th><td class="mono">documents_mongo-1</td></tr>
+                <tr><th>Host</th><td class="mono">documents_mongo-1, documents_mongo-2, documents_mongo-3, documents_mongo-4</td></tr>
                 <tr><th>Port</th><td class="mono">27017</td></tr>
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="6745cef55cdeea2254d6f95423eb8502ba2c59fb1a7e882b">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="1736325010405a035207fe6563b656c8c584c7233852658f">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -6631,6 +6658,15 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <h2>Logs</h2>
         <span class="spacer"></span>
         <span class="muted mono">documents_mongo-1</span>
+        
+        <form method="get" action="#view-component-documents" class="inline-form">
+          <input type="hidden" name="tab" value="logs">
+          <label class="sr-only" for="log-lines">Lines</label>
+          <select id="log-lines" name="lines">
+            
+          </select>
+          <button class="btn btn-sm" type="submit">Show</button>
+        </form>
       </div>
       <div class="panel-body">
         <pre class="logs">2026-08-12T14:02:11.881Z INFO  [main] com.acme.aichat.Application - Ktor started on 0.0.0.0:8080
@@ -6642,8 +6678,8 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 2026-08-12T14:09:55.771Z INFO  [eventLoop-5] com.acme.aichat.Health - ok
 </pre>
         <p class="hint">
-          The last 200 lines, straight from the daemon. Everything is also in Loki —
-          use Grafana for search, filters and anything older than this.
+          The last  lines, newest at the bottom. Everything is also in
+          Loki — use Grafana for search, filters and anything older than this.
         </p>
       </div>
     </section>
@@ -9983,7 +10019,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1787964494.2883022" data-localtime-epoch>1787964494</time>
+              <time datetime="1788170824.671881" data-localtime-epoch>1788170824</time>
             
           </td>
           <td>
@@ -10667,7 +10703,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1787964494.2883022" data-localtime-epoch>1787964494</time>
+              <time datetime="1788170824.671881" data-localtime-epoch>1788170824</time>
             
           </td>
           <td>
@@ -10981,8 +11017,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
       <div class="grid-2">
         <div class="field">
           <label for="at-name">Name</label>
-          <input id="at-name" name="name" type="text" required
-                 pattern="[a-z][a-z0-9-]{1,31}" placeholder="team-channel">
+          
+          <input id="at-name" name="name" type="text" required maxlength="64"
+                 placeholder="Team alerts">
         </div>
         <div class="field">
           <label for="at-kind">Kind</label>

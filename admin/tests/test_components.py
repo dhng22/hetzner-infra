@@ -29,7 +29,13 @@ sys.path.insert(0, _ADMIN)
 sys.path.insert(1, os.path.dirname(_ADMIN))
 
 
-class ComponentTest(unittest.TestCase):
+class ComponentCase(unittest.TestCase):
+    """Fixture only — a scratch INFRA_DIR, no docker, and the factories.
+
+    Split from the tests so a second test class can build components without
+    also re-running every assertion in the first one.
+    """
+
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="components-test-")
         os.environ["INFRA_DIR"] = self.tmp
@@ -72,6 +78,8 @@ class ComponentTest(unittest.TestCase):
         self.assertEqual(problems, [], f"unexpected problems: {problems}")
         return component
 
+
+class ComponentTest(ComponentCase):
     # --- names ------------------------------------------------------------
 
     def test_name_rules(self):
@@ -497,7 +505,12 @@ class ComponentTest(unittest.TestCase):
             "services"]["viewer"]["environment"]
         self.assertIn("tls=true", env["ME_CONFIG_MONGODB_URL"])
         self.assertEqual(env["ME_CONFIG_MONGODB_SSL"], "true")
-        self.assertEqual(env["NODE_EXTRA_CA_CERTS"], "/run/secrets/tls-ca.crt")
+        # The literal path is not the point and pinning it here only made this
+        # test fail when the path was deliberately changed. What must hold is
+        # that the file the console is TOLD to read is the same one the
+        # connection string names.
+        self.assertIn(f"tlsCAFile={env['NODE_EXTRA_CA_CERTS']}",
+                      env["ME_CONFIG_MONGODB_URL"])
 
     def test_the_mongo_visualiser_does_not_ask_for_a_password_it_never_set(self):
         """
@@ -520,7 +533,8 @@ class ComponentTest(unittest.TestCase):
         """The path above is a mount, and a mount that is not there is a crash."""
         viewer = self.make_mongo(visualizer=True).render()["services"]["viewer"]
         targets = [s["target"] for s in viewer["secrets"]]
-        self.assertIn("tls-ca.crt", targets)
+        wanted = viewer["environment"]["NODE_EXTRA_CA_CERTS"]
+        self.assertIn(wanted.rsplit("/", 1)[-1], targets)
 
     def test_the_view_button_can_actually_reach_the_visualiser(self):
         """
@@ -772,3 +786,105 @@ class ComponentTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TlsTrustTest(ComponentCase):
+    """
+    An application handed this platform's connection string must be able to
+    OPEN it. That is one property and it spans two components, so it is tested
+    where both are in scope rather than inside either one.
+    """
+
+    def test_an_application_can_verify_the_database_it_is_handed(self):
+        """
+        The panel published `tls=true` and mounted the authority into the
+        database's own containers and nowhere else. Every application that
+        pasted the string got `self-signed certificate in certificate chain`,
+        because a per-component authority is in no public root store and the
+        app had no copy of it.
+        """
+        url = self.make_mongo(name="docs").connection_url()
+        self.components.base.docker_out = lambda argv: "docs-tls-ca-v1\ndocs-tls-1-v1\n"
+
+        rendered = self.make_app().render()
+        service = rendered["services"]["app"]
+        mounts = {s["target"]: s["source"] for s in service["secrets"]}
+
+        # Whatever path the string names, the app has a file there.
+        named = [o.split("=", 1)[1] for o in url.split("?", 1)[1].split("&")
+                 if o.startswith("tlsCAFile=")]
+        self.assertEqual(len(named), 1, f"no tlsCAFile in {url}")
+        self.assertEqual(named[0], "/run/secrets/docs-ca.crt")
+        self.assertIn("docs-ca.crt", mounts)
+
+        # And the stack declares the secret it mounts, or the deploy fails.
+        self.assertEqual(rendered["secrets"],
+                         {"docs-tls-ca-v1": {"external": True}})
+
+    def test_an_application_mounts_only_authorities_and_not_member_keys(self):
+        """
+        A CA certificate is public. A member's certificate carries its PRIVATE
+        key, and there is no reason on earth for an application to hold one.
+        """
+        self.components.base.docker_out = lambda argv: "docs-tls-ca-v1\ndocs-tls-1-v1\n"
+        service = self.make_app().render()["services"]["app"]
+        self.assertEqual([s["source"] for s in service["secrets"]],
+                         ["docs-tls-ca-v1"])
+
+    def test_an_application_with_no_database_mounts_nothing(self):
+        """An empty `secrets:` key is a deploy error, not an empty list."""
+        rendered = self.make_app().render()
+        self.assertNotIn("secrets", rendered["services"]["app"])
+        self.assertNotIn("secrets", rendered)
+
+    def test_the_newest_authority_wins_a_renewal(self):
+        """Dataguard issues v2 and retires v1; a stack naming v1 will not deploy."""
+        self.components.base.docker_out = (
+            lambda argv: "docs-tls-ca-v1\ndocs-tls-ca-v2\n")
+        service = self.make_app().render()["services"]["app"]
+        self.assertEqual([s["source"] for s in service["secrets"]],
+                         ["docs-tls-ca-v2"])
+
+    def test_the_external_url_names_no_path_inside_a_container(self):
+        """
+        A client outside the cluster will never have `/run/secrets`. Handing it
+        that path produces a string whose only possible outcome is a file-not-
+        found, which reads like a broken database rather than a missing CA.
+        """
+        mongo = self.make_mongo(name="docs")
+        external = mongo.connection_url("203.0.113.10", 27017)
+        self.assertNotIn("tlsCAFile", external)
+        self.assertIn("tls=true", external)
+
+
+class CredentialsAgreeTest(ComponentCase):
+    """
+    The Credentials tab and the "How to reach it" panel describe one component.
+    When they are built from different expressions they drift, and the page
+    then states two different answers to the same question.
+    """
+
+    def hosts_in(self, url):
+        body = url.split("@", 1)[1].split("/", 1)[0]
+        return [h.split(":")[0] for h in body.split(",")]
+
+    def test_mongo_lists_the_same_members_everywhere(self):
+        """The Host row named only member 1 while the URL beside it named four."""
+        mongo = self.make_mongo(name="docs")
+        creds = mongo.credentials()
+        from_url = self.hosts_in(creds["internal_url"])
+        from_row = [h.strip() for h in creds["internal_host"].split(",")]
+        from_panel = [h.split(":")[0] for h in mongo.access()["target"].split(",")]
+        self.assertEqual(from_row, from_url)
+        self.assertEqual(from_panel, from_url)
+        self.assertEqual(len(from_url), 4)
+
+    def test_redis_lists_the_same_sentinels_everywhere(self):
+        """And the Host row does not repeat the port the Port row already gives."""
+        redis = self.make_redis(name="cache", dataguard=True)
+        creds = redis.credentials()
+        from_url = self.hosts_in(creds["internal_url"])
+        from_row = [h.strip() for h in creds["internal_host"].split(",")]
+        self.assertEqual(from_row, from_url)
+        self.assertNotIn(":", creds["internal_host"])
+        self.assertEqual(creds["internal_port"], "26379")

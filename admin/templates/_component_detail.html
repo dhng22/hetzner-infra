@@ -585,12 +585,25 @@
         <h2>Logs</h2>
         <span class="spacer"></span>
         <span class="muted mono">{{ component.service }}</span>
+        {# A GET form, so the depth lives in the URL: reloading, bookmarking or
+           sharing the page keeps the view you chose, and the tab strip's own
+           link to this tab is what resets it. #}
+        <form method="get" action="{{ component_href(component.name) }}" class="inline-form">
+          <input type="hidden" name="tab" value="logs">
+          <label class="sr-only" for="log-lines">Lines</label>
+          <select id="log-lines" name="lines">
+            {% for n in log_line_choices %}
+            <option value="{{ n }}" {% if n == log_lines %}selected{% endif %}>{{ n }} lines</option>
+            {% endfor %}
+          </select>
+          <button class="btn btn-sm" type="submit">Show</button>
+        </form>
       </div>
       <div class="panel-body">
         <pre class="logs">{{ logs }}</pre>
         <p class="hint">
-          The last 200 lines, straight from the daemon. Everything is also in Loki —
-          use Grafana for search, filters and anything older than this.
+          The last {{ log_lines }} lines, newest at the bottom. Everything is also in
+          Loki — use Grafana for search, filters and anything older than this.
         </p>
       </div>
     </section>

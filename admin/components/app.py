@@ -258,11 +258,38 @@ class AppComponent(Component):
                 "start_period": f"{s['start_period']}s",
             }
 
-        return {
+        # Every database authority in the cluster, mounted where that database's
+        # published connection string says it is.
+        #
+        # Not a setting, because there is no decision here to get wrong. A
+        # component that speaks TLS signs its certificates with an authority of
+        # its own, so NOTHING can verify it from the public root store; the
+        # panel handed out a `tls=true` string and gave the application no way
+        # to trust it, and every app that pasted it got "self-signed
+        # certificate in certificate chain". The authority is a PUBLIC
+        # certificate and it is referenced by path from the connection string
+        # rather than merged into the container's root store, so mounting one
+        # widens no trust: an app that never opens that connection is affected
+        # by nothing but an unread file.
+        #
+        # Read live, so a database created after this app was last deployed
+        # simply appears at the next deploy rather than needing anything here to
+        # be edited.
+        authorities = base.tls_ca_secrets()
+        if authorities:
+            service["secrets"] = [
+                {"source": secret, "target": f"{name}-ca.crt", "mode": 0o444}
+                for name, secret in sorted(authorities.items())]
+
+        rendered = {
             "version": "3.8",
             "services": {self.service_key(): service},
             "networks": base.compose_networks(base.EDGE_NETWORK, base.MONITORING_NETWORK),
         }
+        if authorities:
+            rendered["secrets"] = {secret: {"external": True}
+                                   for secret in sorted(authorities.values())}
+        return rendered
 
     def _deploy_replicas(self):
         """
