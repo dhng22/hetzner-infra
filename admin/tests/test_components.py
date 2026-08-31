@@ -879,6 +879,30 @@ class CredentialsAgreeTest(ComponentCase):
         self.assertEqual(from_panel, from_url)
         self.assertEqual(len(from_url), 4)
 
+    def test_no_reach_panel_puts_a_password_on_the_overview_tab(self):
+        """
+        THE REASON the two strings are not identical, and it is the one reason.
+        The Credentials tab hides the URL's password behind a reveal; the
+        Overview tab has no reveal, so its box carries the hosts and nothing
+        else. If that ever stops being true the boxes should just be merged.
+        """
+        for component in (self.make_mongo(name="docs"),
+                          self.make_redis(name="cache", dataguard=True)):
+            target = component.access()["target"]
+            self.assertNotIn(component.password(), target)
+            self.assertNotIn("@", target)
+            self.assertNotIn("://", target)
+            # ...and it still names exactly what the string names.
+            self.assertEqual(
+                [h.split(":")[0] for h in target.split(",")],
+                self.hosts_in(component.credentials()["internal_url"]))
+
+    def test_the_reach_panel_says_where_the_real_string_is(self):
+        """It was asked twice why these differ, which means the page never said."""
+        for component in (self.make_mongo(name="docs"),
+                          self.make_redis(name="cache", dataguard=True)):
+            self.assertIn("Credentials", component.access()["note"])
+
     def test_redis_lists_the_same_sentinels_everywhere(self):
         """And the Host row does not repeat the port the Port row already gives."""
         redis = self.make_redis(name="cache", dataguard=True)

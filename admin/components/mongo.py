@@ -1024,7 +1024,8 @@ class MongoComponent(Component):
     def access(self):
         return {
             "target": ",".join(self.seed_hosts()),
-            "note": ("Every member is reachable from any component on the edge "
+            "note": ("These are the same hosts the connection string on the Credentials tab names, in the same order — this box leaves out the scheme, the password and the options because it is not behind a reveal, and the Overview tab must not put a password on screen. Connect with the string, not with this; this is here for a client that wants the hosts as a list rather than as a URL. "
+                     "Every member is reachable from any component on the edge "
                      "network by these names, whether it exists yet or not — the "
                      "driver ignores the ones it cannot resolve. Do not put this "
                      "behind the tunnel; the tunnel speaks HTTP."),

@@ -742,7 +742,8 @@ class RedisComponent(Component):
     def access(self):
         return {
             "target": ",".join(self.sentinel_hosts()),
-            "note": ("These are the SENTINELS, and they are what your client should "
+            "note": ("These are the same hosts the connection string on the Credentials tab names, in the same order — this box leaves out the scheme, the password and the options because it is not behind a reveal, and the Overview tab must not put a password on screen. Connect with the string, not with this; this is here for a client that wants the hosts as a list rather than as a URL. "
+                     "These are the SENTINELS, and they are what your client should "
                      f"be given, with master name `{self.stack}`. Reachable from any "
                      "component on the edge network. Do not put this behind the "
                      "tunnel — the tunnel speaks HTTP."),
