@@ -200,17 +200,31 @@ groups:
       #
       # The traffic floor is not cosmetic: with several components, one request
       # and one error is a 100% ratio, and this routes to a critical receiver.
+      #
+      # THIS RULE COULD NOT FIRE. It read `http_server_requests_seconds_count`,
+      # and no series by that name has ever existed in this cluster: the one
+      # application here publishes the Micrometer JVM binders and no HTTP timer
+      # at all, so both sides of the ratio were empty and the alert was silent
+      # for reasons that looked exactly like "no errors".
+      #
+      # The tunnel connector does count responses by status code, and it counts
+      # every request that reaches the cluster, so that is what this reads now.
+      # It is a WEAKER claim, and the summary says so: it is the whole edge, not
+      # one component. Give an application a `ktor_http_server_requests_seconds`
+      # (or any `http_server_requests_seconds`) timer and the per-service
+      # version becomes possible again — the Overview page's RED card names the
+      # same gap in the same words.
       - alert: HighErrorRate
         expr: |
           (
-            sum by (service) (rate(http_server_requests_seconds_count{status=~"5.."}[5m]))
-            / sum by (service) (rate(http_server_requests_seconds_count[5m]))
+            sum(rate(cloudflared_tunnel_response_by_code{status_code=~"5.."}[5m]))
+            / clamp_min(sum(rate(cloudflared_tunnel_response_by_code[5m])), 0.001)
           ) > 0.05
-          and on (service) (sum by (service) (rate(http_server_requests_seconds_count[5m])) > 0.2)
+          and sum(rate(cloudflared_tunnel_response_by_code[5m])) > 0.2
         for: 5m
         labels: { severity: critical }
         annotations:
-          summary: "Over 5% of requests to {{ $labels.service }} are returning 5xx"
+          summary: "Over 5% of responses at the tunnel are 5xx"
 
       # Both sides carry `service`, so this compares each component against its
       # OWN SLO and produces one alert instance per breaching component. A

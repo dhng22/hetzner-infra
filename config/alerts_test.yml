@@ -265,32 +265,37 @@ tests:
 
   # --- HIGH ERROR RATE: the traffic floor ----------------------------------
   # One request, one error, 100% ratio. Without the floor this pages a critical
-  # receiver for a single failed request on an idle staging component.
+  # receiver for a single failed request against an otherwise idle cluster.
+  #
+  # The series is the TUNNEL's, not an application's — see the comment on the
+  # rule. These cases used to feed it `http_server_requests_seconds_count`,
+  # which is a metric no component in this cluster has ever published, so the
+  # tests passed against a rule that could not fire in production.
   - interval: 1m
     input_series:
-      - series: 'http_server_requests_seconds_count{service="api-staging_app", status="500"}'
+      - series: 'cloudflared_tunnel_response_by_code{status_code="500"}'
         values: '0+1x20'
-      - series: 'http_server_requests_seconds_count{service="api-staging_app", status="200"}'
+      - series: 'cloudflared_tunnel_response_by_code{status_code="200"}'
         values: '0x20'
     alert_rule_test:
       - eval_time: 15m
         alertname: HighErrorRate
         exp_alerts: []
 
-  # Real traffic, real errors: must fire and name the component.
+  # Real traffic, real errors: must fire.
   - interval: 1m
     input_series:
-      - series: 'http_server_requests_seconds_count{service="api_app", status="500"}'
+      - series: 'cloudflared_tunnel_response_by_code{status_code="500"}'
         values: '0+60x20'
-      - series: 'http_server_requests_seconds_count{service="api_app", status="200"}'
+      - series: 'cloudflared_tunnel_response_by_code{status_code="200"}'
         values: '0+60x20'
     alert_rule_test:
       - eval_time: 15m
         alertname: HighErrorRate
         exp_alerts:
-          - exp_labels: { severity: critical, service: api_app }
+          - exp_labels: { severity: critical }
             exp_annotations:
-              summary: "Over 5% of requests to api_app are returning 5xx"
+              summary: "Over 5% of responses at the tunnel are 5xx"
 
   # --- UNSATISFIABLE MINIMUM ------------------------------------------------
   - interval: 1m

@@ -61,11 +61,21 @@
 
       {% for d in details %}
       <section data-view="component-{{ d.component.name }}" hidden>
+        {# Every name the detail template reads. A missing one is not an error
+           in Jinja — `{% if x is defined %}` simply goes false — which is how
+           the Backups tab managed to be absent from this artefact since it was
+           written. If you add a panel gated on a context key, add it here. #}
         {% with component = d.component, view = d.view, tabs = d.tabs, tab = d.tab,
                 fields = d.fields, env_pairs = d.env_pairs, logs = d.logs,
+                log_rows = d.log_rows, log_cursor = d.log_cursor,
+                log_note = d.log_note, log_lines = d.log_lines,
+                log_line_choices = d.log_line_choices,
                 creds = d.creds, firewall = d.firewall, webhook = d.webhook,
                 deployments = d.deployments, rollout = d.rollout,
-                registries = d.registries, map = d.map, newest = d.newest %}
+                registries = d.registries, map = d.map, newest = d.newest,
+                snapshots = d.snapshots, pitr = d.pitr,
+                migrate_offered = d.migrate_offered, migrate = d.migrate,
+                migrate_log = d.migrate_log %}
           {% include "_component_detail.html" %}
         {% endwith %}
       </section>

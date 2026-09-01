@@ -7,12 +7,16 @@ preview be generated from the real templates instead of a mock that drifts.
 """
 
 import datetime as _dt
+import functools
 import os
+import threading
+import time
 
 import docker
 import requests
 
 import catalog
+import charts
 import shape
 
 VM_URL = os.environ.get("VM_URL", "http://victoriametrics:8428")
@@ -77,6 +81,90 @@ def vm_query_by(expr, label="instance"):
     except Exception:
         pass
     return out
+
+
+def vm_query_range(expr, minutes=60, step=60, label=None):
+    """
+    A time series per matching label value: {name: [(unix_seconds, value), ...]}.
+
+    The two helpers above ask `/api/v1/query`, which answers with one point.
+    A chart needs the shape of the last hour, which is `/api/v1/query_range`.
+
+    `label` names the series. When it is None the series is named by the whole
+    remaining label set, because the useful name differs per query — `service`
+    for a per-service line, `instance` for a per-node one, `status_code` for a
+    stack — and hard-coding one of them here would make this helper single-use.
+
+    Points come back as floats with NaN dropped rather than zeroed: a gap in a
+    scrape is not a value of zero, and a chart that draws it as one invents a
+    cliff that never happened.
+    """
+    end = int(time.time())
+    params = {"query": expr, "start": end - int(minutes * 60), "end": end,
+              "step": max(1, int(step))}
+    out = {}
+    try:
+        r = requests.get(f"{VM_URL}/api/v1/query_range", params=params, timeout=12)
+        r.raise_for_status()
+        rows = r.json().get("data", {}).get("result", [])
+    except Exception:
+        return out
+
+    for row in rows:
+        metric = row.get("metric") or {}
+        if label is not None:
+            name = metric.get(label)
+            if name is None:
+                continue
+        else:
+            name = ", ".join(f"{k}={v}" for k, v in sorted(metric.items())
+                             if k != "__name__") or (metric.get("__name__") or "value")
+        points = []
+        for pair in row.get("values") or []:
+            try:
+                value = float(pair[1])
+            except (IndexError, TypeError, ValueError):
+                continue
+            if value != value:                       # NaN: a gap, not a zero
+                continue
+            points.append((int(float(pair[0])), value))
+        if points:
+            out[name] = points
+    return out
+
+
+def memo(seconds):
+    """
+    Cache one function's answer for a few seconds, across threads.
+
+    Every panel section polls itself now, so the same Docker socket walk or the
+    same VictoriaMetrics round trip is asked for by several open tabs within the
+    same second. gunicorn runs ONE worker with four threads (`admin/Dockerfile`),
+    so those are four threads deep in the same call rather than four processes —
+    the cheapest fix is to let the second caller read what the first just found.
+
+    The window is deliberately far shorter than any poll interval, so this
+    collapses simultaneous callers and never makes a lone caller see stale data.
+    """
+    def decorate(fn):
+        lock = threading.Lock()
+        cache = {}
+
+        @functools.wraps(fn)
+        def wrapper(*args):
+            now = time.monotonic()
+            with lock:
+                hit = cache.get(args)
+                if hit is not None and now - hit[0] < seconds:
+                    return hit[1]
+            value = fn(*args)
+            with lock:
+                cache[args] = (now, value)
+            return value
+
+        wrapper.cache_clear = cache.clear
+        return wrapper
+    return decorate
 
 
 # --- services --------------------------------------------------------------
@@ -462,21 +550,26 @@ def deployments(name, service_name, limit=25):
     return state.history(name, limit=limit), live
 
 
-def _loki_logs(service_name, lines):
+def _loki_rows(service_name, lines, since_ns=None):
     """
-    Lines from Loki, or None if Loki could not answer.
+    `[(timestamp_ns, text), ...]` from Loki, or None if Loki could not answer.
 
-    None and "" mean different things and the caller depends on it: None is
-    "ask the CLI instead", "" is "Loki answered and this service has said
+    None and `[]` mean different things and the caller depends on it: None is
+    "ask the CLI instead", `[]` is "Loki answered and this service has said
     nothing". Collapsing them would hide a broken Loki behind an empty page.
+
+    `since_ns` is the tail cursor. Loki's `start` is inclusive, so it is nudged
+    by one nanosecond — without that, every poll re-delivers the newest line it
+    already showed, forever.
     """
     now = _dt.datetime.now(_dt.timezone.utc).timestamp()
+    start = int(since_ns) + 1 if since_ns else int((now - LOG_WINDOW_SECONDS) * 1e9)
     try:
         resp = requests.get(
             f"{LOKI_URL}/loki/api/v1/query_range",
             params={
                 "query": '{swarm_service="%s"}' % service_name.replace('"', ''),
-                "start": int((now - LOG_WINDOW_SECONDS) * 1e9),
+                "start": start,
                 "end": int(now * 1e9),
                 "limit": lines,
                 "direction": "backward",
@@ -493,16 +586,19 @@ def _loki_logs(service_name, lines):
         for ts, line in stream.get("values") or []:
             rows.append((int(ts), line.rstrip("\n")))
     rows.sort()
-    out = []
-    for ts, line in rows:
-        stamp = _dt.datetime.fromtimestamp(ts / 1e9, _dt.timezone.utc)
-        out.append(f"{stamp:%H:%M:%S} {line}")
-    return "\n".join(out)
+    return rows
 
 
-def logs(service_name, lines=200):
+def log_events(service_name, lines=200, since_ns=None):
     """
-    Read a service's logs from Loki, falling back to the CLI.
+    A service's log lines as rows the template can style, plus a tail cursor.
+
+    Returns `(rows, cursor, note)`:
+      rows   — `[{"at", "text", "level"}]`, oldest first, newest at the bottom
+      cursor — the newest row's nanosecond timestamp, for the next poll; None
+               when the source cannot say where it got to, which is what turns
+               the follower off rather than letting it re-read the same page
+      note   — a sentence to show INSTEAD of rows when there are none
 
     NOT `docker service logs` first. Every stack here sets the `loki` log
     driver, and Docker cannot read back from a non-local driver — so the CLI
@@ -512,11 +608,16 @@ def logs(service_name, lines=200):
     does not have them.
 
     The CLI fallback stays for anything that somehow logs locally, and so that
-    a Loki outage degrades to "no logs" rather than to a stack trace.
+    a Loki outage degrades to "no logs" rather than to a stack trace. It carries
+    no timestamps we can trust as a cursor, so it reports None and the tab falls
+    back to being a snapshot — correct, and visibly not live.
     """
-    from_loki = _loki_logs(service_name, lines)
-    if from_loki:
-        return from_loki
+    rows = _loki_rows(service_name, lines, since_ns)
+    if rows:
+        return shape.log_rows(rows), rows[-1][0], ""
+    if rows == [] and since_ns:
+        # A poll that found nothing new. Not an empty log — keep the cursor.
+        return [], since_ns, ""
 
     import subprocess
     try:
@@ -526,16 +627,17 @@ def logs(service_name, lines=200):
         )
         out = (proc.stdout + proc.stderr).strip()
     except subprocess.TimeoutExpired:
-        return f"Timed out reading logs for {service_name}."
+        return [], None, f"Timed out reading logs for {service_name}."
     except OSError as exc:
-        return f"Could not read logs for {service_name}: {exc}"
+        return [], None, f"Could not read logs for {service_name}: {exc}"
 
     if out:
-        return out
-    if from_loki is None:
-        return (f"Could not reach Loki at {LOKI_URL}, and the Docker CLI has no "
-                f"local logs for {service_name}. Check `docker service ls | grep loki`.")
-    return f"No log output from {service_name} in the last 24h."
+        return shape.log_rows([(None, line) for line in out.splitlines()]), None, ""
+    if rows is None:
+        return [], None, (f"Could not reach Loki at {LOKI_URL}, and the Docker CLI has "
+                          f"no local logs for {service_name}. Check "
+                          f"`docker service ls | grep loki`.")
+    return [], since_ns, f"No log output from {service_name} in the last 24h."
 
 
 # --- cluster ---------------------------------------------------------------
@@ -718,6 +820,12 @@ def short_service(name):
     return stack if key in _primary_keys() else f"{stack}·{key}"
 
 
+#: Long enough that four threads asking within the same instant share one
+#: Docker-socket walk, short enough that no poll interval can see it.
+PANEL_MEMO_SECONDS = 2
+
+
+@memo(PANEL_MEMO_SECONDS)
 def topology():
     """
     Per-node composition: every task Swarm INTENDS to run on every box, named
@@ -957,11 +1065,23 @@ def member_roles(component):
     return found or None
 
 
+#: Longer than the panel memo because this is a dozen range queries rather
+#: than one socket walk, and the column that reads it polls at 15s.
+OBSERVABILITY_MEMO_SECONDS = 10
+
+
+@memo(OBSERVABILITY_MEMO_SECONDS)
+def observability():
+    return shape.observability(vm_query_range, vm_query, charts)
+
+
+@memo(PANEL_MEMO_SECONDS)
 def summary():
     # summary() shapes every component too, so it gets the same single snapshot.
     return shape.summary(_service_fn_with_counts(), nodes(), vm_query)
 
 
+@memo(PANEL_MEMO_SECONDS)
 def component_views():
     """
     Every component, with what it reserves expressed as a share of the cluster.
@@ -1141,50 +1261,61 @@ def by_labels(expr, label):
     return vm_query_by(expr, label=label)
 
 
-VIEWER_START_TIMEOUT = 60
+#: How long the DETACHED wake is allowed to take. This is the round trip to the
+#: Docker socket to record a new replica count, not the container start — Swarm
+#: does that afterwards on its own time.
+VIEWER_WAKE_TIMEOUT = 10
+
+
+def viewer_running(service):
+    """Is a task of this service actually running right now?"""
+    try:
+        live = client().services.get(service)
+        for task in live.tasks(filters={"desired-state": "running"}) or []:
+            if (task.get("Status") or {}).get("State") == "running":
+                return True
+    except Exception:                                            # noqa: BLE001
+        return False
+    return False
 
 
 def ensure_viewer(service):
     """
-    (started, detail) — scale a visualiser 0 -> 1 and wait for a task to run.
+    (running_now, detail) — ask for a stopped visualiser to start. NEVER waits.
 
-    Waits rather than returning immediately, because the alternative is proxying
-    to a name that does not resolve yet and showing the user a connection error
-    for something that is working. One minute is generous for a container that
-    is already pulled and fatal for one that is not, which is the distinction
-    worth surfacing.
+    This used to scale 0 -> 1 and then poll for a running task for up to sixty
+    seconds, on top of a `docker service update` that was itself allowed sixty.
+    Both of those ran inside the HTTP request, and this panel is served through
+    Cloudflare, whose 100-second origin timeout is not configurable — so the
+    View button returned a 524 error page while the visualiser it had just
+    started came up perfectly well behind it. Pressing the button two or three
+    times "fixed" it only because by the third press the container was up.
+
+    That is the same bug the deploy button had, and it has the same answer: fire
+    the change detached and let a page that can retry cheaply report on it. The
+    caller renders the wait page, which polls `viewer_running` until it is true.
     """
     import subprocess
-    import time
     try:
         live = client().services.get(service)
     except Exception as exc:                                     # noqa: BLE001
         return False, f"{service} is not deployed: {exc}"
     mode = (live.attrs.get("Spec", {}).get("Mode") or {}).get("Replicated") or {}
-    if mode.get("Replicas", 0) < 1:
-        # The CLI rather than docker-py: Service.update() sends what you give it
-        # and RESETS every field you leave out, and this service carries secrets,
-        # networks and labels that must survive being woken up.
-        try:
-            proc = subprocess.run(
-                ["docker", "service", "update", "--detach=true", "--replicas", "1",
-                 service], capture_output=True, text=True, timeout=60)
-        except (subprocess.TimeoutExpired, OSError) as exc:
-            return False, str(exc)
-        if proc.returncode != 0:
-            return False, (proc.stderr or proc.stdout).strip()[:300]
-    deadline = time.time() + VIEWER_START_TIMEOUT
-    while time.time() < deadline:
-        try:
-            live = client().services.get(service)
-            for task in live.tasks(filters={"desired-state": "running"}) or []:
-                if (task.get("Status") or {}).get("State") == "running":
-                    return True, ""
-        except Exception:                                        # noqa: BLE001
-            break
-        time.sleep(1)
-    return False, ("It has not started yet. If this persists, check "
-                   f"`docker service ps {service}` — the image may still be pulling.")
+    if mode.get("Replicas", 0) >= 1:
+        return viewer_running(service), ""
+
+    # The CLI rather than docker-py: Service.update() sends what you give it
+    # and RESETS every field you leave out, and this service carries secrets,
+    # networks and labels that must survive being woken up.
+    try:
+        proc = subprocess.run(
+            ["docker", "service", "update", "--detach=true", "--replicas", "1",
+             service], capture_output=True, text=True, timeout=VIEWER_WAKE_TIMEOUT)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return False, str(exc)
+    if proc.returncode != 0:
+        return False, (proc.stderr or proc.stdout).strip()[:300]
+    return False, ""
 
 
 def touch_viewer(component):

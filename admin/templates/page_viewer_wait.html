@@ -8,14 +8,22 @@
     <h1>Starting the visualiser</h1>
     <p class="hint">It is kept stopped when nobody is looking at it — it has full access to
     this database and no password of its own, so the shorter it exists the smaller that
-    surface is. Give it a few seconds and reload.</p>
+    surface is. This page comes back on its own the moment it is up.</p>
   </div>
 </div>
 {% if detail %}
 <div class="banner bad"><div>{{ detail }}</div></div>
 {% endif %}
+{# The poll target and the destination are attributes rather than inline script,
+   so this page carries no code and the Content-Security-Policy has nothing new
+   to allow. With JS off the button below is still the whole feature. #}
+<div class="banner" data-viewer-wait
+     data-status-url="{{ status_url }}"
+     data-open-url="{{ viewer_href(component.name) }}">
+  <div><span class="live" data-viewer-live><i></i>waiting for it to start</span></div>
+</div>
 <div class="btn-row">
-  <a class="btn btn-primary" href="{{ viewer_href(component.name) }}">Try again</a>
+  <a class="btn btn-primary" href="{{ viewer_href(component.name) }}">Open it now</a>
   <a class="btn" href="{{ component_href(component.name) }}">Back to {{ component.name }}</a>
 </div>
 {% endblock %}

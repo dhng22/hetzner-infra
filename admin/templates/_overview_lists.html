@@ -1,0 +1,50 @@
+{# Components and firing rules, re-rendered by `/live/overview-lists`.
+   Read-only for the same reason as _overview_summary.html. #}
+<div class="grid-2">
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Components</h2>
+      <span class="spacer"></span>
+      <a class="btn btn-sm" href="{{ section_href({'key': 'components'}) }}">All components</a>
+    </div>
+    <div class="rows">
+      {% for v in views[:7] %}
+        <a class="row {{ v.tone }}" href="{{ component_href(v.name) }}">
+          <span class="stripe"></span>
+          <span>
+            <span class="row-title">{{ v.name }}</span>
+            <span class="row-sub">{{ v.summary }}</span>
+          </span>
+          <span class="row-metric hide-sm">
+            <span class="k">Tasks</span>
+            <span class="v num">{{ v.running }}/{{ v.desired }}</span>
+          </span>
+          <span class="pill {{ v.tone }}">{{ v.state }}</span>
+        </a>
+      {% else %}
+        <div class="empty">No components yet.</div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Alert rules</h2></div>
+    <div class="rows">
+      {% for al in alerts if al.state != 'inactive' %}
+        <div class="row {{ al.tone }}">
+          <span class="stripe"></span>
+          <span>
+            <span class="row-title">{{ al.name }}</span>
+            <span class="row-sub">{{ al.summary }}</span>
+          </span>
+          <span class="pill {{ al.tone }}">{{ al.state }}</span>
+        </div>
+      {% else %}
+        <div class="empty">No rules are firing.</div>
+      {% endfor %}
+    </div>
+    <div class="panel-note">
+      Watchdog fires permanently by design — its silence means the alerting path is broken, not quiet.
+    </div>
+  </section>
+</div>

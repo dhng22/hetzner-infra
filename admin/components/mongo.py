@@ -58,6 +58,12 @@ from .base import Component, Field, Secret
 EXPORTER_IMAGE = "percona/mongodb_exporter:0.43.1"
 PBM_IMAGE = "percona/percona-backup-mongodb:2.8.0"
 VIEWER_IMAGE = "mongo-express:1.0.2-20"
+#: The migration job's image. NOT `PBM_IMAGE`: Percona's backup image carries no
+#: `mongodump` at all (checked — `command -v mongodump` finds nothing), and the
+#: official `mongo` images stopped shipping the database tools at 4.4. This one
+#: has `mongodump`, `mongorestore` and `mongosh`, which is every binary the job
+#: needs and nothing that has to be installed at run time.
+MIGRATE_IMAGE = "percona/percona-server-mongodb:7.0"
 
 #: The uid the official mongo image runs as. Swarm secrets are mounted with an
 #: explicit owner because mongod refuses a certificate or key file it does not
@@ -225,6 +231,14 @@ class MongoComponent(Component):
                help="Leave blank to generate a strong one. Set it yourself if you "
                     "are moving an existing database and its clients already know "
                     "the password."),
+        Secret("ATLAS_URI", "MongoDB Atlas connection string", generated=False,
+               maximum=512,
+               help="Only used by the Migrate section on the Backups tab, and only "
+                    "while a migration is running. A `Secret` rather than a field, "
+                    "so it lands in secret.env at 0600 and never in component.json "
+                    "— it is a full credential for a database that is not this one. "
+                    "Paste it exactly as Atlas gives it to you, including the "
+                    "password and the database name."),
     )
 
     def password(self):
@@ -764,6 +778,11 @@ class MongoComponent(Component):
             "dataguard.secondary_reads": "true" if s.get("secondary_reads") else "false",
             "dataguard.backup_target": str(s.get("backup_target") or ""),
             "dataguard.max_snapshots": str(s.get("max_snapshots") or 7),
+            # This field existed on the form and was emitted nowhere, so nothing
+            # in the cluster could act on it — "Backup every 24 hours" was a
+            # number you could change with no effect at all. Dataguard reads it
+            # to decide when the next snapshot is due.
+            "dataguard.backup_interval_hours": str(s.get("backup_interval_hours") or 24),
             "dataguard.viewer": "true" if s.get("visualizer") else "false",
         }
         return labels
@@ -823,6 +842,113 @@ class MongoComponent(Component):
             "secrets": secrets,
         }
 
+    def _storage_secret(self):
+        """
+        The Swarm secret holding this component's backup target's S3 keys.
+
+        The Storage tab has always written it — `storage-<target>-v<N>`, keys as
+        JSON, created through stdin — and nothing has ever mounted it. So the
+        agents came up, the controller came up, and PBM had no storage
+        configured and could not write a single byte anywhere. The tab looked
+        finished; the wire stopped one connector short.
+        """
+        target = (self.spec.get("backup_target") or "").strip()
+        if not target:
+            return "", None
+        import storage as storage_store
+        return storage_store.secret_name(target), storage_store.by_name(target)
+
+    def pbm_storage_config(self):
+        """
+        PBM's `storage` document for this component's target, or None.
+
+        The keys are NOT in here. They live in the mounted secret, and the
+        config that references them is written inside the controller at the
+        moment `pbm config` runs — see `configure_backups`.
+        """
+        _, target = self._storage_secret()
+        if not target:
+            return None
+        return {
+            "storage": {
+                "type": "s3",
+                "s3": {k: v for k, v in {
+                    "region": target.get("region") or "us-east-1",
+                    "bucket": target.get("bucket") or "",
+                    "prefix": (target.get("prefix") or "").strip("/") or self.name,
+                    "endpointUrl": target.get("endpoint") or "",
+                    "forcePathStyle": bool(target.get("path_style")),
+                    "serverSideEncryption": ({"sseAlgorithm": "AES256"}
+                                             if target.get("sse") else None),
+                }.items() if v not in ("", None, False)},
+            },
+            "pitr": {"enabled": True},
+        }
+
+    def configure_backups(self):
+        """
+        Hand PBM its storage. Idempotent, and safe to run after every deploy.
+
+        `pbm config` had no call site anywhere in this repo. Everything around it
+        existed — the target, its credentials in a Swarm secret, an agent beside
+        every member, a controller to drive them — and the one command that tells
+        PBM where to put a backup was never run. So every snapshot had nowhere to
+        go, and the Storage tab was a finished design with the last connector
+        unattached.
+
+        The YAML is assembled INSIDE the controller, by a shell that reads the
+        two keys out of the mounted secret and expands them into a heredoc. They
+        are therefore never an argument to anything: `docker exec ... sh -c` puts
+        its script in the master's process table, and `ps` is readable by
+        anything else on the box.
+        """
+        config = self.pbm_storage_config()
+        if config is None:
+            return True, ""
+        container = self._controller()
+        if not container:
+            return False, "No backup controller is running on this node."
+
+        # Escaped for the unquoted heredoc below, so a bucket or endpoint
+        # containing a shell metacharacter is data rather than code.
+        def shell_safe(text):
+            return (str(text).replace("\\", "\\\\").replace("$", "\\$")
+                    .replace("`", "\\`"))
+
+        s3 = config["storage"]["s3"]
+        body = ["storage:", "  type: s3", "  s3:"]
+        for key, value in s3.items():
+            if key == "serverSideEncryption":
+                body.append("    serverSideEncryption:")
+                body.append(f"      sseAlgorithm: {value['sseAlgorithm']}")
+            elif isinstance(value, bool):
+                body.append(f"    {key}: {'true' if value else 'false'}")
+            else:
+                body.append(f"    {key}: {shell_safe(value)}")
+        # Under `s3`, where PBM looks for it, and written by the same heredoc
+        # rather than appended afterwards — appending would land it after
+        # whatever came next and quietly configure nothing.
+        body += ["    credentials:",
+                 "      access-key-id: $ACCESS",
+                 "      secret-access-key: $SECRET",
+                 "pitr:", "  enabled: true"]
+
+        script = "\n".join([
+            "set -eu",
+            "umask 077",
+            "CREDS=/run/secrets/backup-storage.json",
+            "ACCESS=$(sed -n 's/.*\"access_key\"[^\"]*\"\\([^\"]*\\)\".*/\\1/p' \"$CREDS\")",
+            "SECRET=$(sed -n 's/.*\"secret_key\"[^\"]*\"\\([^\"]*\\)\".*/\\1/p' \"$CREDS\")",
+            '[ -n "$ACCESS" ] && [ -n "$SECRET" ] || { echo "storage credentials are unreadable"; exit 1; }',
+            "cat > /tmp/pbm.yaml <<YAML",
+            "\n".join(body),
+            "YAML",
+            "pbm config --file /tmp/pbm.yaml",
+        ])
+        ok, out = base.run(["docker", "exec", container, "sh", "-c", script],
+                           timeout=120)
+        return ok, out or "Backup storage configured."
+
     def _backup_services(self, secrets):
         """
         Percona Backup for MongoDB: an agent beside every member, one controller.
@@ -839,6 +965,13 @@ class MongoComponent(Component):
         """
         out = {}
         uri = self.connection_url()
+        # The bucket's keys, mounted where `configure_backups` reads them. The
+        # Storage tab has always written this secret and nothing ever mounted
+        # it, which is half of why no backup could reach S3.
+        storage_secret, _ = self._storage_secret()
+        storage_mount = ([{"source": storage_secret,
+                           "target": "backup-storage.json", "mode": 0o400}]
+                         if storage_secret else [])
         for index in range(1, self.pool + 1):
             out[f"pbm-agent-{index}"] = {
                 "image": PBM_IMAGE,
@@ -846,7 +979,8 @@ class MongoComponent(Component):
                 "environment": {"PBM_MONGODB_URI": uri},
                 "volumes": [f"{self.name}-{index}-data:/data/db"],
                 "secrets": [{"source": self.secret_name("tls-ca"),
-                             "target": f"{self.name}-ca.crt", "mode": 0o444}],
+                             "target": f"{self.name}-ca.crt", "mode": 0o444}]
+                           + storage_mount,
                 "networks": [base.EDGE_NETWORK],
                 "logging": self.loki_logging(),
                 "deploy": {
@@ -868,7 +1002,8 @@ class MongoComponent(Component):
             "command": ["sh", "-c", "exec sleep infinity"],
             "environment": {"PBM_MONGODB_URI": uri},
             "secrets": [{"source": self.secret_name("tls-ca"),
-                         "target": f"{self.name}-ca.crt", "mode": 0o444}],
+                         "target": f"{self.name}-ca.crt", "mode": 0o444}]
+                       + storage_mount,
             "networks": [base.EDGE_NETWORK],
             "logging": self.loki_logging(),
             "deploy": {
@@ -985,6 +1120,12 @@ class MongoComponent(Component):
             return False, ("No backup controller is running on this node. It is "
                            "pinned to the master; check `docker service ps "
                            f"{self.stack}_pbm-ctl`.")
+        # PBM keeps its storage config in the database, so this is a one-off in
+        # practice — but it is idempotent and it is the difference between a
+        # backup and an error about having nowhere to write.
+        ok, out = self.configure_backups()
+        if not ok:
+            return False, f"Could not configure backup storage: {out}"
         ok, out = base.run(["docker", "exec", container, "pbm", "backup", "--wait"],
                            timeout=3600)
         return ok, out or "Backup complete."
@@ -1029,6 +1170,196 @@ class MongoComponent(Component):
             return False, f"Restore failed: {out}"
         return True, (f"Restored to {what}. Everything written after it is gone. "
                       "Check that the set has a primary before sending traffic.")
+
+    # --- migrate to and from Atlas ------------------------------------------
+
+    #: The service that runs one migration. Named like a stack service so it
+    #: reads correctly in `docker service ls`, but created with
+    #: `docker service create` and NOT carrying the stack's namespace label —
+    #: which is what keeps `docker stack deploy --prune` from deleting a
+    #: migration that is halfway through because somebody saved an unrelated
+    #: setting on another tab.
+    MIGRATE_ROLE = "migrate"
+
+    def migrate_service(self):
+        return f"{self.stack}_migrate"
+
+    #: The job, as a script. It runs inside the container, so the only things on
+    #: any command line are file paths — the two connection strings are written
+    #: to files and passed with `--config`, which the tools read a `uri:` out of.
+    #: A URI in argv is a URI in the master's process table, and `ps` is readable
+    #: by anything on the box.
+    _MIGRATE_SCRIPT = r"""set -eu
+umask 077
+say() { printf '%s %s\n' "$(date -u +%H:%M:%S)" "$*"; }
+
+# Both connection strings arrive as mounted secrets and are written into files
+# the tools read. NOTHING puts a URI on a command line: container arguments show
+# up in the master's own process table, and one of these two is a full
+# credential for somebody else's cluster.
+cfg() { printf 'uri: %s\n' "$(cat "$1")" > "$2"; }
+cfg /run/secrets/migrate-here.uri  /tmp/here.yaml
+cfg /run/secrets/migrate-there.uri /tmp/there.yaml
+
+# mongosh has no --config, so its URI goes into the SCRIPT it runs, which is
+# also a file. A URI cannot contain a newline, so escaping a backslash and a
+# double quote is the whole job of turning it into a JS string literal.
+counter() {
+  { printf 'const c = Mongo("'
+    sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' "$1" | tr -d '\n'
+    printf '");\n'
+    cat <<'JS'
+const out = [];
+for (const name of c.getDBNames()) {
+  if (["admin", "local", "config"].includes(name)) continue;
+  const d = c.getDB(name);
+  for (const coll of d.getCollectionNames()) {
+    out.push(name + "." + coll + "=" + d.getCollection(coll).countDocuments({}));
+  }
+}
+print(out.sort().join("\n"));
+JS
+  } > "$2"
+}
+counter /run/secrets/migrate-here.uri  /tmp/count-here.js
+counter /run/secrets/migrate-there.uri /tmp/count-there.js
+count() { mongosh --quiet --nodb --file "$1"; }
+
+case "$DIRECTION" in
+  export) FROM=/tmp/here.yaml;  TO=/tmp/there.yaml
+          FROM_JS=/tmp/count-here.js; TO_JS=/tmp/count-there.js
+          say "self-host -> Atlas" ;;
+  import) FROM=/tmp/there.yaml; TO=/tmp/here.yaml
+          FROM_JS=/tmp/count-there.js; TO_JS=/tmp/count-here.js
+          say "Atlas -> self-host" ;;
+  *) say "unknown direction $DIRECTION"; exit 2 ;;
+esac
+
+say "preflight: reading both ends"
+BEFORE="$(count "$FROM_JS")" || { say "cannot read the source"; exit 1; }
+TARGET="$(count "$TO_JS")"   || { say "cannot read the destination"; exit 1; }
+say "source holds:"; printf '%s\n' "$BEFORE"
+
+# Refusing HERE rather than after the dump: a non-empty destination is the one
+# preflight answer that means somebody is about to lose data, and it costs
+# nothing to find that out before an hour of copying instead of after it.
+if [ -n "$TARGET" ] && [ "$OVERWRITE" != "yes" ]; then
+  say "the destination is NOT empty and overwrite was not confirmed; refusing"
+  printf '%s\n' "$TARGET"
+  exit 1
+fi
+
+say "dumping"
+mongodump --config "$FROM" --archive=/tmp/dump.gz --gzip --quiet
+say "dump is $(wc -c < /tmp/dump.gz) bytes"
+
+say "restoring"
+mongorestore --config "$TO" --archive=/tmp/dump.gz --gzip --drop --quiet
+
+# A migration nobody counted is a hypothesis — the same argument the design
+# makes about backups. This exits non-zero on a mismatch because a job that
+# reports success for an incomplete copy is worse than one that fails.
+say "verify: counting both ends"
+AFTER="$(count "$TO_JS")"
+if [ "$BEFORE" = "$AFTER" ]; then
+  say "VERIFIED: every collection matches"
+  printf '%s\n' "$AFTER"
+  exit 0
+fi
+say "MISMATCH — the copy does not equal the source"
+say "source:"; printf '%s\n' "$BEFORE"
+say "destination:"; printf '%s\n' "$AFTER"
+exit 1
+"""
+
+    def migrate_status(self):
+        """
+        `{state, since, detail}` for the running or last migration, or None.
+
+        Read from Swarm rather than from a file this panel writes: the job IS a
+        service, so its task state is the truth about whether it is running, and
+        it survives the panel restarting, which an in-process phase would not.
+        """
+        out = base.docker_out([
+            "service", "ps", self.migrate_service(), "--no-trunc",
+            "--format", "{{.CurrentState}}\t{{.Error}}"])
+        rows = [line for line in out.splitlines() if line.strip()]
+        if not rows:
+            return None
+        current, _, error = rows[0].partition("\t")
+        word = current.split()[0].lower() if current else "unknown"
+        return {
+            "state": word,
+            "since": current,
+            "running": word in ("running", "preparing", "starting", "ready",
+                                "assigned", "accepted", "new", "pending"),
+            "ok": word == "complete",
+            "detail": error.strip(),
+        }
+
+    def migrate_logs(self, lines=200):
+        ok, out = base.run(["docker", "service", "logs", "--no-trunc", "--raw",
+                            "--tail", str(lines), self.migrate_service()],
+                           timeout=30)
+        return out if ok else ""
+
+    def start_migration(self, direction, overwrite=False):
+        """
+        Launch one migration, detached, and return immediately.
+
+        Detached for the reason every other long action here is: this panel is
+        served through Cloudflare's 100-second origin timeout, and a dump of any
+        real database is longer than that. Swarm runs the job; the Backups tab
+        reads its state back.
+
+        `--restart-condition none`, so a job that fails stays failed and says so
+        instead of dumping the database again every thirty seconds.
+        """
+        if direction not in ("export", "import"):
+            return False, "Unknown direction."
+        if not self.managed:
+            return False, ("Migration needs the managed shape — turn Dataguard on "
+                           "first, so there is a replica set to read from.")
+        atlas = (self.secret("ATLAS_URI") or "").strip()
+        if not atlas:
+            return False, ("No Atlas connection string is set. Add it on the "
+                           "Credentials tab first.")
+        running = self.migrate_status()
+        if running and running["running"]:
+            return False, "A migration is already running for this component."
+
+        # Both URIs as secrets, both through stdin. The Atlas one is rewritten
+        # every run because it may have changed on the Credentials tab since the
+        # last migration, and a job authenticating with last month's password is
+        # a confusing way to find that out.
+        here = self._ensure_secret("migrate-here", self.connection_url(), replace=True)
+        there = self._ensure_secret("migrate-there", atlas, replace=True)
+
+        base.run(["docker", "service", "rm", self.migrate_service()], timeout=60)
+        ok, out = base.run([
+            "docker", "service", "create", "--detach",
+            "--name", self.migrate_service(),
+            "--restart-condition", "none",
+            "--network", base.EDGE_NETWORK,
+            "--constraint", "node.role == manager",
+            "--secret", f"source={here},target=migrate-here.uri,mode=0400",
+            "--secret", f"source={there},target=migrate-there.uri,mode=0400",
+            "--secret", f"source={self.secret_name('tls-ca')},"
+                        f"target={self.name}-ca.crt,mode=0444",
+            "--env", f"DIRECTION={direction}",
+            "--env", f"OVERWRITE={'yes' if overwrite else 'no'}",
+            "--label", f"infra.component={self.name}",
+            "--label", f"dataguard.role={self.MIGRATE_ROLE}",
+            "--reserve-cpu", "0.1", "--reserve-memory", "256M",
+            MIGRATE_IMAGE, "sh", "-c", self._MIGRATE_SCRIPT,
+        ], timeout=120)
+        if not ok:
+            return False, f"Could not start the migration: {out}"
+        way = ("this cluster into Atlas" if direction == "export"
+               else "Atlas into this cluster")
+        return True, (f"Migrating {way}. It runs in the background — this tab "
+                      f"shows how it ends. Writes made while it runs are NOT "
+                      f"copied.")
 
     def _controller(self):
         out = base.docker_out([

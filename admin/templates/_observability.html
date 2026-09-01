@@ -1,0 +1,44 @@
+{# The RED / USE / Golden column.
+
+   Every chart in here is DRAWN ON THE SERVER — `shape.observability()` picks
+   the expressions and `charts.py` turns the series into SVG, so this template
+   decides nothing and cannot disagree with the preview build about how a chart
+   looks. It is also what lets the whole column refresh through the same
+   `data-live-html` mechanism the cluster map uses, with no chart code in the
+   browser at all.
+
+   Read-only, and it must stay that way: the markup is replaced underneath the
+   reader every fifteen seconds. #}
+<div class="obs">
+  <div class="obs-head">
+    <h2>Signals</h2>
+    <span class="spacer"></span>
+    <span class="live" data-topo-live><i></i>live</span>
+  </div>
+
+  {% for section in observability %}
+    <section class="panel obs-section">
+      <div class="panel-head">
+        <h3>{{ section.title }}</h3>
+      </div>
+      {# The three frameworks overlap on purpose — RED is a subset of the golden
+         signals, and both share "errors" with USE. Saying which SCOPE each one
+         answers at is what stops the column reading as the same chart printed
+         three times. #}
+      <p class="obs-scope">{{ section.scope }}</p>
+
+      {% for card in section.cards %}
+        <div class="obs-card">
+          <div class="obs-card-head">
+            <span class="obs-card-title">{{ card.title }}</span>
+          </div>
+          <p class="obs-note">{{ card.note }}</p>
+          {{ card.body|safe }}
+          {% if card.warning %}
+            <p class="obs-warning">{{ card.warning }}</p>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </section>
+  {% endfor %}
+</div>

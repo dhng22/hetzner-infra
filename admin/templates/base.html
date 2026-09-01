@@ -68,7 +68,8 @@
       </div>
     </header>
 
-    <main>
+    {# `wide` only where a page carries a second column — see main.wide. #}
+    <main{% if wide_main %} class="wide"{% endif %}>
       {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
           {% for category, message in messages %}

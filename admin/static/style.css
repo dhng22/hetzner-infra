@@ -194,6 +194,10 @@ code, .mono, kbd { font-family: var(--mono); font-size: .92em; }
 .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 
 main { padding: var(--s-6) var(--s-8) var(--s-10); max-width: 1240px; }
+/* The Overview carries a second column now. Keeping the 1240px cap there would
+   have taken roughly a third of the cluster map's width to pay for it, and the
+   map is the thing the page is named after. Only this page is widened. */
+main.wide { max-width: 1560px; }
 
 .page-head { display: flex; align-items: flex-start; gap: var(--s-4); margin-bottom: var(--s-5); }
 .page-head h1 { font-size: var(--t-2xl); font-weight: var(--w-bold); letter-spacing: -.015em; margin: 0 0 var(--s-1); text-wrap: balance; }
@@ -439,6 +443,11 @@ ul.tight li { margin-bottom: 2px; }
   padding: 14px 16px; font: 400 13.5px/1.7 var(--mono);
   max-height: 460px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
 }
+/* One node per line, so the follower can append and trim instead of re-parsing
+   the pane, and so these three rules finally reach something. They have been
+   here since the tab was written; until the server started emitting a span per
+   timestamp and a class per level, nothing ever matched them. */
+.logs .line { display: block; }
 .logs .lvl-warn { color: var(--warn); }
 .logs .lvl-err  { color: var(--bad); }
 .logs .ts { color: var(--text-mute); }
@@ -935,3 +944,80 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
 }
 .note-locked .ico-warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, transparent); }
 .note-locked .ico-lock { background: color-mix(in srgb, var(--text-mute) 16%, transparent); font-size: .6rem; }
+
+/* --- observability column ----------------------------------------------------
+   Main content and a fixed-width rail beside it. NOT `.grid-2`: that one is
+   symmetric, and these two are not peers — the map should keep its width and
+   the column should keep its readability, which is a fixed track, not a share.
+
+   It collapses at 1100px rather than at the shell's own 900px breakpoint,
+   because a 360px rail beside a cluster map stops working well before the
+   sidebar does.
+   -------------------------------------------------------------------------- */
+.split-main { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: var(--s-6); align-items: start; }
+.split-main-body { min-width: 0; }
+.split-main-side { min-width: 0; position: sticky; top: var(--s-6); }
+@media (max-width: 1100px) {
+  .split-main { grid-template-columns: 1fr; }
+  .split-main-side { position: static; }
+}
+
+.obs-head { display: flex; align-items: center; gap: var(--s-2); margin-bottom: var(--s-3); }
+.obs-head h2 { font-size: var(--t-lg); margin: 0; }
+.obs-section { padding-bottom: var(--s-3); margin-bottom: var(--s-4); }
+.obs-section h3 { font-size: var(--t-md); margin: 0; }
+.obs-scope { margin: 0 var(--s-4) var(--s-3); color: var(--text-mute); font-size: var(--t-xs); }
+.obs-card { padding: var(--s-3) var(--s-4); border-top: 1px solid var(--line); }
+.obs-card-title { font-weight: var(--w-bold); font-size: var(--t-sm); }
+.obs-note { margin: 2px 0 var(--s-2); color: var(--text-mute); font-size: var(--t-xs); line-height: 1.5; }
+/* A named gap rather than a blank chart. `charts.py` refuses to draw an empty
+   series as a flat line at zero, because "nothing matched" and "the value is
+   zero" are different facts and only one of them is good news. */
+.obs-warning {
+  margin: var(--s-2) 0 0; padding: 8px 10px; border-radius: var(--r-sm);
+  background: var(--surface-2); border: 1px solid var(--line);
+  color: var(--text-mute); font-size: var(--t-xs); line-height: 1.5;
+}
+
+/* --- charts ------------------------------------------------------------------
+   Series hues come from the categorical palette validated for both themes
+   further up this file; nothing here invents a colour. Status colours are used
+   only where a chart is genuinely reporting against a threshold.
+   -------------------------------------------------------------------------- */
+.chart { display: block; width: 100%; height: 96px; overflow: visible; }
+/* The SVG is stretched to whatever width the column has, so a scaled stroke
+   would be thicker horizontally than vertically. This keeps it one pixel. */
+.chart-line { fill: none; stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+.chart-area { stroke: none; opacity: .55; }
+.chart-band { fill: var(--bad); opacity: .07; }
+.chart-ref { stroke: var(--bad); stroke-width: 1; stroke-dasharray: 3 3; opacity: .55; vector-effect: non-scaling-stroke; }
+.chart-tick { fill: var(--text-mute); font: 400 9px var(--mono); }
+.chart-col { fill: var(--s-platform); }
+.chart-col.is-bad { fill: var(--bad); }
+.chart-col.is-warn { fill: var(--warn); }
+.chart-empty {
+  padding: 14px 0; color: var(--text-mute); font-size: var(--t-xs);
+  font-style: italic; text-align: center;
+  border: 1px dashed var(--line); border-radius: var(--r-sm);
+}
+
+.bar-rows { display: flex; flex-direction: column; gap: 6px; }
+.bar-row { display: grid; grid-template-columns: minmax(0, 1fr) 88px 46px; gap: 8px; align-items: center; font-size: var(--t-xs); }
+.bar-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-mute); }
+.bar-track { background: var(--surface-2); border-radius: 999px; height: 7px; overflow: hidden; }
+.bar-track > i { display: block; height: 100%; background: var(--s-prod); border-radius: 999px; }
+.bar-row.is-warn .bar-track > i { background: var(--warn); }
+.bar-row.is-bad .bar-track > i { background: var(--bad); }
+.bar-value { font: 400 11px var(--mono); text-align: right; }
+
+/* A bullet, not a gauge: the number matters far less than where it sits
+   relative to the line that will act on it. */
+.bullet { display: grid; grid-template-columns: minmax(0, 1fr) 52px; gap: 8px; align-items: center; margin-bottom: 6px; }
+.bullet-track { position: relative; background: var(--surface-2); border-radius: 999px; height: 10px; }
+.bullet-fill { display: block; height: 100%; background: var(--s-prod); border-radius: 999px; }
+.bullet.is-warn .bullet-fill { background: var(--warn); }
+.bullet.is-bad .bullet-fill { background: var(--bad); }
+.bullet-mark { position: absolute; top: -2px; width: 2px; height: 14px; border-radius: 1px; }
+.bullet-mark.is-warn { background: var(--warn); }
+.bullet-mark.is-bad { background: var(--bad); }
+.bullet-value { font: 400 11px var(--mono); text-align: right; }

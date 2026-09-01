@@ -1,0 +1,78 @@
+{# Move this database to or from MongoDB Atlas.
+
+   A snapshot transfer — `mongodump` piped into `mongorestore` — which means the
+   copy is of one moment and writes made while it runs are not in it. That is
+   stated here rather than in a tooltip, because it is the whole difference
+   between this and a live sync and it is the thing that loses data if it is
+   missed.
+
+   It is a section on the Backups tab rather than a tab of its own because it is
+   the same operation as a restore, pointed somewhere else: it reads everything
+   and overwrites everything. It takes the same typed confirmation for the same
+   reason. #}
+<section class="panel danger-zone">
+  <div class="panel-head">
+    <h2>Migrate</h2>
+    <span class="spacer"></span>
+    {% if migrate %}
+      <span class="pill {{ 'ok' if migrate.ok else ('warn' if migrate.running else 'bad') }}">
+        {{ migrate.state }}</span>
+    {% endif %}
+  </div>
+
+  <div class="panel-body stack">
+    <p>
+      Copies every database except <code>admin</code>, <code>local</code> and
+      <code>config</code>, then counts documents on both sides and fails if they
+      do not match. <strong>Writes made while it runs are not copied</strong> —
+      stop the application first, or accept that whatever it wrote during the
+      transfer stays behind.
+    </p>
+
+    {% if not component.secret('ATLAS_URI') %}
+      <div class="banner warn"><div>
+        No Atlas connection string is set. Add one on the
+        <a href="{{ component_href(component.name, 'credentials') }}">Credentials</a>
+        tab — it is stored as a secret, never in this component's spec file.
+      </div></div>
+    {% endif %}
+
+    {% if migrate %}
+      <div class="field">
+        <label>Last run</label>
+        <p class="hint mono">{{ migrate.since }}{% if migrate.detail %} · {{ migrate.detail }}{% endif %}</p>
+        {% if migrate_log %}<pre class="logs">{{ migrate_log }}</pre>{% endif %}
+      </div>
+    {% endif %}
+  </div>
+
+  <form method="post" action="{{ migrate_href(component.name) }}"
+        {% if preview %}data-preview{% endif %}>
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <div class="panel-body stack">
+      <div class="field">
+        <label for="m-direction">Direction</label>
+        <select id="m-direction" name="direction">
+          <option value="export">This cluster → Atlas</option>
+          <option value="import">Atlas → this cluster</option>
+        </select>
+        <p class="hint">Either way the destination is <strong>replaced</strong>, not
+        merged. The job refuses to start if the destination already holds data and
+        you have not ticked the box below.</p>
+      </div>
+      <div class="field">
+        <label class="check">
+          <input type="checkbox" name="overwrite" value="yes">
+          <span>The destination may already hold data — overwrite it</span>
+        </label>
+      </div>
+      <div class="field">
+        <label for="m-confirm">Type <code>{{ component.name }}</code> to confirm</label>
+        <input id="m-confirm" name="confirm" type="text" autocomplete="off" required>
+      </div>
+    </div>
+    <div class="sticky-save">
+      <button class="btn btn-danger" type="submit">Start the migration</button>
+    </div>
+  </form>
+</section>

@@ -105,7 +105,11 @@ def detail_contexts():
             "tab": "environment" if component.TYPE == "app" else "map",
             "fields": type(component).fields(),
             "env_pairs": components.store.read_env(component.name),
-            "logs": fixtures.logs(component.service),
+            **dict(zip(("log_rows", "log_cursor", "log_note"),
+                       fixtures.log_events(component.service))),
+            "logs": True,
+            "log_lines": panel.LOG_LINES_DEFAULT,
+            "log_line_choices": panel.LOG_LINE_CHOICES,
             "newest": panel._newest_deploy(component.name, view),
         }
         # Gated on the tabs the component actually declares, exactly as the live
@@ -121,6 +125,13 @@ def detail_contexts():
             context["registries"] = fixtures.registry_logins()
         if "backups" in names:
             context["snapshots"], context["pitr"] = [], {}
+            # The Migrate section is gated the same way the live route gates
+            # it — on the component being able to migrate at all — so the
+            # preview exercises the real template rather than a stand-in.
+            if hasattr(component, "start_migration"):
+                context["migrate_offered"] = True
+                context["migrate"] = None
+                context["migrate_log"] = ""
         if "map" in names:
             # The component name is passed for a database, exactly as the live
             # route passes it: its map is coloured by which member is primary,
@@ -184,6 +195,10 @@ def main():
             labels=labels,
             # page data
             s=fixtures.summary(),
+            # The RED / USE / Golden column, from the same function the
+            # live route calls — so a chart that breaks breaks the build
+            # rather than appearing as an empty box in the artefact.
+            observability=fixtures.observability(),
             views=views,
             grouped=ordered,
             alerts=fixtures.alerts(),
@@ -256,6 +271,9 @@ def main():
             storage_delete_href=lambda name: "#",
             viewer_href=lambda name: "#",
             restore_href=lambda name: "#",
+            migrate_href=lambda name: "#",
+            logs_href=lambda name: "#",
+            live_href=lambda fragment, **kw: "#",
             registry_href=lambda: "#",
             stack_href=lambda: "#",
             logout_href=lambda: "#",

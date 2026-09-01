@@ -145,6 +145,7 @@ L_LAG_BUDGET = DG + "lag_budget_seconds"
 L_SECONDARY_READS = DG + "secondary_reads"
 L_BACKUP_TARGET = DG + "backup_target"
 L_MAX_SNAPSHOTS = DG + "max_snapshots"
+L_BACKUP_INTERVAL = DG + "backup_interval_hours"
 L_SET_NAME = DG + "set"
 L_VIEWER = DG + "viewer"
 
@@ -396,6 +397,7 @@ class Component:
         self.secondary_reads = _flag(labels, L_SECONDARY_READS, True)
         self.backup_target = labels.get(L_BACKUP_TARGET) or ""
         self.max_snapshots = int(_num(labels, L_MAX_SNAPSHOTS, 7, int))
+        self.backup_interval_hours = _num(labels, L_BACKUP_INTERVAL, 24.0)
         # NOT A PLAN NAME, on either side. The overseer picks the smallest
         # shared x86 type in the location that meets the base requirement, and
         # `bigger` asks it for the next rung up from there — because Hetzner
@@ -1434,6 +1436,12 @@ def loop():
             if data_bytes is not None:
                 G_DATA.labels(component=name).set(data_bytes)
 
+        # BEFORE the gates, and before the `continue` below them. A component
+        # whose backup is stale is refused every shape change precisely because
+        # of that — running the backup after the refusal would mean the one
+        # action that clears the gate is the one action the gate skips.
+        take_scheduled_backup(component, now)
+
         gates = plan.refusals(
             component, topology, now=now, backup_age=backup_age(component, now),
             syncing_elsewhere=_syncing not in (None, name))
@@ -1471,6 +1479,50 @@ def loop():
 
     _stop_idle_viewers(components)
     return results
+
+
+def take_scheduled_backup(component, now):
+    """
+    Take a snapshot if one is due.
+
+    `run_backup` existed with NO CALLER anywhere in this repo, which made the
+    interval on the component's form a number with no effect and left scheduled
+    backups entirely imaginary — only the manual button ever took one.
+
+    Worse than a missing feature: `_backup_state` is written only by
+    `run_backup`, and `plan.refusals()` refuses every shape change for a
+    component that has a backup target and no recorded backup. So a database
+    configured with backups was also frozen at its current topology, for a
+    reason that read as "backup stale" and had no way to stop being true.
+
+    The interval is checked against what we have SEEN take a backup, not against
+    a schedule: a restart forgets, takes one early, and is then correct again.
+    Taking one backup too many is a cost; missing one is the whole point of the
+    feature.
+    """
+    if not component.backup_target or not component.enabled:
+        return
+    age = backup_age(component, now)
+    if age is not None and age < component.backup_interval_hours * 3600:
+        return
+    if _backup_in_flight:
+        # One at a time across the cluster, the same rule an initial sync
+        # follows: a backup reads the whole dataset off a live member.
+        return
+    _run_one_backup(component)
+
+
+#: Whether a backup is running right now, cluster-wide.
+_backup_in_flight = False
+
+
+def _run_one_backup(component):
+    global _backup_in_flight
+    _backup_in_flight = True
+    try:
+        run_backup(component)
+    finally:
+        _backup_in_flight = False
 
 
 _last_change = {}

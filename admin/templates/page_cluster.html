@@ -1,4 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Cluster · {{ cluster_name }}{% endblock %}
 {% block crumb %}{{ cluster_name }} / <strong>Cluster</strong>{% endblock %}
-{% block main %}{% include "_cluster.html" %}{% endblock %}
+{% block main %}
+{# Whole-page live: nothing on it is a text field, so replacing the
+   markup cannot destroy anything a reader was in the middle of. #}
+<div data-live-html="{{ live_href('cluster') }}">
+  {% include "_cluster.html" %}
+</div>
+{% endblock %}

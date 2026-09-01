@@ -80,87 +80,10 @@
 </div>
 {% endif %}
 
-<section class="panel">
-  <div class="panel-head">
-    <h2>Per component</h2>
-    <span class="spacer"></span>
-    <span class="eyebrow">{{ a.services|length }} scaled</span>
-  </div>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Service</th>
-          <th class="num">p95</th>
-          <th class="num">SLO</th>
-          <th class="num">CPU/replica</th>
-          <th class="num">Replicas</th>
-          <th class="num">Wanted</th>
-          <th>Placement</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for svc in a.services %}
-        <tr>
-          <td>
-            <a href="{{ component_href(svc.component) }}"><strong>{{ svc.component }}</strong></a>
-            <span class="row-sub mono">{{ svc.service }}</span>
-          </td>
-          <td class="num mono {{ 'is-bad' if svc.breaching }}">
-            {{ svc.p95|round|int if svc.p95 is not none else '—' }}</td>
-          <td class="num mono muted">{{ svc.slo|round|int if svc.slo is not none else '—' }}</td>
-          <td class="num mono">
-            {{ svc.cpu_per_replica|round|int ~ '%' if svc.cpu_per_replica is not none else '—' }}</td>
-          <td class="num mono">
-            {{ svc.running if svc.running is not none else '—' }}/{{ svc.current if svc.current is not none else '—' }}
-            {%- if svc.pending %} <span class="pill warn plain">{{ svc.pending|int }} pending</span>{% endif %}
-          </td>
-          <td class="num mono">
-            {{ svc.desired|int if svc.desired is not none else '—' }}
-            {%- if svc.capped %} <span class="pill warn plain">capped at {{ svc.admitted|int }}</span>{% endif %}
-          </td>
-          <td>
-            <span class="pill {{ 'ok' if svc.worker_pinned else 'mute' }} plain">
-              {{ 'workers' if svc.worker_pinned else 'master' }}</span>
-          </td>
-        </tr>
-        {% else %}
-        <tr><td colspan="7" class="empty">
-          No component has autoscaling switched on. Turn it on in a component's Settings tab.
-        </td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  <div class="panel-note">
-    <strong>Wanted</strong> is what the signals asked for; <strong>capped</strong> means the
-    eligible nodes could not hold it, so the fleet is being grown to fit rather than the
-    request being dropped. Each row's SLO, bounds and thresholds live on that service as
-    <code>autoscale.*</code> deploy labels — edit them on the component, not here.
-  </div>
-</section>
-
-<section class="panel">
-  <div class="panel-head"><h2>Cluster signals</h2></div>
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>Signal</th><th class="num">Now</th><th>Role</th></tr></thead>
-      <tbody>
-        {% for sig in a.signals %}
-        <tr>
-          <td><strong>{{ sig.key }}</strong></td>
-          <td class="num mono">{% if sig.value is not none %}{{ sig.value|round(1) }}{{ sig.unit }}{% else %}no data{% endif %}</td>
-          <td class="muted">{{ sig.note }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  <div class="panel-note">
-    Node CPU is never a scaling trigger — it averages in exporters, the tunnel connector and
-    every other component, none of which should influence one application's capacity.
-  </div>
-</section>
+{# Live: these are gauges, not settings. See _manager_signals.html. #}
+<div data-live-html="{{ live_href('manager-signals') }}" data-live-ms="10000">
+  {% include "_manager_signals.html" %}
+</div>
 
 <div class="page-head section-gap">
   <div>

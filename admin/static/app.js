@@ -493,7 +493,16 @@
   // both required: the browser tab is visible, AND the map is scrolled into
   // view. A background tab polling a Docker socket every five seconds forever
   // is pure waste, and so is polling a section sitting below the fold.
-  var TOPO_MS = 5000;
+  // Default cadence. A panel that costs more to render than a socket walk —
+  // the observability column is a dozen range queries — declares its own with
+  // `data-live-ms`, so one expensive section cannot force everything else to be
+  // slow and cannot be forgotten about either.
+  var LIVE_MS = 5000;
+
+  function cadence(el) {
+    var want = parseInt(el.getAttribute("data-live-ms"), 10);
+    return want > 0 ? want : LIVE_MS;
+  }
 
   function pct(v) { return v === null || v === undefined ? "—" : Math.round(v) + "%"; }
 
@@ -649,13 +658,21 @@
     }
   }
 
-  function markLive(state) {
-    var el = document.querySelector("[data-topo-live]");
-    if (!el) { return; }
-    el.classList.toggle("is-stale", state === "stale");
-    el.classList.toggle("is-idle", state === "paused");
-    el.lastChild.nodeValue = state;
+  // The indicator belongs to the panel it reports on. It used to be looked up
+  // globally, which was fine while exactly one section was live and wrong the
+  // moment a second one was: every panel would have driven the same dot.
+  function indicatorFor(host) {
+    return function (state) {
+      var el = (host || document).querySelector("[data-topo-live]")
+            || document.querySelector("[data-topo-live]");
+      if (!el) { return; }
+      el.classList.toggle("is-stale", state === "stale");
+      el.classList.toggle("is-idle", state === "paused");
+      el.lastChild.nodeValue = state;
+    };
   }
+
+  var markLive = indicatorFor(null);
 
   // Poll `tick` while `el` is genuinely being looked at: the browser tab
   // visible AND the element on screen. Extracted so the Map tab gets exactly
@@ -682,7 +699,7 @@
         // nothing to catch up on. Every later resume does.
         if (everRan) { tick(); } else { everRan = true; }
         if (onPause) { onPause("live"); }
-        timer = setInterval(tick, TOPO_MS);
+        timer = setInterval(tick, cadence(el));
       } else if (timer !== null) {
         clearInterval(timer);                // stop the timer, not just its body
         timer = null;
@@ -726,6 +743,7 @@
   for (var fi = 0; fi < fragments.length; fi++) {
     (function (host) {
       var url = host.getAttribute("data-live-html");
+      var mark = indicatorFor(host);
       livePoll(host, function () {
         fetch(url, { headers: { "Accept": "text/html" }, credentials: "same-origin" })
           .then(function (r) { return r.ok ? r.text() : Promise.reject(r.status); })
@@ -735,9 +753,97 @@
               host.innerHTML = html;
               localiseTimes(host);
             }
+            mark("live");
           })
-          .catch(function () { /* logged out, or the preview build */ });
-      });
+          .catch(function () { mark("stale"); });
+      }, mark);
     })(fragments[fi]);
   }
+
+  // --- logs: follow the tail ------------------------------------------------
+  // Not `data-live-html`: that REPLACES a panel, and a log pane has to APPEND
+  // or every poll would throw away your scroll position and the selection you
+  // were making. The server hands back only what is new, keyed on a cursor, so
+  // a quiet service costs one empty response every few seconds.
+  (function () {
+    var pane = document.querySelector("[data-logs]");
+    if (!pane) { return; }
+    var stream = pane.querySelector("[data-logs-stream]");
+    var button = document.querySelector("[data-logs-toggle]");
+    var mark = indicatorFor(pane);
+    var url = pane.getAttribute("data-logs-url");
+    var cursor = pane.getAttribute("data-logs-cursor") || "";
+    var limit = parseInt(pane.getAttribute("data-logs-limit"), 10) || 200;
+    var paused = false;
+    var busy = false;
+
+    // Follow only while the reader is ALREADY at the bottom. Yanking someone
+    // back down because a line arrived while they were reading history is the
+    // behaviour that makes people turn tailing off.
+    function pinned() {
+      return stream.scrollHeight - stream.scrollTop - stream.clientHeight < 8;
+    }
+
+    function append(html) {
+      var wasPinned = pinned();
+      stream.insertAdjacentHTML("beforeend", html);
+      while (stream.children.length > limit) { stream.removeChild(stream.firstChild); }
+      if (wasPinned) { stream.scrollTop = stream.scrollHeight; }
+    }
+
+    function tick() {
+      if (paused || busy || !cursor) { return; }
+      busy = true;
+      fetch(url + (url.indexOf("?") < 0 ? "?" : "&") + "since=" + encodeURIComponent(cursor),
+            { headers: { "Accept": "text/html" }, credentials: "same-origin" })
+        .then(function (r) { return r.ok ? r.text() : Promise.reject(r.status); })
+        .then(function (html) {
+          var next = /^<!--cursor:(\d+)-->/.exec(html);
+          if (next) { cursor = next[1]; html = html.slice(next[0].length); }
+          if (html.trim()) { append(html); }
+          mark("live");
+        })
+        .catch(function () { mark("stale"); })
+        .then(function () { busy = false; });
+    }
+
+    if (button) {
+      button.hidden = false;
+      button.addEventListener("click", function () {
+        paused = !paused;
+        button.textContent = paused ? "Resume" : "Pause";
+        button.setAttribute("aria-pressed", paused ? "true" : "false");
+        mark(paused ? "paused" : "live");
+        // Resuming asks from the same cursor, so the gap fills in rather than
+        // being skipped: pausing stops the screen moving, not the recording.
+        if (!paused) { tick(); }
+      });
+    }
+    // Open at the newest line. The pane is scrolled to the top by default and
+    // the newest line is at the bottom, which is why this tab always needed a
+    // scroll before it said anything.
+    stream.scrollTop = stream.scrollHeight;
+    livePoll(pane, tick, function (state) { mark(paused ? "paused" : state); });
+  })();
+
+  // --- the visualiser wait page ---------------------------------------------
+  // It used to say "give it a few seconds and reload". The reason it had to was
+  // a bug that is now fixed on the server; this is the other half — the page
+  // asks, instead of the person.
+  (function () {
+    var wait = document.querySelector("[data-viewer-wait]");
+    if (!wait || !window.fetch) { return; }
+    var mark = indicatorFor(wait);
+    var status = wait.getAttribute("data-status-url");
+    var open = wait.getAttribute("data-open-url");
+    var timer = setInterval(function () {
+      fetch(status, { headers: { "Accept": "application/json" },
+                      credentials: "same-origin" })
+        .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+        .then(function (d) {
+          if (d && d.ready) { clearInterval(timer); window.location.href = open; }
+        })
+        .catch(function () { clearInterval(timer); mark("stale"); });
+    }, 2000);
+  })();
 })();

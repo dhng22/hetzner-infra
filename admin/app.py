@@ -17,6 +17,7 @@ which is bearer-token authenticated instead. See deploy_hook().
 """
 
 import os
+import time
 
 import requests
 from flask import (Flask, Response, abort, flash, jsonify, redirect, render_template,
@@ -216,6 +217,9 @@ def _globals():
             "node_detail", node_id=node_id, **({"from": origin} if origin != "cluster" else {})),
         "node_action_href": lambda node_id: url_for("node_action", node_id=node_id),
         "map_href": lambda name: url_for("component_map_fragment", name=name),
+        "live_href": lambda fragment, **kw: url_for("live_fragment",
+                                                    fragment=fragment, **kw),
+        "logs_href": lambda name: url_for("component_logs_fragment", name=name),
         "creds_href": lambda name: url_for("save_credentials", name=name),
         "new_href": lambda type_name: url_for("component_new", type=type_name),
         "create_href": lambda: url_for("component_create"),
@@ -226,6 +230,7 @@ def _globals():
         "storage_delete_href": lambda name: url_for("delete_storage", name=name),
         "viewer_href": lambda name: url_for("component_viewer", name=name, sub=""),
         "restore_href": lambda name: url_for("restore_component", name=name),
+        "migrate_href": lambda name: url_for("migrate_component", name=name),
         "registry_href": lambda: url_for("save_registry"),
         "stack_href": lambda: url_for("deploy_system"),
         "logout_href": lambda: url_for("logout"),
@@ -247,6 +252,39 @@ def _load(name):
         return components.load(name)
     except components.ComponentError:
         abort(404)
+
+
+def _deploy_if_needed(component):
+    """
+    Apply a saved change, but only if it is one. `(ok, output, detail, ran)`.
+
+    Every save used to end in an unconditional `docker stack deploy` over the
+    whole rendered file, which made "I changed the log level" and "I removed a
+    replica set member" look identical from here. Swarm was already skipping the
+    services that had not moved; what nobody could see was WHICH, or that a save
+    changing nothing was still a deploy.
+
+    `ran` is separate from `ok` so the caller can tell "deployed successfully"
+    from "there was nothing to deploy" — recording the second as a deployment
+    would put a phantom entry in the component's history.
+    """
+    diff = component.pending_changes()
+    if components.base.nothing_to_do(diff):
+        return True, "", "Nothing to redeploy — the rendered stack is unchanged.", False
+    ok, output = component.deploy()
+    if not ok:
+        return False, output, "", True
+    # Duck-typed, and after the deploy rather than inside `deploy()`: a
+    # component whose storage target just changed has to be told about it, and
+    # the thing that has to be told is a container the deploy just started.
+    # Failing here is not a failed deploy — the tab reports it separately.
+    if hasattr(component, "configure_backups"):
+        configured, why = component.configure_backups()
+        if not configured and why:
+            app.logger.warning("%s: backup storage not configured: %s",
+                               component.name, why)
+    detail = components.base.describe_changes(diff)
+    return True, output, detail or "Deploying — the Deployments tab shows how it ends.", True
 
 
 # --- auth ------------------------------------------------------------------
@@ -405,7 +443,8 @@ def deploy_hook_status(name):
 def overview():
     return render_template("page_overview.html", section="overview",
                            s=data.summary(), views=data.component_views(),
-                           alerts=data.alerts(), topo=data.topology())
+                           alerts=data.alerts(), topo=data.topology(),
+                           observability=data.observability())
 
 
 @app.get("/api/topology")
@@ -420,6 +459,87 @@ def api_topology():
     only refreshes it, so the view still works with JS off.
     """
     return jsonify(data.topology())
+
+
+#: Panels that re-render themselves, and the context each one needs.
+#:
+#: An ALLOW-LIST keyed by name, not a route that takes a template name — the
+#: latter would let a URL choose which of the panel's templates to render, which
+#: includes the ones holding credentials. Adding a live panel is one entry here
+#: plus `data-live-html` on its host, which is the whole mechanism.
+#:
+#: NOTHING WITH A FORM IN IT belongs on this list. These fragments replace their
+#: host's markup while somebody is looking at it; doing that to a half-typed
+#: field destroys the edit. That is why the settings form, the alert targets and
+#: the node controls stayed on their pages while the panels AROUND them moved
+#: into partials of their own.
+LIVE_FRAGMENTS = {
+    "overview-summary": lambda: ("_overview_summary.html", {"s": data.summary()}),
+    "overview-lists": lambda: ("_overview_lists.html",
+                               {"views": data.component_views(),
+                                "alerts": data.alerts()}),
+    "observability": lambda: ("_observability.html",
+                              {"observability": data.observability()}),
+    "cluster": lambda: ("_cluster.html", {"nodes": data.topology()["nodes"],
+                                          "s": data.summary()}),
+    "components": lambda: ("_components_live.html", _components_context()),
+    "manager-signals": lambda: ("_manager_signals.html", {"a": data.autoscaler_state()}),
+    "alert-rules": lambda: ("_alert_rules.html", {"alerts": data.alerts()}),
+    "node-tasks": lambda: ("_node_tasks.html", {"n": _node_or_404(request.args.get("node", ""))}),
+    "dataguard": lambda: ("_dataguard_state.html", {"dg": data.dataguard_state()}),
+}
+
+
+def _node_or_404(node_id):
+    entry = data.node(node_id) if node_id else None
+    if entry is None:
+        abort(404)
+    return entry
+
+
+@app.get("/components/<name>/logs")
+@auth.login_required
+def component_logs_fragment(name):
+    """
+    Whatever this service has said SINCE the cursor — the tail, one poll's worth.
+
+    Not a `LIVE_FRAGMENTS` entry, because those replace their host and a log
+    pane has to append: replacing it every few seconds would discard the scroll
+    position and any selection being made. The response therefore carries the
+    new cursor in a leading comment and the new lines after it, and the client
+    adds them to what is already on screen.
+
+    Without a cursor this answers the same first page the tab renders, which is
+    what a reload does and what the CLI fallback gets, since `docker service
+    logs` has no timestamp we can resume from.
+    """
+    component = _load(name)
+    raw = request.args.get("since", "")
+    since = int(raw) if raw.isdigit() else None
+    rows, cursor, note = data.log_events(component.service, _log_lines(), since)
+    return render_template("_logs.html", log_rows=rows, log_cursor=cursor,
+                           log_note="" if since else note)
+
+
+@app.get("/live/<fragment>")
+@auth.login_required
+def live_fragment(fragment):
+    """
+    One panel, re-rendered, for the poller in `app.js`.
+
+    Read-only and GET, so no CSRF token is involved; the session is the whole
+    guard, exactly as it is for the page this markup came off.
+
+    The server renders every one of these into the full page first, so each
+    panel is complete and correct with JavaScript off. This only keeps it
+    current — which is what the panel was missing everywhere except the cluster
+    map, and why reading it meant pressing reload every few seconds.
+    """
+    build = LIVE_FRAGMENTS.get(fragment)
+    if build is None:
+        abort(404)
+    template, context = build()
+    return render_template(template, **context)
 
 
 @app.get("/components/<name>/map")
@@ -442,9 +562,11 @@ def component_map_fragment(name):
 
 # --- components ------------------------------------------------------------
 
-@app.get("/components")
-@auth.login_required
-def components_index():
+def _components_context():
+    """
+    What `_components.html` needs. Shared with the live fragment, so the page
+    and its refresh cannot render two different lists of the same components.
+    """
     views = data.component_views()
     grouped = {}
     for view in views:
@@ -455,9 +577,15 @@ def components_index():
     # The infrastructure catalog lives here rather than on the Cluster tab.
     # Both are things running in this cluster, and the question "what is
     # deployed" has one answer; Cluster is about the machines underneath.
+    return {"grouped": ordered, "views": views, "new_groups": components.groups(),
+            "system": data.system_view(), "stacks": catalog.SYSTEM_STACKS}
+
+
+@app.get("/components")
+@auth.login_required
+def components_index():
     return render_template("page_components.html", section="components",
-                           grouped=ordered, views=views, new_groups=components.groups(),
-                           system=data.system_view(), stacks=catalog.SYSTEM_STACKS)
+                           **_components_context())
 
 
 @app.get("/components/new")
@@ -560,7 +688,11 @@ def component_detail(name):
     if tab == "logs":
         extra["log_lines"] = _log_lines()
         extra["log_line_choices"] = LOG_LINE_CHOICES
-        extra["logs"] = data.logs(component.service, extra["log_lines"])
+        rows, cursor, note = data.log_events(component.service, extra["log_lines"])
+        extra["logs"] = True
+        extra["log_rows"] = rows
+        extra["log_cursor"] = cursor
+        extra["log_note"] = note
     if tab == "deployments":
         extra["webhook"] = webhook_for(name)
         extra["deployments"], extra["rollout"] = data.deployments(name, component.service)
@@ -579,6 +711,14 @@ def component_detail(name):
         extra["firewall"] = _firewall_state(component)
     # `pbm list` shells into a container, so it runs only when the tab is open.
     # Any type that can list snapshots gets the tab; no branch here names one.
+    if tab == "backups" and hasattr(component, "start_migration"):
+        # Duck-typed like the snapshot block below it — no branch here names a
+        # component type, so a second database that learns to migrate gets the
+        # section by growing the method.
+        extra["migrate_offered"] = True
+        extra["migrate"] = component.migrate_status()
+        extra["migrate_log"] = (component.migrate_logs()
+                                if extra["migrate"] else "")
     if tab == "backups" and hasattr(component, "snapshots"):
         found = component.snapshots()
         extra["snapshots"], extra["pitr"] = found if found else ([], {})
@@ -656,11 +796,11 @@ def save_component_env(name):
         return redirect(_component_href(name, "environment"))
 
     component_store.write_env(name, pairs, header=[f"# Environment for {name}.", ""])
-    ok, output = component.deploy()
-    state.record(name, component.live_image() or component.spec.get("image", ""),
-                 "panel", ok, output, actor=auth.current_user() or "")
-    flash("Environment saved. Deploying — the Deployments tab shows whether it "
-          "converged or was rolled back." if ok
+    ok, output, detail, ran = _deploy_if_needed(component)
+    if ran:
+        state.record(name, component.live_image() or component.spec.get("image", ""),
+                     "panel", ok, output, actor=auth.current_user() or "")
+    flash(f"Environment saved. {detail}" if ok
           else f"Saved, but the deploy failed: {output}", "ok" if ok else "bad")
     return redirect(_component_href(name, "environment"))
 
@@ -677,8 +817,8 @@ def save_component_spec(name):
             flash(problem, "bad")
         return redirect(_component_href(name, "settings"))
 
-    ok, output = component.deploy()
-    flash("Settings saved and deployed." if ok
+    ok, output, detail, _ran = _deploy_if_needed(component)
+    flash(f"Settings saved. {detail}" if ok
           else f"Saved, but the deploy failed: {output}", "ok" if ok else "bad")
     return redirect(_component_href(name, "settings"))
 
@@ -724,6 +864,31 @@ def component_action(name):
     ok, output = chosen["run"]()
     flash(output or ("Done." if ok else "Failed."), "ok" if ok else "bad")
     return redirect(_component_href(name))
+
+
+@app.post("/components/<name>/migrate")
+@auth.login_required
+def migrate_component(name):
+    """
+    Start a snapshot transfer to or from Atlas.
+
+    Typed confirmation, exactly like Restore and Delete, and for the same
+    reason: both directions REPLACE the destination, and the difference between
+    sending production to a scratch cluster and the reverse is one dropdown.
+    """
+    _require_csrf()
+    _no_writes_in_preview()
+    component = _load(name)
+    if not hasattr(component, "start_migration"):
+        abort(404)
+    if request.form.get("confirm", "").strip() != name:
+        flash(f"Type {name} exactly to confirm the migration.", "bad")
+        return redirect(_component_href(name, "backups"))
+    ok, output = component.start_migration(
+        request.form.get("direction", ""),
+        overwrite=request.form.get("overwrite") == "yes")
+    flash(output, "ok" if ok else "bad")
+    return redirect(_component_href(name, "backups"))
 
 
 @app.post("/components/<name>/delete")
@@ -1076,13 +1241,24 @@ HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authoriza
 NEVER_FORWARD = {"cookie", "authorization"}
 PROXY_MAX_BYTES = 32 * 1024 * 1024
 
+#: Total time the console may spend being handed its own connection
+#: before we give up and open it empty. See `_seed_viewer`.
+SEED_BUDGET_SECONDS = 12
+
+#: How long a proxied request may take. A database console that has been woken
+#: should answer immediately; if it does not, saying so is more useful than
+#: waiting. Grafana gets longer because a dashboard query legitimately can be
+#: slow — but both are under Cloudflare's 100s, so the error page is always ours.
+VIEWER_FORWARD_TIMEOUT = 25
+GRAFANA_FORWARD_TIMEOUT = 60
+
 #: Grafana, reached the same way and for the same reason. It is on `monitoring`
 #: and nothing else, so this name resolves for the panel and for nobody outside
 #: the cluster. See `grafana()` below for what this buys.
 GRAFANA_ORIGIN = "http://grafana:3000"
 
 
-def _forward(origin):
+def _forward(origin, timeout=VIEWER_FORWARD_TIMEOUT):
     """
     Hand this request to `origin` unchanged, at its own path, and stream it back.
 
@@ -1112,7 +1288,11 @@ def _forward(origin):
     upstream = requests.request(
         request.method, f"{origin}{request.path}",
         params=request.args, data=body, headers=headers,
-        allow_redirects=False, stream=True, timeout=60)
+        # Under Cloudflare's 100-second origin timeout, which is not
+        # configurable. A slow upstream must produce OUR error page, naming the
+        # thing that was slow — a 524 from Cloudflare names nothing and looks
+        # like the panel is broken.
+        allow_redirects=False, stream=True, timeout=timeout)
 
     out = Response(upstream.iter_content(chunk_size=64 * 1024),
                    status=upstream.status_code)
@@ -1173,11 +1353,20 @@ def _seed_viewer(component, service, port):
     if not wanted:
         return
     base = f"http://{service}:{port}/components/{component.name}/viewer"
+    # A hard total budget, because this runs inside the request that draws the
+    # console. It used to be allowed 10 seconds plus 20 per database, which on a
+    # component with three of them was 70 seconds of a 100-second ceiling spent
+    # before the first byte of HTML. Opening unseeded is a small annoyance;
+    # timing out at the edge is an error page for something that works.
+    deadline = time.monotonic() + SEED_BUDGET_SECONDS
     try:
-        if requests.get(f"{base}/api/databases", timeout=10).json():
+        if requests.get(f"{base}/api/databases", timeout=5).json():
             return
         for database in wanted:
-            requests.post(f"{base}/api/databases", json=database, timeout=20)
+            if time.monotonic() > deadline:
+                app.logger.warning("stopped setting up %s: out of time", service)
+                return
+            requests.post(f"{base}/api/databases", json=database, timeout=6)
     except Exception as exc:                                     # noqa: BLE001
         # Never the body — it holds the database password.
         app.logger.warning("could not set up %s: %s", service, exc)
@@ -1219,8 +1408,13 @@ def component_viewer(name, sub):        # noqa: ARG001 — `sub` is the URL capt
     service = f"{component.stack}_viewer"
     started, detail = data.ensure_viewer(service)
     if not started:
+        # `ensure_viewer` no longer waits, so this answers in about the time one
+        # Docker socket call takes. The wait page polls `viewer_status` and
+        # comes back on its own — which is what the "press View two or three
+        # times" ritual was standing in for.
         return render_template("page_viewer_wait.html", section="components",
-                               component=component, detail=detail), 503
+                               component=component, detail=detail,
+                               status_url=url_for("viewer_status", name=name)), 503
     data.touch_viewer(component.name)
     if not sub:
         # The landing request, and only that one. This is the request the View
@@ -1236,7 +1430,23 @@ def component_viewer(name, sub):        # noqa: ARG001 — `sub` is the URL capt
         return _forward(f"http://{service}:{port}")
     except requests.RequestException as exc:
         return render_template("page_viewer_wait.html", section="components",
-                               component=component, detail=str(exc)), 502
+                               component=component, detail=str(exc),
+                               status_url=url_for("viewer_status", name=name)), 502
+
+
+#: NOT under `/components/<name>/viewer/`, deliberately. A static segment there
+#: would shadow any upstream path of the same name, and both consoles are third
+#: party — the set of paths they serve is theirs to change, not ours to reserve.
+@app.get("/components/<name>/viewer-status")
+@auth.login_required
+def viewer_status(name):
+    """Is the visualiser up yet? The one question the wait page has to ask."""
+    if PREVIEW:
+        abort(400, "This is a preview build with dummy data — nothing is proxied.")
+    component = _load(name)
+    if not component.spec.get("visualizer"):
+        abort(404, "This component has no data visualiser.")
+    return jsonify({"ready": bool(data.viewer_running(f"{component.stack}_viewer"))})
 
 
 @app.route("/grafana/", defaults={"sub": ""},
@@ -1275,7 +1485,7 @@ def grafana(sub):                       # noqa: ARG001 — `sub` is the URL capt
     if PREVIEW:
         abort(400, "This is a preview build with dummy data — nothing is proxied.")
     try:
-        return _forward(GRAFANA_ORIGIN)
+        return _forward(GRAFANA_ORIGIN, timeout=GRAFANA_FORWARD_TIMEOUT)
     except requests.RequestException as exc:
         # `components`, because that is the page whose Open button sent you here
         # — Grafana has no rail entry of its own.

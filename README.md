@@ -435,6 +435,28 @@ anything in the cluster and read every credential in it. Put the hostname behind
 Cloudflare Access; the login is one factor, Access is the second. Six failed
 attempts locks the source address out for five minutes.
 
+**Every page keeps itself current.** Panels that describe live state — the
+cluster map, the tiles, the component and node lists, the alert rules, the
+manager gauges, the observability column and the logs — re-render themselves
+while you are looking at them. Polling only runs while the browser tab is
+visible AND the panel is on screen, so a background tab costs nothing. Forms are
+deliberately excluded: settings, environment, credentials, storage and alert
+targets stay put, because replacing markup under a half-typed field destroys
+what you were writing.
+
+**The Overview carries an observability column** on the right of the cluster
+map — RED per service, USE per node, and the four golden signals cluster-wide.
+They overlap on purpose and each says which scope it answers at. Charts are
+drawn on the server as inline SVG (`admin/charts.py`), so there is no charting
+library, no CDN and no chart code in the browser. A chart with no data says so
+in words rather than drawing a flat line at zero, because "nothing matched" and
+"the value is zero" are different facts.
+
+**Saving only deploys what changed.** Every save renders the stack and compares
+it with the one last applied; if nothing moved, nothing is deployed and the page
+says so. Otherwise it names what will roll and what will be left alone — and
+names any service `--prune` is about to delete before it happens.
+
 To preview the interface without deploying anything:
 
 ```bash
@@ -474,6 +496,23 @@ line without `=` is an error rather than a silent drop.
 > by anyone who is already root on the master. The trade buys one-click rotation:
 > Swarm secrets are immutable, so a rotate button on top of them is a
 > versioned-secret dance instead of a button.
+>
+> One exception, in the other direction: a credential to somebody ELSE'S system
+> — the MongoDB Atlas connection string the Migrate section reads — is a
+> `Secret` with `generated=False`, so leaving it blank means unset rather than
+> "make one up". A random Atlas URI is not a weak secret, it is a wrong one.
+
+**Moving a Mongo database in or out.** The Backups tab has a **Migrate**
+section: snapshot transfer both ways between this cluster and Atlas, run as a
+detached one-shot Swarm service (`mongodump | mongorestore`, then a document
+count on both sides that fails the job if they disagree). Two things it will not
+pretend about — **writes made while it runs are not copied**, so stop the
+application first if that matters; and both directions REPLACE the destination,
+which is why it takes the same typed confirmation as Restore and refuses a
+non-empty destination you did not tick the box for. Neither connection string is
+ever a command-line argument: both arrive as mounted Swarm secrets and are read
+from files, because container arguments are visible in the master's process
+table.
 
 **Deploy paths, and there are exactly two:**
 
@@ -495,6 +534,20 @@ rolls production back:
   placement back on every deploy.
 
 ## Things that will bite you
+
+- **Cloudflare's origin timeout is 100 seconds and is not configurable.**
+  Anything the panel does inside a request has to finish well inside it, or the
+  browser gets a 524 for an operation that is in fact succeeding. Deploys, and
+  now starting a data visualiser and running a migration, are all detached for
+  this reason: the panel fires the change and a page that can retry cheaply
+  reports on it. If you add a slow action, detach it.
+- **A metric that no longer exists reads exactly like a healthy cluster.**
+  Renaming a service renames its gauges; five of the Overview's tiles read
+  `autoscaler_*` names for months after the fleet moved to the overseer, and an
+  alert rule read an HTTP timer no component here has ever published. Nothing
+  errored — the numbers were simply blank and the alert simply silent. When you
+  rename an exporter, grep for the old prefix, and check the new one actually
+  answers.
 
 - **A component's SLO is the whole policy for that component.** If its real p95
   already exceeds it, the scaler runs to the ceiling on day one and

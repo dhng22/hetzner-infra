@@ -1,0 +1,30 @@
+{# The rule list, re-rendered by `/live/alert-rules`. The target FORMS above
+   it are not in here on purpose — they hold typed input. #}
+<section class="panel">
+  <div class="panel-head"><h2>Rules</h2></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Rule</th><th>Group</th><th>Severity</th><th>State</th><th>Summary</th></tr></thead>
+      <tbody>
+        {% for al in alerts %}
+        <tr>
+          <td><strong class="mono">{{ al.name }}</strong></td>
+          <td class="mono muted">{{ al.group }}</td>
+          <td>
+            <span class="pill {{ 'bad' if al.severity == 'critical' else 'warn' if al.severity == 'warning' else 'mute' }} plain">
+              {{ al.severity }}
+            </span>
+          </td>
+          <td><span class="pill {{ al.tone }}">{{ al.state }}</span></td>
+          <td class="muted">{{ al.summary }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="panel-note">
+    Rules live in <code>config/alerts.yml</code> and are unit-tested by
+    <code>config/alerts_test.yml</code>. Run <code>promtool test rules</code> after editing —
+    a rule whose selector has drifted looks exactly like a rule with nothing to report.
+  </div>
+</section>

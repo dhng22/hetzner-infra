@@ -1148,9 +1148,10 @@ class PanelTest(unittest.TestCase):
     def test_the_logs_tab_asks_for_the_depth_you_picked(self):
         self.create_app("noisy")
         asked = []
-        real = self.panel.data.logs
-        self.panel.data.logs = lambda service, lines=200: (
-            asked.append(lines) or "a line")
+        real = self.panel.data.log_events
+        self.panel.data.log_events = lambda service, lines=200, since_ns=None: (
+            asked.append(lines) or ([{"at": "", "text": "a line", "level": ""}],
+                                    None, ""))
         try:
             self.client.get("/components/noisy?tab=logs")
             self.client.get("/components/noisy?tab=logs&lines=1000")
@@ -1159,32 +1160,211 @@ class PanelTest(unittest.TestCase):
             self.client.get("/components/noisy?tab=logs&lines=999999")
             self.client.get("/components/noisy?tab=logs&lines=drop+table")
         finally:
-            self.panel.data.logs = real
+            self.panel.data.log_events = real
         self.assertEqual(asked, [200, 1000, 200, 200])
 
     def test_the_logs_tab_offers_every_depth_it_accepts(self):
         """A choice the form offers and the route refuses is a dead control."""
         self.create_app("optioned")
-        real = self.panel.data.logs
-        self.panel.data.logs = lambda service, lines=200: "a line"
+        real = self.panel.data.log_events
+        self.panel.data.log_events = lambda service, lines=200, since_ns=None: (
+            [{"at": "", "text": "a line", "level": ""}], None, "")
         try:
             page = self.client.get(
                 "/components/optioned?tab=logs&lines=500").get_data(as_text=True)
         finally:
-            self.panel.data.logs = real
+            self.panel.data.log_events = real
         for choice in self.panel.LOG_LINE_CHOICES:
             self.assertIn(f'value="{choice}"', page)
         self.assertIn('value="500" selected', page)
 
 
-class DatabasePanelTest(PanelTest):
+class LivePanelTest(PanelTest):
     """
-    The surfaces the database work added: the placement/manager invariant, the
-    Dataguard tab, Storage, and the visualiser proxy.
+    The panels that re-render themselves, and the one rule they all obey.
+
+    Everything on the Overview except the cluster map used to be stale until
+    somebody pressed reload; these fragments are what fixed that. They are also
+    the thing most likely to be extended carelessly, which is what the last test
+    here is for.
+    """
+
+    def test_every_fragment_needs_a_session(self):
+        for fragment in self.panel.LIVE_FRAGMENTS:
+            with self.subTest(fragment=fragment):
+                r = self.client.get(f"/live/{fragment}")
+                self.assertEqual(r.status_code, 302)
+                self.assertIn("/login", r.headers["Location"])
+
+    def test_an_unknown_fragment_is_not_a_template_name(self):
+        """
+        The route takes a KEY, not a path. If it ever took the template name it
+        would let a URL render `_component_detail.html`, which prints
+        credentials.
+        """
+        self.login()
+        for probe in ("_component_detail.html", "../base.html", "nope"):
+            self.assertEqual(self.client.get(f"/live/{probe}").status_code, 404)
+
+    def test_the_fragments_render_what_the_pages_render(self):
+        self.create_app("live")
+        for fragment, path, probe in (
+                ("overview-summary", "/", "Breaching SLO"),
+                ("overview-lists", "/", "Alert rules"),
+                ("observability", "/", "obs-card"),
+                ("cluster", "/cluster", "panel"),
+                ("components", "/components", "live"),
+                ("alert-rules", "/alerts", "Rules")):
+            with self.subTest(fragment=fragment):
+                page = self.client.get(path).get_data(as_text=True)
+                piece = self.client.get(f"/live/{fragment}").get_data(as_text=True)
+                self.assertIn(probe, piece)
+                # Rendered into the page too, so the view is complete with JS
+                # off and the fragment only keeps it current.
+                self.assertIn(probe, page)
+
+    def test_no_live_fragment_contains_a_form(self):
+        """
+        A fragment replaces its host's markup underneath the reader. Doing that
+        to a half-typed field destroys the edit, which is why the settings form,
+        the alert targets and the node controls stayed on their pages while the
+        panels around them moved into partials.
+        """
+        self.create_app("formless")
+        for fragment in self.panel.LIVE_FRAGMENTS:
+            if fragment == "node-tasks":
+                continue                     # needs a node id; covered below
+            with self.subTest(fragment=fragment):
+                body = self.client.get(f"/live/{fragment}").get_data(as_text=True)
+                self.assertNotIn("<form", body)
+
+    def test_the_node_fragment_refuses_a_node_that_is_not_there(self):
+        self.login()
+        self.assertEqual(self.client.get("/live/node-tasks").status_code, 404)
+        self.assertEqual(
+            self.client.get("/live/node-tasks?node=nosuch").status_code, 404)
+
+    def test_the_logs_fragment_only_returns_what_is_new(self):
+        self.create_app("tailed")
+        asked = []
+        real = self.panel.data.log_events
+        self.panel.data.log_events = lambda service, lines=200, since_ns=None: (
+            asked.append(since_ns) or ([{"at": "10:00:00", "text": "hello",
+                                         "level": "err"}], 42, ""))
+        try:
+            body = self.client.get(
+                "/components/tailed/logs?since=41").get_data(as_text=True)
+        finally:
+            self.panel.data.log_events = real
+        self.assertEqual(asked, [41])
+        # The cursor rides in a comment the follower strips, so a browser with
+        # no JS renders the lines and nothing else.
+        self.assertTrue(body.startswith("<!--cursor:42-->"))
+        self.assertIn('class="line lvl-err"', body)
+
+    def test_a_junk_cursor_is_a_first_page_not_an_error(self):
+        self.create_app("junked")
+        asked = []
+        real = self.panel.data.log_events
+        self.panel.data.log_events = lambda service, lines=200, since_ns=None: (
+            asked.append(since_ns) or ([], None, ""))
+        try:
+            for query in ("", "?since=", "?since=drop+table", "?since=-1"):
+                self.client.get(f"/components/junked/logs{query}")
+        finally:
+            self.panel.data.log_events = real
+        self.assertEqual(asked, [None, None, None, None])
+
+
+class DeployDiffTest(PanelTest):
+    """
+    Saving something that changes nothing must not be a deploy.
+
+    Swarm already left an unchanged service alone; what nobody could see was
+    WHICH services a save would touch, so every save read as a whole-stack
+    event and a save that changed nothing still ran one.
+    """
+
+    def test_an_identical_save_deploys_nothing(self):
+        csrf, _ = self.create_app("steady")
+        component = self.components.load("steady")
+        component.write_stack()              # stand in for the deploy we stubbed
+        self.deploys.clear()
+        page = self.client.post("/components/steady/settings",
+                                data=dict(self._spec_form(csrf, component)),
+                                follow_redirects=True).get_data(as_text=True)
+        self.assertEqual(self.deploys, [])
+        self.assertIn("Nothing to redeploy", page)
+
+    def test_a_real_change_deploys_and_names_what_moves(self):
+        csrf, _ = self.create_app("moving")
+        component = self.components.load("moving")
+        component.write_stack()
+        self.deploys.clear()
+        form = dict(self._spec_form(csrf, component))
+        form["memory_reservation_mb"] = "512"
+        page = self.client.post("/components/moving/settings", data=form,
+                                follow_redirects=True).get_data(as_text=True)
+        self.assertEqual(self.deploys, ["moving"])
+        self.assertIn("Rolling moving_app", page)
+
+    def test_a_removal_is_named_before_it_happens(self):
+        """
+        `--prune` DELETES a service the render no longer emits. That is the one
+        outcome on this page worth reading twice, so it is stated first and is
+        never abbreviated into "and 3 more".
+        """
+        base = self.components.base
+        sentence = base.describe_changes(
+            {"removed": ["c_redis-4"], "added": [], "changed": ["c_redis-1"],
+             "unchanged": ["c_sentinel-1"]})
+        self.assertTrue(sentence.startswith("Removing c_redis-4"))
+        self.assertIn("Rolling c_redis-1", sentence)
+        self.assertIn("Leaving c_sentinel-1 alone", sentence)
+
+    def test_an_unknown_diff_is_never_read_as_nothing_to_do(self):
+        """
+        Skipping a deploy we could not prove was unnecessary would be a
+        component that silently ignores your edit. Deploying anyway costs
+        seconds.
+        """
+        base = self.components.base
+        self.assertFalse(base.nothing_to_do(None))
+        self.assertTrue(base.nothing_to_do(
+            {"added": [], "removed": [], "changed": [], "unchanged": ["a"]}))
+
+    def test_a_first_deploy_is_all_new_rather_than_all_unchanged(self):
+        self.create_app("fresh")
+        component = self.components.load("fresh")
+        diff = component.pending_changes()
+        self.assertEqual(diff["added"], ["fresh_app"])
+        self.assertEqual(diff["unchanged"], [])
+
+    def _spec_form(self, csrf, component):
+        """The settings form as the browser would post it back, unchanged."""
+        form = {"csrf": csrf}
+        for field in type(component).fields():
+            value = component.spec.get(field.name)
+            if field.kind == "bool":
+                if value:
+                    form[field.name] = "on"
+            elif value is not None:
+                form[field.name] = str(value)
+        return form
+
+
+class DatabaseHarness:
+    """
+    What a database test needs, without what other database tests assert.
+
+    A mixin rather than a base class with tests in it: subclassing
+    `DatabasePanelTest` to reuse `make_mongo` re-runs its entire suite under the
+    subclass's name, which is a hundred duplicated tests per new class and a
+    genuinely confusing failure report when one of the INHERITED ones breaks.
     """
 
     def setUp(self):
-        super().setUp() if hasattr(super(), "setUp") else None
+        super().setUp()
         # No docker daemon here, and the database renderer shells out for Swarm
         # secrets. Stubbing the two shells keeps these tests about the panel.
         from components import base
@@ -1195,60 +1375,7 @@ class DatabasePanelTest(PanelTest):
     def tearDown(self):
         from components import base
         base.run, base.docker_out = self._shells
-
-    def test_a_spec_written_before_dataguard_existed_is_not_managed(self):
-        """
-        The most expensive default in the codebase, caught on a live cluster.
-
-        `dataguard` defaults to ON, which is right for a component created
-        through the form where the switch is in front of you. Inherited by a
-        component.json written before the field existed, it reclassified a
-        running single-instance redis as a replica set — and because components
-        deploy with `--prune`, the next redeploy of ANY kind would have rendered
-        members and sentinels while deleting the one service holding the data,
-        changing the connection string in the same breath. A password rotation
-        would have done it.
-
-        Absent means older than the feature: `create()` always writes the key.
-        """
-        old = self.components.redis.RedisComponent("legacy", {"spec": {
-            "version": "7.4", "port": 6379, "memory_mb": 512}})
-        self.assertFalse(old.spec["dataguard"])
-        # One server, one volume, the name it has always had -- and no sentinels
-        # to point a connection string at.
-        self.assertIn("legacy_redis", old.services())
-        self.assertEqual([], [s for s in old.services() if "sentinel" in s])
-        self.assertEqual([], [s for s in old.services()
-                              if s.startswith("legacy_redis-") and "exporter" not in s])
-        self.assertIn("legacy_redis:6379", old.connection_url())
-
-    def test_a_new_component_still_defaults_to_managed(self):
-        """The fix must not turn the feature off for everything."""
-        fresh = self.components.redis.RedisComponent("fresh")
-        self.assertTrue(fresh.spec["dataguard"])
-
-    def test_a_spec_that_says_managed_is_still_believed(self):
-        on = self.components.redis.RedisComponent("kept", {"spec": {
-            "version": "7.4", "dataguard": True}})
-        self.assertTrue(on.spec["dataguard"])
-
-    def test_max_members_cannot_exceed_what_the_pool_can_hold(self):
-        """
-        The master's slot is not one a grown set can fill.
-
-        `pool` counts it; growth never does — dataguard hands out slots 2..pool
-        and keeps slot 1 for the copy on the master. A set that has grown off the
-        master therefore tops out at `pool - 1`, which is exactly `replica_pool`.
-        Accepting one more meant the form promised a member the planner had
-        nowhere to put: it stopped one short, reported `at_ceiling`, and named a
-        limit the operator had never typed. The old DEFAULT was that value, so
-        every managed mongo created from the form carried it.
-        """
-        self.make_mongo("toobig", expect=400, replica_pool="3", max_members="4")
-
-    def test_the_pool_can_be_filled_right_up_to_its_edge(self):
-        """The clamp is off-by-one in neither direction."""
-        self.make_mongo("atedge", replica_pool="4", max_members="4")
+        super().tearDown()
 
     def make_mongo(self, name="docs", expect=200, **spec):
         """
@@ -1295,6 +1422,12 @@ class DatabasePanelTest(PanelTest):
         return self.components.load(name)
 
     # --- the invariant ----------------------------------------------------
+
+class DatabasePanelTest(DatabaseHarness, PanelTest):
+    """
+    The surfaces the database work added: the placement/manager invariant, the
+    Dataguard tab, Storage, and the visualiser proxy.
+    """
 
     def test_pinning_the_placement_turns_the_manager_off(self):
         """
@@ -2040,6 +2173,262 @@ class DatabasePanelTest(PanelTest):
         self.make_mongo("noviewer2", visualizer=False)
         page = self.client.get("/components/noviewer2").get_data(as_text=True)
         self.assertNotIn("View data", page)
+
+
+    def test_a_spec_written_before_dataguard_existed_is_not_managed(self):
+        """
+        The most expensive default in the codebase, caught on a live cluster.
+
+        `dataguard` defaults to ON, which is right for a component created
+        through the form where the switch is in front of you. Inherited by a
+        component.json written before the field existed, it reclassified a
+        running single-instance redis as a replica set — and because components
+        deploy with `--prune`, the next redeploy of ANY kind would have rendered
+        members and sentinels while deleting the one service holding the data,
+        changing the connection string in the same breath. A password rotation
+        would have done it.
+
+        Absent means older than the feature: `create()` always writes the key.
+        """
+        old = self.components.redis.RedisComponent("legacy", {"spec": {
+            "version": "7.4", "port": 6379, "memory_mb": 512}})
+        self.assertFalse(old.spec["dataguard"])
+        # One server, one volume, the name it has always had -- and no sentinels
+        # to point a connection string at.
+        self.assertIn("legacy_redis", old.services())
+        self.assertEqual([], [s for s in old.services() if "sentinel" in s])
+        self.assertEqual([], [s for s in old.services()
+                              if s.startswith("legacy_redis-") and "exporter" not in s])
+        self.assertIn("legacy_redis:6379", old.connection_url())
+
+    def test_a_new_component_still_defaults_to_managed(self):
+        """The fix must not turn the feature off for everything."""
+        fresh = self.components.redis.RedisComponent("fresh")
+        self.assertTrue(fresh.spec["dataguard"])
+
+    def test_a_spec_that_says_managed_is_still_believed(self):
+        on = self.components.redis.RedisComponent("kept", {"spec": {
+            "version": "7.4", "dataguard": True}})
+        self.assertTrue(on.spec["dataguard"])
+
+    def test_max_members_cannot_exceed_what_the_pool_can_hold(self):
+        """
+        The master's slot is not one a grown set can fill.
+
+        `pool` counts it; growth never does — dataguard hands out slots 2..pool
+        and keeps slot 1 for the copy on the master. A set that has grown off the
+        master therefore tops out at `pool - 1`, which is exactly `replica_pool`.
+        Accepting one more meant the form promised a member the planner had
+        nowhere to put: it stopped one short, reported `at_ceiling`, and named a
+        limit the operator had never typed. The old DEFAULT was that value, so
+        every managed mongo created from the form carried it.
+        """
+        self.make_mongo("toobig", expect=400, replica_pool="3", max_members="4")
+
+    def test_the_pool_can_be_filled_right_up_to_its_edge(self):
+        """The clamp is off-by-one in neither direction."""
+        self.make_mongo("atedge", replica_pool="4", max_members="4")
+
+
+class ViewerWakeTest(DatabaseHarness, PanelTest):
+    """
+    The View button, and the one property that made it usable.
+
+    It used to scale the visualiser 0 -> 1 and then block for up to a minute
+    waiting for a task, on top of a `docker service update` allowed another
+    minute — all inside the HTTP request. This panel is served through
+    Cloudflare, whose 100-second origin timeout is not configurable, so the
+    button returned a 524 for something that was in fact starting perfectly
+    well. Pressing it three times "worked" only because by the third press the
+    container was up.
+    """
+
+    def test_a_cold_viewer_answers_at_once_instead_of_holding_the_request(self):
+        import time
+        self.make_mongo("cold")
+        real_ensure = self.panel.data.ensure_viewer
+        real_running = self.panel.data.viewer_running
+        # What a stopped visualiser looks like: the wake was accepted, nothing
+        # is running yet, and NOBODY WAITED to find that out.
+        self.panel.data.ensure_viewer = lambda service: (False, "")
+        self.panel.data.viewer_running = lambda service: False
+        try:
+            started = time.monotonic()
+            r = self.client.get("/components/cold/viewer/")
+            elapsed = time.monotonic() - started
+        finally:
+            self.panel.data.ensure_viewer = real_ensure
+            self.panel.data.viewer_running = real_running
+        self.assertEqual(r.status_code, 503)
+        self.assertLess(elapsed, 2.0)
+        page = r.get_data(as_text=True)
+        # And it comes back by itself, which is what removes the ritual.
+        self.assertIn("data-viewer-wait", page)
+        self.assertIn("/components/cold/viewer-status", page)
+
+    def test_the_status_endpoint_answers_the_one_question_the_page_asks(self):
+        self.make_mongo("polled")
+        real = self.panel.data.viewer_running
+        try:
+            for running in (False, True):
+                self.panel.data.viewer_running = lambda service, r=running: r
+                r = self.client.get("/components/polled/viewer-status")
+                self.assertEqual(r.get_json(), {"ready": running})
+        finally:
+            self.panel.data.viewer_running = real
+
+    def test_the_status_endpoint_is_not_inside_the_proxied_prefix(self):
+        """
+        A static segment under `/viewer/` would shadow any upstream path of the
+        same name, and both consoles are third-party — which paths they serve is
+        theirs to change, not ours to reserve.
+        """
+        rules = [str(r) for r in self.panel.app.url_map.iter_rules()]
+        self.assertIn("/components/<name>/viewer-status", rules)
+        self.assertNotIn("/components/<name>/viewer/status", rules)
+
+    def test_it_needs_a_session_and_a_visualiser(self):
+        self.make_mongo("guarded", visualizer=False)
+        self.assertEqual(
+            self.client.get("/components/guarded/viewer-status").status_code, 404)
+        self.client.get("/logout")
+        with self.panel.app.test_client() as anon:
+            r = anon.get("/components/guarded/viewer-status")
+            self.assertEqual(r.status_code, 302)
+
+
+class MigrateTest(DatabaseHarness, PanelTest):
+    """
+    Moving a database to or from Atlas. Both directions REPLACE the
+    destination, so both are guarded like a restore.
+    """
+
+    def test_the_section_appears_only_for_something_that_can_migrate(self):
+        self.make_mongo("movable")
+        page = self.client.get(
+            "/components/movable?tab=backups").get_data(as_text=True)
+        self.assertIn("Migrate", page)
+        self.create_app("notadb")
+        page = self.client.get(
+            "/components/notadb?tab=backups").get_data(as_text=True)
+        self.assertNotIn("Start the migration", page)
+
+    def test_the_atlas_uri_never_lands_in_the_spec_file(self):
+        """
+        It is a full credential for somebody else's cluster. `component.json` is
+        0640 and is not the place for one; `secret.env` is 0600 and is.
+        """
+        self.make_mongo("secretive")
+        component = self.components.load("secretive")
+        self.assertNotIn("ATLAS_URI", component.spec)
+        self.assertNotIn("ATLAS_URI", str(component.as_dict()))
+        self.assertIn("ATLAS_URI", [s.key for s in type(component).SECRETS])
+
+    def test_a_wrong_confirmation_starts_nothing(self):
+        csrf = self.login()
+        self.make_mongo("typed")
+        component = self.components.load("typed")
+        started = []
+        component_cls = type(component)
+        real = component_cls.start_migration
+        component_cls.start_migration = lambda self, d, overwrite=False: (
+            started.append(d) or (True, "off we go"))
+        try:
+            self.client.post("/components/typed/migrate",
+                             data={"csrf": csrf, "direction": "export",
+                                   "confirm": "typo"}, follow_redirects=True)
+            self.assertEqual(started, [])
+            self.client.post("/components/typed/migrate",
+                             data={"csrf": csrf, "direction": "export",
+                                   "confirm": "typed"}, follow_redirects=True)
+            self.assertEqual(started, ["export"])
+        finally:
+            component_cls.start_migration = real
+
+    def test_it_refuses_a_direction_it_does_not_know(self):
+        self.make_mongo("directed")
+        component = self.components.load("directed")
+        ok, why = component.start_migration("sideways")
+        self.assertFalse(ok)
+        self.assertIn("direction", why.lower())
+
+    def test_it_refuses_without_an_atlas_connection_string(self):
+        self.make_mongo("stringless")
+        component = self.components.load("stringless")
+        ok, why = component.start_migration("export")
+        self.assertFalse(ok)
+        self.assertIn("Atlas", why)
+
+    def test_neither_connection_string_is_ever_an_argument(self):
+        """
+        Container arguments show up in the master's own process table, and `ps`
+        is readable by anything else on the box. Both URIs arrive as mounted
+        secrets and are written into files the tools read with `--config`.
+        """
+        script = self.components.load.__globals__  # noqa: F841 — readability only
+        import components.mongo as mongo_mod
+        body = mongo_mod.MongoComponent._MIGRATE_SCRIPT
+        self.assertIn("--config", body)
+        self.assertNotIn("--uri", body)
+        self.assertIn("/run/secrets/migrate-here.uri", body)
+        self.assertIn("/run/secrets/migrate-there.uri", body)
+        # mongosh has no --config, so its URI goes into the script file instead.
+        self.assertIn("mongosh --quiet --nodb --file", body)
+
+    def test_the_job_verifies_and_fails_loudly_on_a_mismatch(self):
+        import components.mongo as mongo_mod
+        body = mongo_mod.MongoComponent._MIGRATE_SCRIPT
+        self.assertIn("VERIFIED", body)
+        self.assertIn("MISMATCH", body)
+        # A migration that reports success for an incomplete copy is worse than
+        # one that fails, so the mismatch branch exits non-zero.
+        self.assertRegex(body, r"MISMATCH[\s\S]*exit 1")
+
+    def test_the_job_refuses_a_non_empty_destination_it_was_not_told_about(self):
+        import components.mongo as mongo_mod
+        body = mongo_mod.MongoComponent._MIGRATE_SCRIPT
+        self.assertIn('[ "$OVERWRITE" != "yes" ]', body)
+        # BEFORE the dump, not after: a full destination is the one preflight
+        # answer that means somebody is about to lose data.
+        self.assertLess(body.index("OVERWRITE"), body.index("mongodump"))
+
+
+class PbmConfigTest(DatabaseHarness, PanelTest):
+    """
+    `pbm config` had no call site anywhere in this repo, and the Storage tab's
+    credential secret was mounted nowhere. PBM therefore had no idea where to
+    put a backup, so the whole feature was a design with its last wire loose.
+    """
+
+    def test_a_component_with_no_target_asks_pbm_for_nothing(self):
+        self.make_mongo("untargeted", backup_target="")
+        component = self.components.load("untargeted")
+        self.assertIsNone(component.pbm_storage_config())
+        self.assertEqual(component.configure_backups(), (True, ""))
+
+    def test_the_config_turns_pitr_on(self):
+        """Point-in-time restore is the reason PBM is here rather than a
+        mongodump loop; leaving it off would make the Backups tab's promise of
+        restoring to a second untrue."""
+        component = self._targeted("pitred")
+        self.assertEqual(component.pbm_storage_config()["pitr"], {"enabled": True})
+
+    def test_the_bucket_keys_are_never_in_the_config_we_build(self):
+        component = self._targeted("keyless")
+        rendered = str(component.pbm_storage_config())
+        self.assertNotIn("access", rendered.lower())
+        self.assertNotIn("secret", rendered.lower())
+
+    def _targeted(self, name):
+        import storage as storage_store
+        real_by_name, real_secret = storage_store.by_name, storage_store.secret_name
+        self.addCleanup(setattr, storage_store, "by_name", real_by_name)
+        self.addCleanup(setattr, storage_store, "secret_name", real_secret)
+        storage_store.by_name = lambda n: {"name": n, "bucket": "b",
+                                           "region": "eu-central-1", "sse": True}
+        storage_store.secret_name = lambda n: f"storage-{n}-v1"
+        self.make_mongo(name, backup_target="vault")
+        return self.components.load(name)
 
 
 class AlertmanagerRenderTest(unittest.TestCase):

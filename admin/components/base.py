@@ -127,14 +127,26 @@ class Secret:
     time and afterwards. "Generated" is the good default, not the only option:
     plenty of people are moving an existing database and already have a password
     their clients know.
+
+    NOT every credential can be generated, though. One that authenticates to
+    somebody ELSE'S system — the Atlas connection string a migration reads — has
+    no meaningful generated value: a random one is not a weak secret, it is a
+    wrong one, and it would sit there looking configured while every use of it
+    failed. Those are declared `generated=False`, where blank simply means unset.
     """
 
-    def __init__(self, key, label, help="", minimum=8, maximum=128):
+    def __init__(self, key, label, help="", minimum=8, maximum=128,
+                 generated=True):
         self.key = key
         self.label = label
         self.help = help
         self.minimum = minimum
         self.maximum = maximum
+        #: Whether blank means "make one up". True for a password this component
+        #: owns; FALSE for a credential to somebody else's system, where a
+        #: generated value is not a weak secret but a wrong one — it would look
+        #: set, and every use of it would fail to authenticate.
+        self.generated = generated
 
     def generate(self):
         return secrets.token_hex(24)
@@ -205,6 +217,48 @@ def action(run, label, confirm=None, tone="", when=None):
     to edit the markup to make its button red.
     """
     return {"run": run, "label": label, "confirm": confirm, "tone": tone, "when": when}
+
+
+def _names(items, limit=4):
+    """A readable list of service names, cut off before it becomes a wall."""
+    if len(items) <= limit:
+        return ", ".join(items)
+    return ", ".join(items[:limit]) + f" and {len(items) - limit} more"
+
+
+def describe_changes(diff):
+    """
+    What a deploy is about to do, in one sentence, or "" if it will do nothing.
+
+    Removals come FIRST and are never abbreviated away. `--prune` deletes a
+    service the render no longer emits, and that is the one line here worth
+    reading twice — everything else is a container restarting.
+    """
+    if not diff:
+        return ""
+    parts = []
+    if diff["removed"]:
+        parts.append("Removing " + ", ".join(diff["removed"]))
+    if diff["added"]:
+        parts.append("Adding " + _names(diff["added"]))
+    if diff["changed"]:
+        parts.append("Rolling " + _names(diff["changed"]))
+    if not parts:
+        return ""
+    sentence = "; ".join(parts) + "."
+    if diff["unchanged"]:
+        sentence += f" Leaving {_names(diff['unchanged'])} alone."
+    return sentence
+
+
+def nothing_to_do(diff):
+    """
+    True when a deploy provably has no work. `None` means we could not tell —
+    an unreadable previous render, or a first deploy — and an unknown is not a
+    licence to skip: deploying costs a few seconds, and NOT deploying when
+    something did change is a component that silently ignores your edit.
+    """
+    return bool(diff) and not (diff["added"] or diff["removed"] or diff["changed"])
 
 
 #: A component's certificate authority, as Swarm names it. Anything matching
@@ -428,7 +482,7 @@ class Component:
                 values[spec.key] = supplied
             elif current.get(spec.key):
                 values[spec.key] = current[spec.key]        # unchanged
-            elif generate_missing:
+            elif generate_missing and spec.generated:
                 values[spec.key] = spec.generate()
         if problems:
             return problems
@@ -436,8 +490,17 @@ class Component:
         return []
 
     def rotate_secrets(self):
-        """Regenerate every credential, ignoring whatever is there now."""
-        self._write_secrets({s.key: s.generate() for s in self.SECRETS})
+        """
+        Regenerate every credential this component OWNS, ignoring what is there.
+
+        A credential to somebody else's system is carried through untouched:
+        rotating it here would not change anything at their end, it would just
+        replace a working connection string with a random one.
+        """
+        current = self.secret_values()
+        self._write_secrets({
+            s.key: (s.generate() if s.generated else current.get(s.key, ""))
+            for s in self.SECRETS})
 
     def _write_secrets(self, values):
         store.write_env(
@@ -565,6 +628,75 @@ class Component:
         path = store.path_for(self.name, "stack.yml")
         store._write_atomic(path, self.stack_yaml(), 0o600)
         return path
+
+    def pending_changes(self):
+        """
+        Which of this component's services a deploy would actually touch:
+        `{"added": [...], "removed": [...], "changed": [...], "unchanged": [...]}`.
+
+        Read-only. It renders the stack and compares it with the one on disk,
+        which is the render that was last applied — `write_stack()` writes it
+        immediately before `deploy()` uses it, so it is the only record of what
+        Swarm was last told.
+
+        This is NOT a second change-detector bolted on beside Swarm's. Swarm
+        already leaves a service whose spec is byte-identical completely alone,
+        which is why saving an unrelated field has never restarted a database.
+        What was missing is that nobody could SEE that, so every save looked
+        like a whole-stack event and a save that changed nothing was still a
+        deploy. This answers both: the caller names what will move, and skips
+        the deploy entirely when the answer is nothing.
+
+        Deliberately not a parameter on `deploy()`. The panel tests replace
+        `deploy` with a fixed-arity recorder, and widening that signature would
+        break every one of them to express something that reads better as its
+        own question anyway.
+
+        Two things it cannot promise, and the caller must not claim otherwise:
+        `--resolve-image changed` can still roll a service whose TAG moved
+        under it since the last deploy, and a rotated secret legitimately shows
+        up as a change because secret names carry their version.
+
+        Not free: rendering a database issues its certificates and its password
+        if they do not exist yet. Both are idempotent by construction — that is
+        what makes rendering safe to do twice per save — but this is the reason
+        it is a method on the component rather than a pure function over two
+        files.
+        """
+        def services_of(text):
+            try:
+                loaded = yaml.safe_load(text) or {}
+            except yaml.YAMLError:
+                return None
+            found = loaded.get("services")
+            return found if isinstance(found, dict) else None
+
+        def full(key):
+            return f"{self.stack}_{key}"
+
+        fresh = services_of(self.stack_yaml())
+        if fresh is None:                      # our own render is unparseable
+            return None
+        try:
+            with open(store.path_for(self.name, "stack.yml")) as fh:
+                previous = services_of(fh.read())
+        except OSError:
+            previous = None
+        if previous is None:
+            # Never deployed from this panel, or the file is gone. Everything is
+            # new as far as we can prove, and claiming otherwise would be a
+            # guess presented as a fact.
+            return {"added": sorted(full(k) for k in fresh), "removed": [],
+                    "changed": [], "unchanged": []}
+
+        return {
+            "added": sorted(full(k) for k in fresh if k not in previous),
+            "removed": sorted(full(k) for k in previous if k not in fresh),
+            "changed": sorted(full(k) for k in fresh
+                              if k in previous and fresh[k] != previous[k]),
+            "unchanged": sorted(full(k) for k in fresh
+                                if k in previous and fresh[k] == previous[k]),
+        }
 
     # --- live state ---------------------------------------------------------
 

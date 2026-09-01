@@ -1,0 +1,47 @@
+{# The tiles and the status banner: the two things that change on their own,
+   split out so `/live/overview-summary` can re-render exactly them. Everything
+   here is read-only — no form may move into this file, because the whole point
+   is that its markup is replaced underneath the reader. #}
+<div class="tiles">
+  <div class="tile">
+    <span class="k">Components</span>
+    <span class="v">{{ s.components_ok }}<span class="muted">/{{ s.components }}</span></span>
+    <span class="m">healthy{% if s.undeployed %} · {{ s.undeployed|length }} not deployed{% endif %}</span>
+  </div>
+
+  <div class="tile is-{{ 'bad' if s.slo_breaching else 'ok' }}">
+    <span class="k">Breaching SLO</span>
+    <span class="v">{{ s.slo_breaching }}</span>
+    <span class="m">each component against its own p95 target</span>
+  </div>
+
+  <div class="tile">
+    <span class="k">Replicas</span>
+    <span class="v">{{ s.replicas_running }}<span class="muted">/{{ s.replicas_desired }}</span></span>
+    <span class="m">across every component</span>
+  </div>
+
+  <div class="tile">
+    <span class="k">Workers</span>
+    <span class="v">{{ s.workers_ready }}<span class="muted">/{{ s.workers }}</span></span>
+    <span class="m">ceiling {{ s.max_workers }} · a budget cap</span>
+  </div>
+</div>
+
+{% if s.degraded %}
+<div class="banner warn">
+  <div>
+    <strong>{{ s.degraded|length }} component{{ '' if s.degraded|length == 1 else 's' }} need{{ 's' if s.degraded|length == 1 else '' }} attention.</strong>
+    {% for v in s.degraded %}<a href="{{ component_href(v.name) }}">{{ v.name }}</a>{{ ', ' if not loop.last }}{% endfor %}
+  </div>
+</div>
+{% elif not s.components %}
+<div class="banner">
+  <div>
+    Nothing is running yet — the cluster is up and empty.
+    <a href="{{ section_href({'key': 'components'}) }}">Create a component</a> to put something on it.
+  </div>
+</div>
+{% else %}
+<div class="banner ok"><div>Every component is reporting healthy.</div></div>
+{% endif %}

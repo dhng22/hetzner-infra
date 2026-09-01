@@ -5,192 +5,120 @@
   </div>
 </div>
 
-<div class="tiles">
-  <div class="tile">
-    <span class="k">Components</span>
-    <span class="v">{{ s.components_ok }}<span class="muted">/{{ s.components }}</span></span>
-    <span class="m">healthy{% if s.undeployed %} · {{ s.undeployed|length }} not deployed{% endif %}</span>
-  </div>
-
-  <div class="tile is-{{ 'bad' if s.slo_breaching else 'ok' }}">
-    <span class="k">Breaching SLO</span>
-    <span class="v">{{ s.slo_breaching }}</span>
-    <span class="m">each component against its own p95 target</span>
-  </div>
-
-  <div class="tile">
-    <span class="k">Replicas</span>
-    <span class="v">{{ s.replicas_running }}<span class="muted">/{{ s.replicas_desired }}</span></span>
-    <span class="m">across every component</span>
-  </div>
-
-  <div class="tile">
-    <span class="k">Workers</span>
-    <span class="v">{{ s.workers_ready }}<span class="muted">/{{ s.workers }}</span></span>
-    <span class="m">ceiling {{ s.max_workers }} · a budget cap</span>
-  </div>
+<div data-live-html="{{ live_href('overview-summary') }}">
+  {% include "_overview_summary.html" %}
 </div>
 
-{% if s.degraded %}
-<div class="banner warn">
-  <div>
-    <strong>{{ s.degraded|length }} component{{ '' if s.degraded|length == 1 else 's' }} need{{ 's' if s.degraded|length == 1 else '' }} attention.</strong>
-    {% for v in s.degraded %}<a href="{{ component_href(v.name) }}">{{ v.name }}</a>{{ ', ' if not loop.last }}{% endfor %}
-  </div>
-</div>
-{% elif not s.components %}
-<div class="banner">
-  <div>
-    Nothing is running yet — the cluster is up and empty.
-    <a href="{{ section_href({'key': 'components'}) }}">Create a component</a> to put something on it.
-  </div>
-</div>
-{% else %}
-<div class="banner ok"><div>Every component is reporting healthy.</div></div>
-{% endif %}
-
-<section class="panel" id="topology" data-topology>
-  <div class="panel-head">
-    <h2>Cluster map</h2>
-    <span class="spacer"></span>
-    <span class="live" data-topo-live><i></i>live</span>
-    <a class="btn btn-sm" href="{{ section_href({'key': 'cluster'}) }}">Nodes</a>
-  </div>
-
-  <p class="panel-intro">
-    Every node, and every task running on it — one block per task, so three
-    replicas of a service are three blocks. The master is host&nbsp;#1: while no
-    worker exists it carries the API itself, and once workers appear it should
-    carry none.
-  </p>
-
-  <!-- Colour groups the blocks; the name on each block is what identifies it.
-       The dot on each block is its task state, and the ring and fill are what
-       it reserves of the node it sits on. -->
-  <div class="legend" data-topo-legend>
-    {% for b in topo.bands %}
-      <span class="legend-item"><i class="sw sw-{{ b.key }}"></i>{{ b.band }}</span>
-    {% endfor %}
-  </div>
-
-  <!-- A wide fleet scrolls inside this box rather than making the page scroll
-       sideways. -->
-  <div class="tree-scroll">
-    <div class="tree" data-topo-rows>
-      <div class="tree-top">
-        <div class="tnode tnode-root">
-          <span class="tnode-title">{{ cluster_name }}</span>
-          <span class="tnode-sub">
-            <b data-f="hosts">{{ topo.nodes|length }}</b> host{{ '' if topo.nodes|length == 1 else 's' }}
-            · <b data-f="total">{{ topo.nodes|sum(attribute='tasks_total') }}</b> tasks
-          </span>
-        </div>
+{# Map and lists on the left, the observability column on the right. The
+   aside is a SIBLING of the map rather than a panel below it because the two
+   answer different questions at the same moment: the map is what is running,
+   the column is how it is behaving. Below 1100px they stack, map first. #}
+<div class="split-main">
+  <div class="split-main-body">
+    <section class="panel" id="topology" data-topology>
+      <div class="panel-head">
+        <h2>Cluster map</h2>
+        <span class="spacer"></span>
+        <span class="live" data-topo-live><i></i>live</span>
+        <a class="btn btn-sm" href="{{ section_href({'key': 'cluster'}) }}">Nodes</a>
       </div>
 
-      <div class="tree-kids">
-        {% for n in topo.nodes %}
-          <div class="tree-branch" data-node="{{ n.id }}">
-            {# Clickable here too: the map is where you notice a node, and the
-               node's own page is where you can do anything about it. #}
-            <a class="tnode tnode-host is-link has-gauges {{ 'is-manager' if n.role == 'manager' }}"
-               href="{{ node_href(n.id, 'overview') }}">
-              <span class="tnode-head">
-                <span class="pill {{ 'accent' if n.role == 'manager' else n.tone }}">{{ n.role }}</span>
-                {% if n.availability != 'active' %}<span class="pill warn">{{ n.availability }}</span>{% endif %}
-              </span>
-              <span class="tnode-title" title="{{ n.hostname }}">{{ n.hostname }}</span>
-              <span class="tnode-sub">
-                <b data-f="tasks">{{ n.tasks_total }}</b> tasks · {{ n.cpus }} vCPU · {{ n.memory_gb }} GB{% if n.disk_total_gb %} · {{ n.disk_total_gb }} GB disk{% endif %}
-              </span>
-              <span class="tnode-meters">
-                <span title="node CPU utilisation — how busy it is right now">cpu <b data-f="cpu">{% if n.cpu_pct is not none %}{{ n.cpu_pct|round|int }}%{% else %}—{% endif %}</b></span>
-                <span title="node memory utilisation — how much is in use right now">mem <b data-f="mem">{% if n.mem_pct is not none %}{{ n.mem_pct|round|int }}%{% else %}—{% endif %}</b></span>
-                {# Disk, because a database lives on one. It is the resource
-                   shedding load cannot recover: a full disk does not get slower,
-                   it stops. #}
-                <span title="root filesystem — where docker keeps every volume">disk <b data-f="disk">{% if n.disk_pct is not none %}{{ n.disk_pct|round|int }}%{% else %}—{% endif %}</b></span>
-              </span>
+      <p class="panel-intro">
+        Every node, and every task running on it — one block per task, so three
+        replicas of a service are three blocks. The master is host&nbsp;#1: while no
+        worker exists it carries the API itself, and once workers appear it should
+        carry none.
+      </p>
 
-              {# Reserved, not used: the pair that decides whether anything else
-                 can be placed here. A node can be 4% busy and 100% reserved. #}
-              <span class="gauge gauge-cpu" data-f="cpures" style="--v:{{ n.cpu_reserved_pct }}"
-                    data-tip="CPU reserved: {{ n.cpu_reserved_pct }}% — {{ n.cpu_reserved }} of {{ n.cpus }} vCPU promised to tasks here"></span>
-              <span class="gauge gauge-mem" data-f="memres" style="--v:{{ n.mem_reserved_pct }}"
-                    data-tip="Memory reserved: {{ n.mem_reserved_pct }}% — {{ n.mem_reserved_mb }} MB of {{ n.memory_gb }} GB promised to tasks here"></span>
-            </a>
-
-            <!-- data-sig matches the signature the poller computes, so the first
-                 tick on an unchanged cluster rebuilds nothing at all. -->
-            <div class="slots" data-slots
-                 data-sig="{% for t in n.tasks %}{{ t.name }}|{{ t.key }}|{{ t.tone }}|{{ t.cpu_share }}|{{ t.mem_share }};{% endfor %}">
-              {% for t in n.tasks %}
-                {# The chip's own colour already says WHAT this is, so the dot
-                   is spent on what it is DOING. The ring is the share of this
-                   machine's CPU the task reserves — a full ring means it has
-                   claimed the whole box — and the fill behind the label is the
-                   same for memory, laid over the band colour rather than
-                   replacing it. #}
-                <span class="slot slot-{{ t.key }}" tabindex="0"
-                      style="--cpu:{{ t.cpu_share }};--mem:{{ t.mem_share }}"
-                      data-tip="{{ t.service }} — task {{ t.id }} on {{ n.hostname }}&#10;state: {{ t.state }}&#10;reserves {{ t.cpu_share }}% of this node's CPU, {{ t.mem_share }}% of its memory">
-                  <i class="dot dot-{{ t.tone }}" aria-hidden="true"></i>{{ t.name }}
-                </span>
-              {% else %}
-                <span class="slot is-empty">no running tasks</span>
-              {% endfor %}
-            </div>
-          </div>
+      <!-- Colour groups the blocks; the name on each block is what identifies it.
+           The dot on each block is its task state, and the ring and fill are what
+           it reserves of the node it sits on. -->
+      <div class="legend" data-topo-legend>
+        {% for b in topo.bands %}
+          <span class="legend-item"><i class="sw sw-{{ b.key }}"></i>{{ b.band }}</span>
         {% endfor %}
       </div>
+
+      <!-- A wide fleet scrolls inside this box rather than making the page scroll
+           sideways. -->
+      <div class="tree-scroll">
+        <div class="tree" data-topo-rows>
+          <div class="tree-top">
+            <div class="tnode tnode-root">
+              <span class="tnode-title">{{ cluster_name }}</span>
+              <span class="tnode-sub">
+                <b data-f="hosts">{{ topo.nodes|length }}</b> host{{ '' if topo.nodes|length == 1 else 's' }}
+                · <b data-f="total">{{ topo.nodes|sum(attribute='tasks_total') }}</b> tasks
+              </span>
+            </div>
+          </div>
+
+          <div class="tree-kids">
+            {% for n in topo.nodes %}
+              <div class="tree-branch" data-node="{{ n.id }}">
+                {# Clickable here too: the map is where you notice a node, and the
+                   node's own page is where you can do anything about it. #}
+                <a class="tnode tnode-host is-link has-gauges {{ 'is-manager' if n.role == 'manager' }}"
+                   href="{{ node_href(n.id, 'overview') }}">
+                  <span class="tnode-head">
+                    <span class="pill {{ 'accent' if n.role == 'manager' else n.tone }}">{{ n.role }}</span>
+                    {% if n.availability != 'active' %}<span class="pill warn">{{ n.availability }}</span>{% endif %}
+                  </span>
+                  <span class="tnode-title" title="{{ n.hostname }}">{{ n.hostname }}</span>
+                  <span class="tnode-sub">
+                    <b data-f="tasks">{{ n.tasks_total }}</b> tasks · {{ n.cpus }} vCPU · {{ n.memory_gb }} GB{% if n.disk_total_gb %} · {{ n.disk_total_gb }} GB disk{% endif %}
+                  </span>
+                  <span class="tnode-meters">
+                    <span title="node CPU utilisation — how busy it is right now">cpu <b data-f="cpu">{% if n.cpu_pct is not none %}{{ n.cpu_pct|round|int }}%{% else %}—{% endif %}</b></span>
+                    <span title="node memory utilisation — how much is in use right now">mem <b data-f="mem">{% if n.mem_pct is not none %}{{ n.mem_pct|round|int }}%{% else %}—{% endif %}</b></span>
+                    {# Disk, because a database lives on one. It is the resource
+                       shedding load cannot recover: a full disk does not get slower,
+                       it stops. #}
+                    <span title="root filesystem — where docker keeps every volume">disk <b data-f="disk">{% if n.disk_pct is not none %}{{ n.disk_pct|round|int }}%{% else %}—{% endif %}</b></span>
+                  </span>
+
+                  {# Reserved, not used: the pair that decides whether anything else
+                     can be placed here. A node can be 4% busy and 100% reserved. #}
+                  <span class="gauge gauge-cpu" data-f="cpures" style="--v:{{ n.cpu_reserved_pct }}"
+                        data-tip="CPU reserved: {{ n.cpu_reserved_pct }}% — {{ n.cpu_reserved }} of {{ n.cpus }} vCPU promised to tasks here"></span>
+                  <span class="gauge gauge-mem" data-f="memres" style="--v:{{ n.mem_reserved_pct }}"
+                        data-tip="Memory reserved: {{ n.mem_reserved_pct }}% — {{ n.mem_reserved_mb }} MB of {{ n.memory_gb }} GB promised to tasks here"></span>
+                </a>
+
+                <!-- data-sig matches the signature the poller computes, so the first
+                     tick on an unchanged cluster rebuilds nothing at all. -->
+                <div class="slots" data-slots
+                     data-sig="{% for t in n.tasks %}{{ t.name }}|{{ t.key }}|{{ t.tone }}|{{ t.cpu_share }}|{{ t.mem_share }};{% endfor %}">
+                  {% for t in n.tasks %}
+                    {# The chip's own colour already says WHAT this is, so the dot
+                       is spent on what it is DOING. The ring is the share of this
+                       machine's CPU the task reserves — a full ring means it has
+                       claimed the whole box — and the fill behind the label is the
+                       same for memory, laid over the band colour rather than
+                       replacing it. #}
+                    <span class="slot slot-{{ t.key }}" tabindex="0"
+                          style="--cpu:{{ t.cpu_share }};--mem:{{ t.mem_share }}"
+                          data-tip="{{ t.service }} — task {{ t.id }} on {{ n.hostname }}&#10;state: {{ t.state }}&#10;reserves {{ t.cpu_share }}% of this node's CPU, {{ t.mem_share }}% of its memory">
+                      <i class="dot dot-{{ t.tone }}" aria-hidden="true"></i>{{ t.name }}
+                    </span>
+                  {% else %}
+                    <span class="slot is-empty">no running tasks</span>
+                  {% endfor %}
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div data-live-html="{{ live_href('overview-lists') }}">
+      {% include "_overview_lists.html" %}
     </div>
   </div>
-</section>
 
-<div class="grid-2">
-  <section class="panel">
-    <div class="panel-head">
-      <h2>Components</h2>
-      <span class="spacer"></span>
-      <a class="btn btn-sm" href="{{ section_href({'key': 'components'}) }}">All components</a>
-    </div>
-    <div class="rows">
-      {% for v in views[:7] %}
-        <a class="row {{ v.tone }}" href="{{ component_href(v.name) }}">
-          <span class="stripe"></span>
-          <span>
-            <span class="row-title">{{ v.name }}</span>
-            <span class="row-sub">{{ v.summary }}</span>
-          </span>
-          <span class="row-metric hide-sm">
-            <span class="k">Tasks</span>
-            <span class="v num">{{ v.running }}/{{ v.desired }}</span>
-          </span>
-          <span class="pill {{ v.tone }}">{{ v.state }}</span>
-        </a>
-      {% else %}
-        <div class="empty">No components yet.</div>
-      {% endfor %}
-    </div>
-  </section>
-
-  <section class="panel">
-    <div class="panel-head"><h2>Alert rules</h2></div>
-    <div class="rows">
-      {% for al in alerts if al.state != 'inactive' %}
-        <div class="row {{ al.tone }}">
-          <span class="stripe"></span>
-          <span>
-            <span class="row-title">{{ al.name }}</span>
-            <span class="row-sub">{{ al.summary }}</span>
-          </span>
-          <span class="pill {{ al.tone }}">{{ al.state }}</span>
-        </div>
-      {% else %}
-        <div class="empty">No rules are firing.</div>
-      {% endfor %}
-    </div>
-    <div class="panel-note">
-      Watchdog fires permanently by design — its silence means the alerting path is broken, not quiet.
-    </div>
-  </section>
+  <aside class="split-main-side" data-live-html="{{ live_href('observability') }}"
+         data-live-ms="15000">
+    {% include "_observability.html" %}
+  </aside>
 </div>

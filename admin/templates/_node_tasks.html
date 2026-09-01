@@ -1,0 +1,34 @@
+{# What is on this machine right now, re-rendered by `/live/node-tasks`.
+   Everything else on this page is either a fixed fact about the machine or a
+   form, and neither belongs in a panel that replaces itself. #}
+<section class="panel">
+  <div class="panel-head">
+    <h2>Tasks here</h2>
+    <span class="spacer"></span>
+    <span class="pill mute plain mono">{{ n.tasks_total }}</span>
+  </div>
+  <div class="panel-body">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Service</th><th>Image</th><th>Task</th><th>State</th><th>Reserves</th></tr></thead>
+        <tbody>
+          {% for t in n.tasks %}
+          <tr>
+            <td class="mono">{{ t.service }}</td>
+            <td class="mono small" title="{{ t.image }}">{{ t.tag }}</td>
+            <td class="mono small">{{ t.id }}</td>
+            <td><span class="pill {{ t.tone }}">{{ t.state }}</span></td>
+            <td class="mono small num">{{ t.cpu_share }}% cpu · {{ t.mem_share }}% mem</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5" class="muted">No running tasks on this node.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="panel-note">
+    Percentages are of THIS machine, and they are reservations rather than usage — the
+    same pair the rings on the fleet view draw.
+  </div>
+</section>

@@ -234,6 +234,10 @@ code, .mono, kbd { font-family: var(--mono); font-size: .92em; }
 .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 
 main { padding: var(--s-6) var(--s-8) var(--s-10); max-width: 1240px; }
+/* The Overview carries a second column now. Keeping the 1240px cap there would
+   have taken roughly a third of the cluster map's width to pay for it, and the
+   map is the thing the page is named after. Only this page is widened. */
+main.wide { max-width: 1560px; }
 
 .page-head { display: flex; align-items: flex-start; gap: var(--s-4); margin-bottom: var(--s-5); }
 .page-head h1 { font-size: var(--t-2xl); font-weight: var(--w-bold); letter-spacing: -.015em; margin: 0 0 var(--s-1); text-wrap: balance; }
@@ -479,6 +483,11 @@ ul.tight li { margin-bottom: 2px; }
   padding: 14px 16px; font: 400 13.5px/1.7 var(--mono);
   max-height: 460px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
 }
+/* One node per line, so the follower can append and trim instead of re-parsing
+   the pane, and so these three rules finally reach something. They have been
+   here since the tab was written; until the server started emitting a span per
+   timestamp and a class per level, nothing ever matched them. */
+.logs .line { display: block; }
 .logs .lvl-warn { color: var(--warn); }
 .logs .lvl-err  { color: var(--bad); }
 .logs .ts { color: var(--text-mute); }
@@ -975,6 +984,83 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
 }
 .note-locked .ico-warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, transparent); }
 .note-locked .ico-lock { background: color-mix(in srgb, var(--text-mute) 16%, transparent); font-size: .6rem; }
+
+/* --- observability column ----------------------------------------------------
+   Main content and a fixed-width rail beside it. NOT `.grid-2`: that one is
+   symmetric, and these two are not peers — the map should keep its width and
+   the column should keep its readability, which is a fixed track, not a share.
+
+   It collapses at 1100px rather than at the shell's own 900px breakpoint,
+   because a 360px rail beside a cluster map stops working well before the
+   sidebar does.
+   -------------------------------------------------------------------------- */
+.split-main { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: var(--s-6); align-items: start; }
+.split-main-body { min-width: 0; }
+.split-main-side { min-width: 0; position: sticky; top: var(--s-6); }
+@media (max-width: 1100px) {
+  .split-main { grid-template-columns: 1fr; }
+  .split-main-side { position: static; }
+}
+
+.obs-head { display: flex; align-items: center; gap: var(--s-2); margin-bottom: var(--s-3); }
+.obs-head h2 { font-size: var(--t-lg); margin: 0; }
+.obs-section { padding-bottom: var(--s-3); margin-bottom: var(--s-4); }
+.obs-section h3 { font-size: var(--t-md); margin: 0; }
+.obs-scope { margin: 0 var(--s-4) var(--s-3); color: var(--text-mute); font-size: var(--t-xs); }
+.obs-card { padding: var(--s-3) var(--s-4); border-top: 1px solid var(--line); }
+.obs-card-title { font-weight: var(--w-bold); font-size: var(--t-sm); }
+.obs-note { margin: 2px 0 var(--s-2); color: var(--text-mute); font-size: var(--t-xs); line-height: 1.5; }
+/* A named gap rather than a blank chart. `charts.py` refuses to draw an empty
+   series as a flat line at zero, because "nothing matched" and "the value is
+   zero" are different facts and only one of them is good news. */
+.obs-warning {
+  margin: var(--s-2) 0 0; padding: 8px 10px; border-radius: var(--r-sm);
+  background: var(--surface-2); border: 1px solid var(--line);
+  color: var(--text-mute); font-size: var(--t-xs); line-height: 1.5;
+}
+
+/* --- charts ------------------------------------------------------------------
+   Series hues come from the categorical palette validated for both themes
+   further up this file; nothing here invents a colour. Status colours are used
+   only where a chart is genuinely reporting against a threshold.
+   -------------------------------------------------------------------------- */
+.chart { display: block; width: 100%; height: 96px; overflow: visible; }
+/* The SVG is stretched to whatever width the column has, so a scaled stroke
+   would be thicker horizontally than vertically. This keeps it one pixel. */
+.chart-line { fill: none; stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+.chart-area { stroke: none; opacity: .55; }
+.chart-band { fill: var(--bad); opacity: .07; }
+.chart-ref { stroke: var(--bad); stroke-width: 1; stroke-dasharray: 3 3; opacity: .55; vector-effect: non-scaling-stroke; }
+.chart-tick { fill: var(--text-mute); font: 400 9px var(--mono); }
+.chart-col { fill: var(--s-platform); }
+.chart-col.is-bad { fill: var(--bad); }
+.chart-col.is-warn { fill: var(--warn); }
+.chart-empty {
+  padding: 14px 0; color: var(--text-mute); font-size: var(--t-xs);
+  font-style: italic; text-align: center;
+  border: 1px dashed var(--line); border-radius: var(--r-sm);
+}
+
+.bar-rows { display: flex; flex-direction: column; gap: 6px; }
+.bar-row { display: grid; grid-template-columns: minmax(0, 1fr) 88px 46px; gap: 8px; align-items: center; font-size: var(--t-xs); }
+.bar-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-mute); }
+.bar-track { background: var(--surface-2); border-radius: 999px; height: 7px; overflow: hidden; }
+.bar-track > i { display: block; height: 100%; background: var(--s-prod); border-radius: 999px; }
+.bar-row.is-warn .bar-track > i { background: var(--warn); }
+.bar-row.is-bad .bar-track > i { background: var(--bad); }
+.bar-value { font: 400 11px var(--mono); text-align: right; }
+
+/* A bullet, not a gauge: the number matters far less than where it sits
+   relative to the line that will act on it. */
+.bullet { display: grid; grid-template-columns: minmax(0, 1fr) 52px; gap: 8px; align-items: center; margin-bottom: 6px; }
+.bullet-track { position: relative; background: var(--surface-2); border-radius: 999px; height: 10px; }
+.bullet-fill { display: block; height: 100%; background: var(--s-prod); border-radius: 999px; }
+.bullet.is-warn .bullet-fill { background: var(--warn); }
+.bullet.is-bad .bullet-fill { background: var(--bad); }
+.bullet-mark { position: absolute; top: -2px; width: 2px; height: 14px; border-radius: 1px; }
+.bullet-mark.is-warn { background: var(--warn); }
+.bullet-mark.is-bad { background: var(--bad); }
+.bullet-value { font: 400 11px var(--mono); text-align: right; }
 </style>
 <script>
 (function () {
@@ -1089,6 +1175,8 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
   </div>
 </div>
 
+<div data-live-html="#">
+  
 <div class="tiles">
   <div class="tile">
     <span class="k">Components</span>
@@ -1118,399 +1206,405 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
 
 <div class="banner ok"><div>Every component is reporting healthy.</div></div>
 
+</div>
 
-<section class="panel" id="topology" data-topology>
-  <div class="panel-head">
-    <h2>Cluster map</h2>
-    <span class="spacer"></span>
-    <span class="live" data-topo-live><i></i>live</span>
-    <a class="btn btn-sm" href="#view-cluster">Nodes</a>
-  </div>
 
-  <p class="panel-intro">
-    Every node, and every task running on it — one block per task, so three
-    replicas of a service are three blocks. The master is host&nbsp;#1: while no
-    worker exists it carries the API itself, and once workers appear it should
-    carry none.
-  </p>
+<div class="split-main">
+  <div class="split-main-body">
+    <section class="panel" id="topology" data-topology>
+      <div class="panel-head">
+        <h2>Cluster map</h2>
+        <span class="spacer"></span>
+        <span class="live" data-topo-live><i></i>live</span>
+        <a class="btn btn-sm" href="#view-cluster">Nodes</a>
+      </div>
 
-  <!-- Colour groups the blocks; the name on each block is what identifies it.
-       The dot on each block is its task state, and the ring and fill are what
-       it reserves of the node it sits on. -->
-  <div class="legend" data-topo-legend>
-    
-      <span class="legend-item"><i class="sw sw-prod"></i>applications</span>
-    
-      <span class="legend-item"><i class="sw sw-data"></i>data</span>
-    
-      <span class="legend-item"><i class="sw sw-staging"></i>ingress</span>
-    
-      <span class="legend-item"><i class="sw sw-observe"></i>observability</span>
-    
-      <span class="legend-item"><i class="sw sw-platform"></i>platform</span>
-    
-  </div>
+      <p class="panel-intro">
+        Every node, and every task running on it — one block per task, so three
+        replicas of a service are three blocks. The master is host&nbsp;#1: while no
+        worker exists it carries the API itself, and once workers appear it should
+        carry none.
+      </p>
 
-  <!-- A wide fleet scrolls inside this box rather than making the page scroll
-       sideways. -->
-  <div class="tree-scroll">
-    <div class="tree" data-topo-rows>
-      <div class="tree-top">
-        <div class="tnode tnode-root">
-          <span class="tnode-title">aichat</span>
-          <span class="tnode-sub">
-            <b data-f="hosts">4</b> hosts
-            · <b data-f="total">29</b> tasks
-          </span>
+      <!-- Colour groups the blocks; the name on each block is what identifies it.
+           The dot on each block is its task state, and the ring and fill are what
+           it reserves of the node it sits on. -->
+      <div class="legend" data-topo-legend>
+        
+          <span class="legend-item"><i class="sw sw-prod"></i>applications</span>
+        
+          <span class="legend-item"><i class="sw sw-data"></i>data</span>
+        
+          <span class="legend-item"><i class="sw sw-staging"></i>ingress</span>
+        
+          <span class="legend-item"><i class="sw sw-observe"></i>observability</span>
+        
+          <span class="legend-item"><i class="sw sw-platform"></i>platform</span>
+        
+      </div>
+
+      <!-- A wide fleet scrolls inside this box rather than making the page scroll
+           sideways. -->
+      <div class="tree-scroll">
+        <div class="tree" data-topo-rows>
+          <div class="tree-top">
+            <div class="tnode tnode-root">
+              <span class="tnode-title">aichat</span>
+              <span class="tnode-sub">
+                <b data-f="hosts">4</b> hosts
+                · <b data-f="total">29</b> tasks
+              </span>
+            </div>
+          </div>
+
+          <div class="tree-kids">
+            
+              <div class="tree-branch" data-node="k39dl2mzq018">
+                
+                <a class="tnode tnode-host is-link has-gauges is-manager"
+                   href="#view-node-k39dl2mzq018">
+                  <span class="tnode-head">
+                    <span class="pill accent">manager</span>
+                    
+                  </span>
+                  <span class="tnode-title" title="aichat-master">aichat-master</span>
+                  <span class="tnode-sub">
+                    <b data-f="tasks">14</b> tasks · 4 vCPU · 7.6 GB · 160.0 GB disk
+                  </span>
+                  <span class="tnode-meters">
+                    <span title="node CPU utilisation — how busy it is right now">cpu <b data-f="cpu">78%</b></span>
+                    <span title="node memory utilisation — how much is in use right now">mem <b data-f="mem">61%</b></span>
+                    
+                    <span title="root filesystem — where docker keeps every volume">disk <b data-f="disk">88%</b></span>
+                  </span>
+
+                  
+                  <span class="gauge gauge-cpu" data-f="cpures" style="--v:62.0"
+                        data-tip="CPU reserved: 62.0% — 1.2 of 4 vCPU promised to tasks here"></span>
+                  <span class="gauge gauge-mem" data-f="memres" style="--v:48.0"
+                        data-tip="Memory reserved: 48.0% — 1400 MB of 7.6 GB promised to tasks here"></span>
+                </a>
+
+                <!-- data-sig matches the signature the poller computes, so the first
+                     tick on an unchanged cluster rebuilds nothing at all. -->
+                <div class="slots" data-slots
+                     data-sig="cache|data|ok|10.5|16.8;documents|data|ok|1.5|2.5;cloudflared|staging|ok|1.5|2.5;alertmanager|observe|ok|1.5|2.5;cadvisor|observe|ok|1.5|2.5;grafana|observe|ok|2.5|3.4;loki|observe|ok|5.0|8.4;node-exporter|observe|ok|1.5|2.5;redis-exporter|observe|ok|1.5|2.5;victoriametrics|observe|ok|7.5|10.1;vmagent|observe|ok|1.5|2.5;vmalert|observe|ok|1.5|2.5;autoscaler|platform|ok|1.5|2.5;ui|platform|ok|1.5|2.5;">
+                  
+                    
+                    <span class="slot slot-data" tabindex="0"
+                          style="--cpu:10.5;--mem:16.8"
+                          data-tip="cache_redis-1 — task cache0kd93jf on aichat-master&#10;state: running&#10;reserves 10.5% of this node's CPU, 16.8% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>cache
+                    </span>
+                  
+                    
+                    <span class="slot slot-data" tabindex="0"
+                          style="--cpu:1.5;--mem:2.5"
+                          data-tip="documents_mongo-1 — task docume0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>documents
+                    </span>
+                  
+                    
+                    <span class="slot slot-staging" tabindex="0"
+                          style="--cpu:1.5;--mem:2.5"
+                          data-tip="ingress_cloudflared — task cloudf0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>cloudflared
+                    </span>
+                  
+                    
+                    <span class="slot slot-observe" tabindex="0"
+                          style="--cpu:1.5;--mem:2.5"
+                          data-tip="monitoring_alertmanager — task alertm0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>alertmanager
+                    </span>
+                  
+                    
+                    <span class="slot slot-observe" tabindex="0"
+                          style="--cpu:1.5;--mem:2.5"
+                          data-tip="monitoring_cadvisor — task cadvis0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>cadvisor
+                    </span>
+                  
+                    
+                    <span class="slot slot-observe" tabindex="0"
+                          style="--cpu:2.5;--mem:3.4"
+                          data-tip="monitoring_grafana — task grafan0kd93j on aichat-master&#10;state: running&#10;reserves 2.5% of this node's CPU, 3.4% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>grafana
+                    </span>
+                  
+                    
+                    <span class="slot slot-observe" tabindex="0"
+                          style="--cpu:5.0;--mem:8.4"
+                          data-tip="monitoring_loki — task loki0kd93jf0 on aichat-master&#10;state: running&#10;reserves 5.0% of this node's CPU, 8.4% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>loki
+                    </span>
+                  
+                    
+                    <span class="slot slot-observe" tabindex="0"
+                          style="--cpu:1.5;--mem:2.5"
+                          data-tip="monitoring_node-exporter — task node-e0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>node-exporter
+                    </span>
+                  
+                    
+                    <span class="slot slot-observe" tabindex="0"
+                          style="--cpu:1.5;--mem:2.5"
+                          data-tip="monitoring_redis-exporter — task redis-0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>redis-exporter
+                    </span>
+                  
+                    
+                    <span class="slot slot-observe" tabindex="0"
+                          style="--cpu:7.5;--mem:10.1"
+                          data-tip="monitoring_victoriametrics — task victor0kd93j on aichat-master&#10;state: running&#10;reserves 7.5% of this node's CPU, 10.1% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>victoriametrics
+                    </span>
+                  
+                    
+                    <span class="slot slot-observe" tabindex="0"
+                          style="--cpu:1.5;--mem:2.5"
+                          data-tip="monitoring_vmagent — task vmagen0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>vmagent
+                    </span>
+                  
+                    
+                    <span class="slot slot-observe" tabindex="0"
+                          style="--cpu:1.5;--mem:2.5"
+                          data-tip="monitoring_vmalert — task vmaler0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>vmalert
+                    </span>
+                  
+                    
+                    <span class="slot slot-platform" tabindex="0"
+                          style="--cpu:1.5;--mem:2.5"
+                          data-tip="monitoring_autoscaler — task autosc0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>autoscaler
+                    </span>
+                  
+                    
+                    <span class="slot slot-platform" tabindex="0"
+                          style="--cpu:1.5;--mem:2.5"
+                          data-tip="admin_ui — task ui0kd93jf01 on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>ui
+                    </span>
+                  
+                </div>
+              </div>
+            
+              <div class="tree-branch" data-node="w1af02c9be47">
+                
+                <a class="tnode tnode-host is-link has-gauges "
+                   href="#view-node-w1af02c9be47">
+                  <span class="tnode-head">
+                    <span class="pill ok">worker</span>
+                    
+                  </span>
+                  <span class="tnode-title" title="aichat-worker-1754812203">aichat-worker-1754812203</span>
+                  <span class="tnode-sub">
+                    <b data-f="tasks">6</b> tasks · 3 vCPU · 3.8 GB · 80.0 GB disk
+                  </span>
+                  <span class="tnode-meters">
+                    <span title="node CPU utilisation — how busy it is right now">cpu <b data-f="cpu">64%</b></span>
+                    <span title="node memory utilisation — how much is in use right now">mem <b data-f="mem">47%</b></span>
+                    
+                    <span title="root filesystem — where docker keeps every volume">disk <b data-f="disk">41%</b></span>
+                  </span>
+
+                  
+                  <span class="gauge gauge-cpu" data-f="cpures" style="--v:62.0"
+                        data-tip="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks here"></span>
+                  <span class="gauge gauge-mem" data-f="memres" style="--v:48.0"
+                        data-tip="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks here"></span>
+                </a>
+
+                <!-- data-sig matches the signature the poller computes, so the first
+                     tick on an unchanged cluster rebuilds nothing at all. -->
+                <div class="slots" data-slots
+                     data-sig="api|prod|ok|18.0|12.0;api|prod|ok|18.0|12.0;api|prod|warn|18.0|12.0;cloudflared|staging|ok|1.5|2.5;cadvisor|observe|ok|1.5|2.5;node-exporter|observe|ok|1.5|2.5;">
+                  
+                    
+                    <span class="slot slot-prod" tabindex="0"
+                          style="--cpu:18.0;--mem:12.0"
+                          data-tip="api_app — task api0kd93jf01 on aichat-worker-1754812203&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>api
+                    </span>
+                  
+                    
+                    <span class="slot slot-prod" tabindex="0"
+                          style="--cpu:18.0;--mem:12.0"
+                          data-tip="api_app — task api1kd93jf01 on aichat-worker-1754812203&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>api
+                    </span>
+                  
+                    
+                    <span class="slot slot-prod" tabindex="0"
+                          style="--cpu:18.0;--mem:12.0"
+                          data-tip="api_app — task api2kd93jf01 on aichat-worker-1754812203&#10;state: starting&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
+                      <i class="dot dot-warn" aria-hidden="true"></i>api
+                    </span>
+                  
+                    
+                    <span class="slot slot-staging" tabindex="0"
+                          style="--cpu:1.5;--mem:2.5"
+                          data-tip="ingress_cloudflared — task cloudf0kd93j on aichat-worker-1754812203&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>cloudflared
+                    </span>
+                  
+                    
+                    <span class="slot slot-observe" tabindex="0"
+                          style="--cpu:1.5;--mem:2.5"
+                          data-tip="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754812203&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>cadvisor
+                    </span>
+                  
+                    
+                    <span class="slot slot-observe" tabindex="0"
+                          style="--cpu:1.5;--mem:2.5"
+                          data-tip="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754812203&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>node-exporter
+                    </span>
+                  
+                </div>
+              </div>
+            
+              <div class="tree-branch" data-node="w2bc71d0aa93">
+                
+                <a class="tnode tnode-host is-link has-gauges "
+                   href="#view-node-w2bc71d0aa93">
+                  <span class="tnode-head">
+                    <span class="pill ok">worker</span>
+                    
+                  </span>
+                  <span class="tnode-title" title="aichat-worker-1754819114">aichat-worker-1754819114</span>
+                  <span class="tnode-sub">
+                    <b data-f="tasks">6</b> tasks · 3 vCPU · 3.8 GB · 80.0 GB disk
+                  </span>
+                  <span class="tnode-meters">
+                    <span title="node CPU utilisation — how busy it is right now">cpu <b data-f="cpu">71%</b></span>
+                    <span title="node memory utilisation — how much is in use right now">mem <b data-f="mem">52%</b></span>
+                    
+                    <span title="root filesystem — where docker keeps every volume">disk <b data-f="disk">33%</b></span>
+                  </span>
+
+                  
+                  <span class="gauge gauge-cpu" data-f="cpures" style="--v:62.0"
+                        data-tip="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks here"></span>
+                  <span class="gauge gauge-mem" data-f="memres" style="--v:48.0"
+                        data-tip="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks here"></span>
+                </a>
+
+                <!-- data-sig matches the signature the poller computes, so the first
+                     tick on an unchanged cluster rebuilds nothing at all. -->
+                <div class="slots" data-slots
+                     data-sig="api|prod|ok|18.0|12.0;api|prod|ok|18.0|12.0;api-staging|prod|bad|1.5|2.5;cloudflared|staging|ok|1.5|2.5;cadvisor|observe|ok|1.5|2.5;node-exporter|observe|ok|1.5|2.5;">
+                  
+                    
+                    <span class="slot slot-prod" tabindex="0"
+                          style="--cpu:18.0;--mem:12.0"
+                          data-tip="api_app — task api0kd93jf01 on aichat-worker-1754819114&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>api
+                    </span>
+                  
+                    
+                    <span class="slot slot-prod" tabindex="0"
+                          style="--cpu:18.0;--mem:12.0"
+                          data-tip="api_app — task api1kd93jf01 on aichat-worker-1754819114&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>api
+                    </span>
+                  
+                    
+                    <span class="slot slot-prod" tabindex="0"
+                          style="--cpu:1.5;--mem:2.5"
+                          data-tip="api-staging_app — task api-st0kd93j on aichat-worker-1754819114&#10;state: failed&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      <i class="dot dot-bad" aria-hidden="true"></i>api-staging
+                    </span>
+                  
+                    
+                    <span class="slot slot-staging" tabindex="0"
+                          style="--cpu:1.5;--mem:2.5"
+                          data-tip="ingress_cloudflared — task cloudf0kd93j on aichat-worker-1754819114&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>cloudflared
+                    </span>
+                  
+                    
+                    <span class="slot slot-observe" tabindex="0"
+                          style="--cpu:1.5;--mem:2.5"
+                          data-tip="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754819114&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>cadvisor
+                    </span>
+                  
+                    
+                    <span class="slot slot-observe" tabindex="0"
+                          style="--cpu:1.5;--mem:2.5"
+                          data-tip="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754819114&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>node-exporter
+                    </span>
+                  
+                </div>
+              </div>
+            
+              <div class="tree-branch" data-node="w3de92f1cc05">
+                
+                <a class="tnode tnode-host is-link has-gauges "
+                   href="#view-node-w3de92f1cc05">
+                  <span class="tnode-head">
+                    <span class="pill warn">worker</span>
+                    <span class="pill warn">drain</span>
+                  </span>
+                  <span class="tnode-title" title="aichat-worker-1754823887">aichat-worker-1754823887</span>
+                  <span class="tnode-sub">
+                    <b data-f="tasks">3</b> tasks · 3 vCPU · 3.8 GB · 80.0 GB disk
+                  </span>
+                  <span class="tnode-meters">
+                    <span title="node CPU utilisation — how busy it is right now">cpu <b data-f="cpu">12%</b></span>
+                    <span title="node memory utilisation — how much is in use right now">mem <b data-f="mem">19%</b></span>
+                    
+                    <span title="root filesystem — where docker keeps every volume">disk <b data-f="disk">12%</b></span>
+                  </span>
+
+                  
+                  <span class="gauge gauge-cpu" data-f="cpures" style="--v:62.0"
+                        data-tip="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks here"></span>
+                  <span class="gauge gauge-mem" data-f="memres" style="--v:48.0"
+                        data-tip="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks here"></span>
+                </a>
+
+                <!-- data-sig matches the signature the poller computes, so the first
+                     tick on an unchanged cluster rebuilds nothing at all. -->
+                <div class="slots" data-slots
+                     data-sig="api|prod|ok|18.0|12.0;cadvisor|observe|ok|1.5|2.5;node-exporter|observe|ok|1.5|2.5;">
+                  
+                    
+                    <span class="slot slot-prod" tabindex="0"
+                          style="--cpu:18.0;--mem:12.0"
+                          data-tip="api_app — task api0kd93jf01 on aichat-worker-1754823887&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>api
+                    </span>
+                  
+                    
+                    <span class="slot slot-observe" tabindex="0"
+                          style="--cpu:1.5;--mem:2.5"
+                          data-tip="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754823887&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>cadvisor
+                    </span>
+                  
+                    
+                    <span class="slot slot-observe" tabindex="0"
+                          style="--cpu:1.5;--mem:2.5"
+                          data-tip="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754823887&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                      <i class="dot dot-ok" aria-hidden="true"></i>node-exporter
+                    </span>
+                  
+                </div>
+              </div>
+            
+          </div>
         </div>
       </div>
+    </section>
 
-      <div class="tree-kids">
-        
-          <div class="tree-branch" data-node="k39dl2mzq018">
-            
-            <a class="tnode tnode-host is-link has-gauges is-manager"
-               href="#view-node-k39dl2mzq018">
-              <span class="tnode-head">
-                <span class="pill accent">manager</span>
-                
-              </span>
-              <span class="tnode-title" title="aichat-master">aichat-master</span>
-              <span class="tnode-sub">
-                <b data-f="tasks">14</b> tasks · 4 vCPU · 7.6 GB · 160.0 GB disk
-              </span>
-              <span class="tnode-meters">
-                <span title="node CPU utilisation — how busy it is right now">cpu <b data-f="cpu">78%</b></span>
-                <span title="node memory utilisation — how much is in use right now">mem <b data-f="mem">61%</b></span>
-                
-                <span title="root filesystem — where docker keeps every volume">disk <b data-f="disk">88%</b></span>
-              </span>
-
-              
-              <span class="gauge gauge-cpu" data-f="cpures" style="--v:62.0"
-                    data-tip="CPU reserved: 62.0% — 1.2 of 4 vCPU promised to tasks here"></span>
-              <span class="gauge gauge-mem" data-f="memres" style="--v:48.0"
-                    data-tip="Memory reserved: 48.0% — 1400 MB of 7.6 GB promised to tasks here"></span>
-            </a>
-
-            <!-- data-sig matches the signature the poller computes, so the first
-                 tick on an unchanged cluster rebuilds nothing at all. -->
-            <div class="slots" data-slots
-                 data-sig="cache|data|ok|10.5|16.8;documents|data|ok|1.5|2.5;cloudflared|staging|ok|1.5|2.5;alertmanager|observe|ok|1.5|2.5;cadvisor|observe|ok|1.5|2.5;grafana|observe|ok|2.5|3.4;loki|observe|ok|5.0|8.4;node-exporter|observe|ok|1.5|2.5;redis-exporter|observe|ok|1.5|2.5;victoriametrics|observe|ok|7.5|10.1;vmagent|observe|ok|1.5|2.5;vmalert|observe|ok|1.5|2.5;autoscaler|platform|ok|1.5|2.5;ui|platform|ok|1.5|2.5;">
-              
-                
-                <span class="slot slot-data" tabindex="0"
-                      style="--cpu:10.5;--mem:16.8"
-                      data-tip="cache_redis-1 — task cache0kd93jf on aichat-master&#10;state: running&#10;reserves 10.5% of this node's CPU, 16.8% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>cache
-                </span>
-              
-                
-                <span class="slot slot-data" tabindex="0"
-                      style="--cpu:1.5;--mem:2.5"
-                      data-tip="documents_mongo-1 — task docume0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>documents
-                </span>
-              
-                
-                <span class="slot slot-staging" tabindex="0"
-                      style="--cpu:1.5;--mem:2.5"
-                      data-tip="ingress_cloudflared — task cloudf0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>cloudflared
-                </span>
-              
-                
-                <span class="slot slot-observe" tabindex="0"
-                      style="--cpu:1.5;--mem:2.5"
-                      data-tip="monitoring_alertmanager — task alertm0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>alertmanager
-                </span>
-              
-                
-                <span class="slot slot-observe" tabindex="0"
-                      style="--cpu:1.5;--mem:2.5"
-                      data-tip="monitoring_cadvisor — task cadvis0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>cadvisor
-                </span>
-              
-                
-                <span class="slot slot-observe" tabindex="0"
-                      style="--cpu:2.5;--mem:3.4"
-                      data-tip="monitoring_grafana — task grafan0kd93j on aichat-master&#10;state: running&#10;reserves 2.5% of this node's CPU, 3.4% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>grafana
-                </span>
-              
-                
-                <span class="slot slot-observe" tabindex="0"
-                      style="--cpu:5.0;--mem:8.4"
-                      data-tip="monitoring_loki — task loki0kd93jf0 on aichat-master&#10;state: running&#10;reserves 5.0% of this node's CPU, 8.4% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>loki
-                </span>
-              
-                
-                <span class="slot slot-observe" tabindex="0"
-                      style="--cpu:1.5;--mem:2.5"
-                      data-tip="monitoring_node-exporter — task node-e0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>node-exporter
-                </span>
-              
-                
-                <span class="slot slot-observe" tabindex="0"
-                      style="--cpu:1.5;--mem:2.5"
-                      data-tip="monitoring_redis-exporter — task redis-0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>redis-exporter
-                </span>
-              
-                
-                <span class="slot slot-observe" tabindex="0"
-                      style="--cpu:7.5;--mem:10.1"
-                      data-tip="monitoring_victoriametrics — task victor0kd93j on aichat-master&#10;state: running&#10;reserves 7.5% of this node's CPU, 10.1% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>victoriametrics
-                </span>
-              
-                
-                <span class="slot slot-observe" tabindex="0"
-                      style="--cpu:1.5;--mem:2.5"
-                      data-tip="monitoring_vmagent — task vmagen0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>vmagent
-                </span>
-              
-                
-                <span class="slot slot-observe" tabindex="0"
-                      style="--cpu:1.5;--mem:2.5"
-                      data-tip="monitoring_vmalert — task vmaler0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>vmalert
-                </span>
-              
-                
-                <span class="slot slot-platform" tabindex="0"
-                      style="--cpu:1.5;--mem:2.5"
-                      data-tip="monitoring_autoscaler — task autosc0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>autoscaler
-                </span>
-              
-                
-                <span class="slot slot-platform" tabindex="0"
-                      style="--cpu:1.5;--mem:2.5"
-                      data-tip="admin_ui — task ui0kd93jf01 on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>ui
-                </span>
-              
-            </div>
-          </div>
-        
-          <div class="tree-branch" data-node="w1af02c9be47">
-            
-            <a class="tnode tnode-host is-link has-gauges "
-               href="#view-node-w1af02c9be47">
-              <span class="tnode-head">
-                <span class="pill ok">worker</span>
-                
-              </span>
-              <span class="tnode-title" title="aichat-worker-1754812203">aichat-worker-1754812203</span>
-              <span class="tnode-sub">
-                <b data-f="tasks">6</b> tasks · 3 vCPU · 3.8 GB · 80.0 GB disk
-              </span>
-              <span class="tnode-meters">
-                <span title="node CPU utilisation — how busy it is right now">cpu <b data-f="cpu">64%</b></span>
-                <span title="node memory utilisation — how much is in use right now">mem <b data-f="mem">47%</b></span>
-                
-                <span title="root filesystem — where docker keeps every volume">disk <b data-f="disk">41%</b></span>
-              </span>
-
-              
-              <span class="gauge gauge-cpu" data-f="cpures" style="--v:62.0"
-                    data-tip="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks here"></span>
-              <span class="gauge gauge-mem" data-f="memres" style="--v:48.0"
-                    data-tip="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks here"></span>
-            </a>
-
-            <!-- data-sig matches the signature the poller computes, so the first
-                 tick on an unchanged cluster rebuilds nothing at all. -->
-            <div class="slots" data-slots
-                 data-sig="api|prod|ok|18.0|12.0;api|prod|ok|18.0|12.0;api|prod|warn|18.0|12.0;cloudflared|staging|ok|1.5|2.5;cadvisor|observe|ok|1.5|2.5;node-exporter|observe|ok|1.5|2.5;">
-              
-                
-                <span class="slot slot-prod" tabindex="0"
-                      style="--cpu:18.0;--mem:12.0"
-                      data-tip="api_app — task api0kd93jf01 on aichat-worker-1754812203&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>api
-                </span>
-              
-                
-                <span class="slot slot-prod" tabindex="0"
-                      style="--cpu:18.0;--mem:12.0"
-                      data-tip="api_app — task api1kd93jf01 on aichat-worker-1754812203&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>api
-                </span>
-              
-                
-                <span class="slot slot-prod" tabindex="0"
-                      style="--cpu:18.0;--mem:12.0"
-                      data-tip="api_app — task api2kd93jf01 on aichat-worker-1754812203&#10;state: starting&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
-                  <i class="dot dot-warn" aria-hidden="true"></i>api
-                </span>
-              
-                
-                <span class="slot slot-staging" tabindex="0"
-                      style="--cpu:1.5;--mem:2.5"
-                      data-tip="ingress_cloudflared — task cloudf0kd93j on aichat-worker-1754812203&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>cloudflared
-                </span>
-              
-                
-                <span class="slot slot-observe" tabindex="0"
-                      style="--cpu:1.5;--mem:2.5"
-                      data-tip="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754812203&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>cadvisor
-                </span>
-              
-                
-                <span class="slot slot-observe" tabindex="0"
-                      style="--cpu:1.5;--mem:2.5"
-                      data-tip="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754812203&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>node-exporter
-                </span>
-              
-            </div>
-          </div>
-        
-          <div class="tree-branch" data-node="w2bc71d0aa93">
-            
-            <a class="tnode tnode-host is-link has-gauges "
-               href="#view-node-w2bc71d0aa93">
-              <span class="tnode-head">
-                <span class="pill ok">worker</span>
-                
-              </span>
-              <span class="tnode-title" title="aichat-worker-1754819114">aichat-worker-1754819114</span>
-              <span class="tnode-sub">
-                <b data-f="tasks">6</b> tasks · 3 vCPU · 3.8 GB · 80.0 GB disk
-              </span>
-              <span class="tnode-meters">
-                <span title="node CPU utilisation — how busy it is right now">cpu <b data-f="cpu">71%</b></span>
-                <span title="node memory utilisation — how much is in use right now">mem <b data-f="mem">52%</b></span>
-                
-                <span title="root filesystem — where docker keeps every volume">disk <b data-f="disk">33%</b></span>
-              </span>
-
-              
-              <span class="gauge gauge-cpu" data-f="cpures" style="--v:62.0"
-                    data-tip="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks here"></span>
-              <span class="gauge gauge-mem" data-f="memres" style="--v:48.0"
-                    data-tip="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks here"></span>
-            </a>
-
-            <!-- data-sig matches the signature the poller computes, so the first
-                 tick on an unchanged cluster rebuilds nothing at all. -->
-            <div class="slots" data-slots
-                 data-sig="api|prod|ok|18.0|12.0;api|prod|ok|18.0|12.0;api-staging|prod|bad|1.5|2.5;cloudflared|staging|ok|1.5|2.5;cadvisor|observe|ok|1.5|2.5;node-exporter|observe|ok|1.5|2.5;">
-              
-                
-                <span class="slot slot-prod" tabindex="0"
-                      style="--cpu:18.0;--mem:12.0"
-                      data-tip="api_app — task api0kd93jf01 on aichat-worker-1754819114&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>api
-                </span>
-              
-                
-                <span class="slot slot-prod" tabindex="0"
-                      style="--cpu:18.0;--mem:12.0"
-                      data-tip="api_app — task api1kd93jf01 on aichat-worker-1754819114&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>api
-                </span>
-              
-                
-                <span class="slot slot-prod" tabindex="0"
-                      style="--cpu:1.5;--mem:2.5"
-                      data-tip="api-staging_app — task api-st0kd93j on aichat-worker-1754819114&#10;state: failed&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
-                  <i class="dot dot-bad" aria-hidden="true"></i>api-staging
-                </span>
-              
-                
-                <span class="slot slot-staging" tabindex="0"
-                      style="--cpu:1.5;--mem:2.5"
-                      data-tip="ingress_cloudflared — task cloudf0kd93j on aichat-worker-1754819114&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>cloudflared
-                </span>
-              
-                
-                <span class="slot slot-observe" tabindex="0"
-                      style="--cpu:1.5;--mem:2.5"
-                      data-tip="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754819114&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>cadvisor
-                </span>
-              
-                
-                <span class="slot slot-observe" tabindex="0"
-                      style="--cpu:1.5;--mem:2.5"
-                      data-tip="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754819114&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>node-exporter
-                </span>
-              
-            </div>
-          </div>
-        
-          <div class="tree-branch" data-node="w3de92f1cc05">
-            
-            <a class="tnode tnode-host is-link has-gauges "
-               href="#view-node-w3de92f1cc05">
-              <span class="tnode-head">
-                <span class="pill warn">worker</span>
-                <span class="pill warn">drain</span>
-              </span>
-              <span class="tnode-title" title="aichat-worker-1754823887">aichat-worker-1754823887</span>
-              <span class="tnode-sub">
-                <b data-f="tasks">3</b> tasks · 3 vCPU · 3.8 GB · 80.0 GB disk
-              </span>
-              <span class="tnode-meters">
-                <span title="node CPU utilisation — how busy it is right now">cpu <b data-f="cpu">12%</b></span>
-                <span title="node memory utilisation — how much is in use right now">mem <b data-f="mem">19%</b></span>
-                
-                <span title="root filesystem — where docker keeps every volume">disk <b data-f="disk">12%</b></span>
-              </span>
-
-              
-              <span class="gauge gauge-cpu" data-f="cpures" style="--v:62.0"
-                    data-tip="CPU reserved: 62.0% — 1.2 of 3 vCPU promised to tasks here"></span>
-              <span class="gauge gauge-mem" data-f="memres" style="--v:48.0"
-                    data-tip="Memory reserved: 48.0% — 1400 MB of 3.8 GB promised to tasks here"></span>
-            </a>
-
-            <!-- data-sig matches the signature the poller computes, so the first
-                 tick on an unchanged cluster rebuilds nothing at all. -->
-            <div class="slots" data-slots
-                 data-sig="api|prod|ok|18.0|12.0;cadvisor|observe|ok|1.5|2.5;node-exporter|observe|ok|1.5|2.5;">
-              
-                
-                <span class="slot slot-prod" tabindex="0"
-                      style="--cpu:18.0;--mem:12.0"
-                      data-tip="api_app — task api0kd93jf01 on aichat-worker-1754823887&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>api
-                </span>
-              
-                
-                <span class="slot slot-observe" tabindex="0"
-                      style="--cpu:1.5;--mem:2.5"
-                      data-tip="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754823887&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>cadvisor
-                </span>
-              
-                
-                <span class="slot slot-observe" tabindex="0"
-                      style="--cpu:1.5;--mem:2.5"
-                      data-tip="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754823887&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
-                  <i class="dot dot-ok" aria-hidden="true"></i>node-exporter
-                </span>
-              
-            </div>
-          </div>
-        
-      </div>
-    </div>
-  </div>
-</section>
-
+    <div data-live-html="#">
+      
 <div class="grid-2">
   <section class="panel">
     <div class="panel-head">
@@ -1602,8 +1696,150 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
       Watchdog fires permanently by design — its silence means the alerting path is broken, not quiet.
     </div>
   </section>
+</div>
+    </div>
+  </div>
+
+  <aside class="split-main-side" data-live-html="#"
+         data-live-ms="15000">
+    
+<div class="obs">
+  <div class="obs-head">
+    <h2>Signals</h2>
+    <span class="spacer"></span>
+    <span class="live" data-topo-live><i></i>live</span>
+  </div>
+
+  
+    <section class="panel obs-section">
+      <div class="panel-head">
+        <h3>RED</h3>
+      </div>
+      
+      <p class="obs-scope">per service — what a request meets</p>
+
+      
+        <div class="obs-card">
+          <div class="obs-card-head">
+            <span class="obs-card-title">Duration</span>
+          </div>
+          <p class="obs-note">p95 per service, against the SLO it is judged by</p>
+          <svg class="chart" viewBox="0 0 320 96" role="img" preserveAspectRatio="none" aria-label="2 series, peak 472ms"><title>2 series, peak 472ms</title><rect class="chart-band" x="2" y="6.0" width="316" height="10.2"/><line class="chart-ref" x1="2" y1="16.2" x2="318" y2="16.2"/><path class="chart-line" style="stroke:var(--s-prod)" d="M2.0 41.9 L7.3 36.8 L12.5 32.3 L17.8 28.6 L23.1 26.3 L28.3 25.2 L33.6 25.4 L38.9 26.4 L44.1 28.0 L49.4 29.7 L54.7 31.1 L59.9 31.9 L65.2 32.1 L70.5 31.8 L75.7 31.3 L81.0 30.9 L86.3 31.0 L91.5 31.9 L96.8 34.0 L102.1 37.1 L107.3 41.3 L112.6 46.0 L117.9 50.9 L123.1 55.4 L128.4 59.1 L133.7 61.5 L138.9 62.5 L144.2 62.1 L149.5 60.4 L154.7 57.9 L160.0 54.9 L165.3 52.1 L170.5 49.6 L175.8 47.9 L181.1 46.8 L186.3 46.3 L191.6 46.2 L196.9 45.9 L202.1 45.3 L207.4 43.9 L212.7 41.5 L217.9 38.3 L223.2 34.4 L228.5 30.2 L233.7 26.2 L239.0 22.9 L244.3 20.8 L249.5 20.0 L254.8 20.7 L260.1 22.8 L265.3 26.1 L270.6 30.0 L275.9 34.1 L281.1 37.8 L286.4 40.9 L291.7 43.1 L296.9 44.5 L302.2 45.1 L307.5 45.4 L312.7 45.6 L318.0 46.2"><title>api_app</title></path><path class="chart-line" style="stroke:var(--s-staging)" d="M2.0 58.3 L7.3 59.3 L12.5 60.6 L17.8 62.1 L23.1 63.6 L28.3 65.0 L33.6 66.1 L38.9 66.9 L44.1 67.4 L49.4 67.6 L54.7 67.6 L59.9 67.6 L65.2 67.6 L70.5 67.8 L75.7 68.2 L81.0 68.8 L86.3 69.6 L91.5 70.3 L96.8 71.0 L102.1 71.3 L107.3 71.2 L112.6 70.7 L117.9 69.7 L123.1 68.4 L128.4 66.8 L133.7 65.1 L138.9 63.5 L144.2 62.1 L149.5 61.1 L154.7 60.5 L160.0 60.3 L165.3 60.4 L170.5 60.7 L175.8 61.1 L181.1 61.3 L186.3 61.5 L191.6 61.4 L196.9 61.2 L202.1 60.8 L207.4 60.5 L212.7 60.3 L217.9 60.4 L223.2 60.9 L228.5 61.8 L233.7 63.1 L239.0 64.6 L244.3 66.3 L249.5 68.0 L254.8 69.4 L260.1 70.5 L265.3 71.2 L270.6 71.3 L275.9 71.1 L281.1 70.5 L286.4 69.8 L291.7 69.0 L296.9 68.3 L302.2 67.9 L307.5 67.6 L312.7 67.5 L318.0 67.6"><title>web_app</title></path><text class="chart-tick" x="2" y="94">472ms peak</text></svg>
+          
+        </div>
+      
+        <div class="obs-card">
+          <div class="obs-card-head">
+            <span class="obs-card-title">Rate</span>
+          </div>
+          <p class="obs-note">responses per second, by status class</p>
+          <svg class="chart" viewBox="0 0 320 96" role="img" preserveAspectRatio="none" aria-label="4 layers, peak 17.9/s"><title>4 layers, peak 17.9/s</title><path class="chart-area" style="fill:var(--s-prod)" d="M2.0 39.7 L7.3 35.9 L12.5 32.5 L17.8 29.8 L23.1 28.0 L28.3 27.2 L33.6 27.4 L38.9 28.1 L44.1 29.3 L49.4 30.6 L54.7 31.6 L59.9 32.2 L65.2 32.4 L70.5 32.2 L75.7 31.8 L81.0 31.4 L86.3 31.5 L91.5 32.2 L96.8 33.7 L102.1 36.1 L107.3 39.2 L112.6 42.7 L117.9 46.3 L123.1 49.7 L128.4 52.4 L133.7 54.2 L138.9 54.9 L144.2 54.6 L149.5 53.4 L154.7 51.5 L160.0 49.3 L165.3 47.2 L170.5 45.4 L175.8 44.1 L181.1 43.3 L186.3 42.9 L191.6 42.8 L196.9 42.6 L202.1 42.1 L207.4 41.1 L212.7 39.4 L217.9 37.0 L223.2 34.1 L228.5 31.0 L233.7 28.0 L239.0 25.6 L244.3 23.9 L249.5 23.4 L254.8 23.9 L260.1 25.5 L265.3 27.9 L270.6 30.8 L275.9 33.8 L281.1 36.6 L286.4 38.9 L291.7 40.6 L296.9 41.6 L302.2 42.0 L307.5 42.2 L312.7 42.4 L318.0 42.8 L318.0 84.0 L312.7 84.0 L307.5 84.0 L302.2 84.0 L296.9 84.0 L291.7 84.0 L286.4 84.0 L281.1 84.0 L275.9 84.0 L270.6 84.0 L265.3 84.0 L260.1 84.0 L254.8 84.0 L249.5 84.0 L244.3 84.0 L239.0 84.0 L233.7 84.0 L228.5 84.0 L223.2 84.0 L217.9 84.0 L212.7 84.0 L207.4 84.0 L202.1 84.0 L196.9 84.0 L191.6 84.0 L186.3 84.0 L181.1 84.0 L175.8 84.0 L170.5 84.0 L165.3 84.0 L160.0 84.0 L154.7 84.0 L149.5 84.0 L144.2 84.0 L138.9 84.0 L133.7 84.0 L128.4 84.0 L123.1 84.0 L117.9 84.0 L112.6 84.0 L107.3 84.0 L102.1 84.0 L96.8 84.0 L91.5 84.0 L86.3 84.0 L81.0 84.0 L75.7 84.0 L70.5 84.0 L65.2 84.0 L59.9 84.0 L54.7 84.0 L49.4 84.0 L44.1 84.0 L38.9 84.0 L33.6 84.0 L28.3 84.0 L23.1 84.0 L17.8 84.0 L12.5 84.0 L7.3 84.0 L2.0 84.0 Z"><title>2xx</title></path><path class="chart-area" style="fill:var(--s-staging)" d="M2.0 34.8 L7.3 30.5 L12.5 26.7 L17.8 23.6 L23.1 21.6 L28.3 20.8 L33.6 20.9 L38.9 21.8 L44.1 23.1 L49.4 24.5 L54.7 25.7 L59.9 26.4 L65.2 26.6 L70.5 26.3 L75.7 25.9 L81.0 25.5 L86.3 25.6 L91.5 26.4 L96.8 28.1 L102.1 30.8 L107.3 34.3 L112.6 38.3 L117.9 42.4 L123.1 46.2 L128.4 49.3 L133.7 51.3 L138.9 52.1 L144.2 51.8 L149.5 50.4 L154.7 48.2 L160.0 45.8 L165.3 43.4 L170.5 41.3 L175.8 39.8 L181.1 38.9 L186.3 38.5 L191.6 38.4 L196.9 38.2 L202.1 37.6 L207.4 36.4 L212.7 34.5 L217.9 31.8 L223.2 28.5 L228.5 25.0 L233.7 21.6 L239.0 18.8 L244.3 17.0 L249.5 16.3 L254.8 17.0 L260.1 18.8 L265.3 21.5 L270.6 24.8 L275.9 28.2 L281.1 31.4 L286.4 34.0 L291.7 35.8 L296.9 37.0 L302.2 37.5 L307.5 37.7 L312.7 37.9 L318.0 38.4 L318.0 42.8 L312.7 42.4 L307.5 42.2 L302.2 42.0 L296.9 41.6 L291.7 40.6 L286.4 38.9 L281.1 36.6 L275.9 33.8 L270.6 30.8 L265.3 27.9 L260.1 25.5 L254.8 23.9 L249.5 23.4 L244.3 23.9 L239.0 25.6 L233.7 28.0 L228.5 31.0 L223.2 34.1 L217.9 37.0 L212.7 39.4 L207.4 41.1 L202.1 42.1 L196.9 42.6 L191.6 42.8 L186.3 42.9 L181.1 43.3 L175.8 44.1 L170.5 45.4 L165.3 47.2 L160.0 49.3 L154.7 51.5 L149.5 53.4 L144.2 54.6 L138.9 54.9 L133.7 54.2 L128.4 52.4 L123.1 49.7 L117.9 46.3 L112.6 42.7 L107.3 39.2 L102.1 36.1 L96.8 33.7 L91.5 32.2 L86.3 31.5 L81.0 31.4 L75.7 31.8 L70.5 32.2 L65.2 32.4 L59.9 32.2 L54.7 31.6 L49.4 30.6 L44.1 29.3 L38.9 28.1 L33.6 27.4 L28.3 27.2 L23.1 28.0 L17.8 29.8 L12.5 32.5 L7.3 35.9 L2.0 39.7 Z"><title>3xx</title></path><path class="chart-area" style="fill:var(--s-data)" d="M2.0 31.1 L7.3 26.6 L12.5 22.7 L17.8 19.7 L23.1 17.9 L28.3 17.2 L33.6 17.6 L38.9 18.7 L44.1 20.2 L49.4 21.8 L54.7 23.1 L59.9 23.8 L65.2 24.0 L70.5 23.8 L75.7 23.4 L81.0 23.1 L86.3 23.4 L91.5 24.4 L96.8 26.4 L102.1 29.3 L107.3 33.1 L112.6 37.3 L117.9 41.6 L123.1 45.4 L128.4 48.4 L133.7 50.2 L138.9 50.8 L144.2 50.1 L149.5 48.4 L154.7 46.0 L160.0 43.3 L165.3 40.7 L170.5 38.5 L175.8 37.0 L181.1 36.1 L186.3 35.7 L191.6 35.5 L196.9 35.3 L202.1 34.6 L207.4 33.2 L212.7 31.1 L217.9 28.2 L223.2 24.7 L228.5 21.1 L233.7 17.7 L239.0 15.0 L244.3 13.4 L249.5 13.0 L254.8 14.0 L260.1 16.2 L265.3 19.2 L270.6 22.8 L275.9 26.5 L281.1 29.8 L286.4 32.5 L291.7 34.3 L296.9 35.4 L302.2 35.9 L307.5 36.1 L312.7 36.3 L318.0 36.8 L318.0 38.4 L312.7 37.9 L307.5 37.7 L302.2 37.5 L296.9 37.0 L291.7 35.8 L286.4 34.0 L281.1 31.4 L275.9 28.2 L270.6 24.8 L265.3 21.5 L260.1 18.8 L254.8 17.0 L249.5 16.3 L244.3 17.0 L239.0 18.8 L233.7 21.6 L228.5 25.0 L223.2 28.5 L217.9 31.8 L212.7 34.5 L207.4 36.4 L202.1 37.6 L196.9 38.2 L191.6 38.4 L186.3 38.5 L181.1 38.9 L175.8 39.8 L170.5 41.3 L165.3 43.4 L160.0 45.8 L154.7 48.2 L149.5 50.4 L144.2 51.8 L138.9 52.1 L133.7 51.3 L128.4 49.3 L123.1 46.2 L117.9 42.4 L112.6 38.3 L107.3 34.3 L102.1 30.8 L96.8 28.1 L91.5 26.4 L86.3 25.6 L81.0 25.5 L75.7 25.9 L70.5 26.3 L65.2 26.6 L59.9 26.4 L54.7 25.7 L49.4 24.5 L44.1 23.1 L38.9 21.8 L33.6 20.9 L28.3 20.8 L23.1 21.6 L17.8 23.6 L12.5 26.7 L7.3 30.5 L2.0 34.8 Z"><title>4xx</title></path><path class="chart-area" style="fill:var(--s-observe)" d="M2.0 30.4 L7.3 25.8 L12.5 21.8 L17.8 18.7 L23.1 16.8 L28.3 16.1 L33.6 16.5 L38.9 17.6 L44.1 19.2 L49.4 20.8 L54.7 22.1 L59.9 22.9 L65.2 23.1 L70.5 22.9 L75.7 22.5 L81.0 22.2 L86.3 22.4 L91.5 23.5 L96.8 25.5 L102.1 28.6 L107.3 32.5 L112.6 36.8 L117.9 41.2 L123.1 45.2 L128.4 48.3 L133.7 50.2 L138.9 50.8 L144.2 50.1 L149.5 48.3 L154.7 45.8 L160.0 43.1 L165.3 40.4 L170.5 38.2 L175.8 36.6 L181.1 35.6 L186.3 35.2 L191.6 35.1 L196.9 34.8 L202.1 34.1 L207.4 32.7 L212.7 30.4 L217.9 27.4 L223.2 23.9 L228.5 20.2 L233.7 16.7 L239.0 13.9 L244.3 12.2 L249.5 11.8 L254.8 12.8 L260.1 15.0 L265.3 18.2 L270.6 21.9 L275.9 25.7 L281.1 29.1 L286.4 31.8 L291.7 33.8 L296.9 34.9 L302.2 35.4 L307.5 35.6 L312.7 35.8 L318.0 36.3 L318.0 36.8 L312.7 36.3 L307.5 36.1 L302.2 35.9 L296.9 35.4 L291.7 34.3 L286.4 32.5 L281.1 29.8 L275.9 26.5 L270.6 22.8 L265.3 19.2 L260.1 16.2 L254.8 14.0 L249.5 13.0 L244.3 13.4 L239.0 15.0 L233.7 17.7 L228.5 21.1 L223.2 24.7 L217.9 28.2 L212.7 31.1 L207.4 33.2 L202.1 34.6 L196.9 35.3 L191.6 35.5 L186.3 35.7 L181.1 36.1 L175.8 37.0 L170.5 38.5 L165.3 40.7 L160.0 43.3 L154.7 46.0 L149.5 48.4 L144.2 50.1 L138.9 50.8 L133.7 50.2 L128.4 48.4 L123.1 45.4 L117.9 41.6 L112.6 37.3 L107.3 33.1 L102.1 29.3 L96.8 26.4 L91.5 24.4 L86.3 23.4 L81.0 23.1 L75.7 23.4 L70.5 23.8 L65.2 24.0 L59.9 23.8 L54.7 23.1 L49.4 21.8 L44.1 20.2 L38.9 18.7 L33.6 17.6 L28.3 17.2 L23.1 17.9 L17.8 19.7 L12.5 22.7 L7.3 26.6 L2.0 31.1 Z"><title>5xx</title></path><text class="chart-tick" x="2" y="94">17.9/s peak</text></svg>
+          
+            <p class="obs-warning">Measured at the tunnel, not per service: no application in this cluster publishes an HTTP timer. A Ktor MicrometerMetrics plugin exporting http_server_requests_seconds would split this per service — and would give the HighErrorRate rule in config/alerts.yml, which already reads that metric, something to fire on.</p>
+          
+        </div>
+      
+        <div class="obs-card">
+          <div class="obs-card-head">
+            <span class="obs-card-title">Errors</span>
+          </div>
+          <p class="obs-note">share of responses that are 5xx</p>
+          <svg class="chart" viewBox="0 0 320 96" role="img" preserveAspectRatio="none" aria-label="1 series, peak 2.9%"><title>1 series, peak 2.9%</title><rect class="chart-band" x="2" y="6.0" width="316" height="10.2"/><line class="chart-ref" x1="2" y1="16.2" x2="318" y2="16.2"/><path class="chart-line" style="stroke:var(--s-prod)" d="M2.0 65.0 L7.3 60.3 L12.5 56.1 L17.8 52.8 L23.1 50.6 L28.3 49.7 L33.6 49.8 L38.9 50.8 L44.1 52.2 L49.4 53.8 L54.7 55.0 L59.9 55.8 L65.2 56.0 L70.5 55.7 L75.7 55.2 L81.0 54.8 L86.3 54.9 L91.5 55.8 L96.8 57.7 L102.1 60.6 L107.3 64.4 L112.6 68.7 L117.9 73.2 L123.1 77.4 L128.4 80.7 L133.7 82.9 L138.9 83.8 L144.2 83.4 L149.5 81.9 L154.7 79.6 L160.0 76.9 L165.3 74.3 L170.5 72.1 L175.8 70.4 L181.1 69.5 L186.3 69.0 L191.6 68.9 L196.9 68.7 L202.1 68.1 L207.4 66.8 L212.7 64.6 L217.9 61.7 L223.2 58.1 L228.5 54.3 L233.7 50.6 L239.0 47.6 L244.3 45.6 L249.5 44.9 L254.8 45.5 L260.1 47.5 L265.3 50.5 L270.6 54.0 L275.9 57.8 L281.1 61.2 L286.4 64.1 L291.7 66.1 L296.9 67.3 L302.2 67.9 L307.5 68.1 L312.7 68.3 L318.0 68.9"><title>5xx</title></path><text class="chart-tick" x="2" y="94">2.9% peak</text></svg>
+          
+        </div>
+      
+    </section>
+  
+    <section class="panel obs-section">
+      <div class="panel-head">
+        <h3>USE</h3>
+      </div>
+      
+      <p class="obs-scope">per node — what a machine is doing with itself</p>
+
+      
+        <div class="obs-card">
+          <div class="obs-card-head">
+            <span class="obs-card-title">Utilisation</span>
+          </div>
+          <p class="obs-note">how much of each machine is in use right now</p>
+          <div class="bar-rows"><div class="bar-row"><span class="bar-name" title="wkr-1 · cpu">wkr-1 · cpu</span><span class="bar-track"><i style="width:68.7%"></i></span><span class="bar-value">68.7%</span></div><div class="bar-row"><span class="bar-name" title="wkr-1 · memory">wkr-1 · memory</span><span class="bar-track"><i style="width:68.7%"></i></span><span class="bar-value">68.7%</span></div><div class="bar-row"><span class="bar-name" title="wkr-1 · disk">wkr-1 · disk</span><span class="bar-track"><i style="width:68.7%"></i></span><span class="bar-value">68.7%</span></div><div class="bar-row"><span class="bar-name" title="master · cpu">master · cpu</span><span class="bar-track"><i style="width:54.9%"></i></span><span class="bar-value">54.9%</span></div><div class="bar-row"><span class="bar-name" title="master · memory">master · memory</span><span class="bar-track"><i style="width:54.9%"></i></span><span class="bar-value">54.9%</span></div><div class="bar-row"><span class="bar-name" title="master · disk">master · disk</span><span class="bar-track"><i style="width:54.9%"></i></span><span class="bar-value">54.9%</span></div><div class="bar-row"><span class="bar-name" title="wkr-2 · cpu">wkr-2 · cpu</span><span class="bar-track"><i style="width:25.3%"></i></span><span class="bar-value">25.3%</span></div><div class="bar-row"><span class="bar-name" title="wkr-2 · memory">wkr-2 · memory</span><span class="bar-track"><i style="width:25.3%"></i></span><span class="bar-value">25.3%</span></div><div class="bar-row"><span class="bar-name" title="wkr-2 · disk">wkr-2 · disk</span><span class="bar-track"><i style="width:25.3%"></i></span><span class="bar-value">25.3%</span></div></div>
+          
+        </div>
+      
+        <div class="obs-card">
+          <div class="obs-card-head">
+            <span class="obs-card-title">Saturation</span>
+          </div>
+          <p class="obs-note">seconds per second of work stalled waiting for a resource — queueing, which is what utilisation alone cannot tell you</p>
+          <svg class="chart" viewBox="0 0 320 96" role="img" preserveAspectRatio="none" aria-label="6 series, peak 0.42s/s"><title>6 series, peak 0.42s/s</title><path class="chart-line" style="stroke:var(--s-prod)" d="M2.0 75.5 L7.3 73.3 L12.5 71.4 L17.8 69.9 L23.1 68.9 L28.3 68.4 L33.6 68.5 L38.9 68.9 L44.1 69.6 L49.4 70.3 L54.7 70.9 L59.9 71.2 L65.2 71.3 L70.5 71.2 L75.7 71.0 L81.0 70.8 L86.3 70.8 L91.5 71.2 L96.8 72.1 L102.1 73.4 L107.3 75.2 L112.6 77.2 L117.9 79.2 L123.1 81.1 L128.4 82.7 L133.7 83.7 L138.9 84.0 L144.2 83.9 L149.5 83.2 L154.7 82.1 L160.0 80.9 L165.3 79.7 L170.5 78.7 L175.8 77.9 L181.1 77.5 L186.3 77.3 L191.6 77.2 L196.9 77.1 L202.1 76.8 L207.4 76.3 L212.7 75.3 L217.9 73.9 L223.2 72.3 L228.5 70.5 L233.7 68.9 L239.0 67.5 L244.3 66.5 L249.5 66.2 L254.8 66.5 L260.1 67.4 L265.3 68.8 L270.6 70.4 L275.9 72.1 L281.1 73.7 L286.4 75.0 L291.7 76.0 L296.9 76.5 L302.2 76.8 L307.5 76.9 L312.7 77.0 L318.0 77.2"><title>master · cpu stall</title></path><path class="chart-line" style="stroke:var(--s-staging)" d="M2.0 75.5 L7.3 73.3 L12.5 71.4 L17.8 69.9 L23.1 68.9 L28.3 68.4 L33.6 68.5 L38.9 68.9 L44.1 69.6 L49.4 70.3 L54.7 70.9 L59.9 71.2 L65.2 71.3 L70.5 71.2 L75.7 71.0 L81.0 70.8 L86.3 70.8 L91.5 71.2 L96.8 72.1 L102.1 73.4 L107.3 75.2 L112.6 77.2 L117.9 79.2 L123.1 81.1 L128.4 82.7 L133.7 83.7 L138.9 84.0 L144.2 83.9 L149.5 83.2 L154.7 82.1 L160.0 80.9 L165.3 79.7 L170.5 78.7 L175.8 77.9 L181.1 77.5 L186.3 77.3 L191.6 77.2 L196.9 77.1 L202.1 76.8 L207.4 76.3 L212.7 75.3 L217.9 73.9 L223.2 72.3 L228.5 70.5 L233.7 68.9 L239.0 67.5 L244.3 66.5 L249.5 66.2 L254.8 66.5 L260.1 67.4 L265.3 68.8 L270.6 70.4 L275.9 72.1 L281.1 73.7 L286.4 75.0 L291.7 76.0 L296.9 76.5 L302.2 76.8 L307.5 76.9 L312.7 77.0 L318.0 77.2"><title>master · io stall</title></path><path class="chart-line" style="stroke:var(--s-data)" d="M2.0 75.5 L7.3 73.3 L12.5 71.4 L17.8 69.9 L23.1 68.9 L28.3 68.4 L33.6 68.5 L38.9 68.9 L44.1 69.6 L49.4 70.3 L54.7 70.9 L59.9 71.2 L65.2 71.3 L70.5 71.2 L75.7 71.0 L81.0 70.8 L86.3 70.8 L91.5 71.2 L96.8 72.1 L102.1 73.4 L107.3 75.2 L112.6 77.2 L117.9 79.2 L123.1 81.1 L128.4 82.7 L133.7 83.7 L138.9 84.0 L144.2 83.9 L149.5 83.2 L154.7 82.1 L160.0 80.9 L165.3 79.7 L170.5 78.7 L175.8 77.9 L181.1 77.5 L186.3 77.3 L191.6 77.2 L196.9 77.1 L202.1 76.8 L207.4 76.3 L212.7 75.3 L217.9 73.9 L223.2 72.3 L228.5 70.5 L233.7 68.9 L239.0 67.5 L244.3 66.5 L249.5 66.2 L254.8 66.5 L260.1 67.4 L265.3 68.8 L270.6 70.4 L275.9 72.1 L281.1 73.7 L286.4 75.0 L291.7 76.0 L296.9 76.5 L302.2 76.8 L307.5 76.9 L312.7 77.0 L318.0 77.2"><title>master · memory stall</title></path><path class="chart-line" style="stroke:var(--s-observe)" d="M2.0 46.4 L7.3 38.4 L12.5 31.1 L17.8 25.4 L23.1 21.7 L28.3 20.0 L33.6 20.3 L38.9 21.9 L44.1 24.4 L49.4 27.1 L54.7 29.2 L59.9 30.6 L65.2 30.9 L70.5 30.5 L75.7 29.6 L81.0 28.9 L86.3 29.1 L91.5 30.6 L96.8 33.8 L102.1 38.8 L107.3 45.3 L112.6 52.8 L117.9 60.5 L123.1 67.6 L128.4 73.4 L133.7 77.2 L138.9 78.8 L144.2 78.1 L149.5 75.4 L154.7 71.5 L160.0 66.9 L165.3 62.3 L170.5 58.5 L175.8 55.7 L181.1 54.0 L186.3 53.3 L191.6 53.1 L196.9 52.7 L202.1 51.6 L207.4 49.4 L212.7 45.7 L217.9 40.6 L223.2 34.5 L228.5 27.9 L233.7 21.7 L239.0 16.4 L244.3 13.0 L249.5 11.8 L254.8 12.9 L260.1 16.3 L265.3 21.4 L270.6 27.5 L275.9 34.0 L281.1 39.9 L286.4 44.8 L291.7 48.3 L296.9 50.4 L302.2 51.4 L307.5 51.8 L312.7 52.1 L318.0 53.0"><title>wkr-1 · cpu stall</title></path><path class="chart-line" style="stroke:var(--s-platform)" d="M2.0 46.4 L7.3 38.4 L12.5 31.1 L17.8 25.4 L23.1 21.7 L28.3 20.0 L33.6 20.3 L38.9 21.9 L44.1 24.4 L49.4 27.1 L54.7 29.2 L59.9 30.6 L65.2 30.9 L70.5 30.5 L75.7 29.6 L81.0 28.9 L86.3 29.1 L91.5 30.6 L96.8 33.8 L102.1 38.8 L107.3 45.3 L112.6 52.8 L117.9 60.5 L123.1 67.6 L128.4 73.4 L133.7 77.2 L138.9 78.8 L144.2 78.1 L149.5 75.4 L154.7 71.5 L160.0 66.9 L165.3 62.3 L170.5 58.5 L175.8 55.7 L181.1 54.0 L186.3 53.3 L191.6 53.1 L196.9 52.7 L202.1 51.6 L207.4 49.4 L212.7 45.7 L217.9 40.6 L223.2 34.5 L228.5 27.9 L233.7 21.7 L239.0 16.4 L244.3 13.0 L249.5 11.8 L254.8 12.9 L260.1 16.3 L265.3 21.4 L270.6 27.5 L275.9 34.0 L281.1 39.9 L286.4 44.8 L291.7 48.3 L296.9 50.4 L302.2 51.4 L307.5 51.8 L312.7 52.1 L318.0 53.0"><title>wkr-1 · io stall</title></path><path class="chart-line" style="stroke:var(--s-platform)" d="M2.0 46.4 L7.3 38.4 L12.5 31.1 L17.8 25.4 L23.1 21.7 L28.3 20.0 L33.6 20.3 L38.9 21.9 L44.1 24.4 L49.4 27.1 L54.7 29.2 L59.9 30.6 L65.2 30.9 L70.5 30.5 L75.7 29.6 L81.0 28.9 L86.3 29.1 L91.5 30.6 L96.8 33.8 L102.1 38.8 L107.3 45.3 L112.6 52.8 L117.9 60.5 L123.1 67.6 L128.4 73.4 L133.7 77.2 L138.9 78.8 L144.2 78.1 L149.5 75.4 L154.7 71.5 L160.0 66.9 L165.3 62.3 L170.5 58.5 L175.8 55.7 L181.1 54.0 L186.3 53.3 L191.6 53.1 L196.9 52.7 L202.1 51.6 L207.4 49.4 L212.7 45.7 L217.9 40.6 L223.2 34.5 L228.5 27.9 L233.7 21.7 L239.0 16.4 L244.3 13.0 L249.5 11.8 L254.8 12.9 L260.1 16.3 L265.3 21.4 L270.6 27.5 L275.9 34.0 L281.1 39.9 L286.4 44.8 L291.7 48.3 L296.9 50.4 L302.2 51.4 L307.5 51.8 L312.7 52.1 L318.0 53.0"><title>wkr-1 · memory stall</title></path><text class="chart-tick" x="2" y="94">0.42s/s peak</text></svg>
+          
+        </div>
+      
+        <div class="obs-card">
+          <div class="obs-card-head">
+            <span class="obs-card-title">Errors</span>
+          </div>
+          <p class="obs-note">counted over the last hour, not averaged</p>
+          <svg class="chart" viewBox="0 0 320 96" role="img" preserveAspectRatio="none" aria-label="OOM kills 0, container OOM 1.0, tx errors 0, rx errors 0, tx drops 2.0"><title>OOM kills 0, container OOM 1.0, tx errors 0, rx errors 0, tx drops 2.0</title><rect class="chart-col" style="fill:var(--s-prod)" x="14.0" y="82.5" width="39.2" height="1.5" rx="2"><title>OOM kills: 0</title></rect><text class="chart-tick" x="33.6" y="94" text-anchor="middle">0</text><rect class="chart-col is-bad"  x="77.2" y="45.0" width="39.2" height="39.0" rx="2"><title>container OOM: 1.0</title></rect><text class="chart-tick" x="96.8" y="94" text-anchor="middle">1.0</text><rect class="chart-col" style="fill:var(--s-data)" x="140.4" y="82.5" width="39.2" height="1.5" rx="2"><title>tx errors: 0</title></rect><text class="chart-tick" x="160.0" y="94" text-anchor="middle">0</text><rect class="chart-col" style="fill:var(--s-observe)" x="203.6" y="82.5" width="39.2" height="1.5" rx="2"><title>rx errors: 0</title></rect><text class="chart-tick" x="223.2" y="94" text-anchor="middle">0</text><rect class="chart-col is-bad"  x="266.8" y="6.0" width="39.2" height="78.0" rx="2"><title>tx drops: 2.0</title></rect><text class="chart-tick" x="286.4" y="94" text-anchor="middle">2.0</text></svg>
+          
+        </div>
+      
+    </section>
+  
+    <section class="panel obs-section">
+      <div class="panel-head">
+        <h3>Golden signals</h3>
+      </div>
+      
+      <p class="obs-scope">cluster-wide — the four you wake somebody for</p>
+
+      
+        <div class="obs-card">
+          <div class="obs-card-head">
+            <span class="obs-card-title">Latency</span>
+          </div>
+          <p class="obs-note">the slowest service in the cluster</p>
+          <svg class="chart" viewBox="0 0 320 96" role="img" preserveAspectRatio="none" aria-label="1 series, peak 472ms"><title>1 series, peak 472ms</title><rect class="chart-band" x="2" y="6.0" width="316" height="10.2"/><line class="chart-ref" x1="2" y1="16.2" x2="318" y2="16.2"/><path class="chart-line" style="stroke:var(--s-prod)" d="M2.0 41.9 L7.3 36.8 L12.5 32.3 L17.8 28.6 L23.1 26.3 L28.3 25.2 L33.6 25.4 L38.9 26.4 L44.1 28.0 L49.4 29.7 L54.7 31.1 L59.9 31.9 L65.2 32.1 L70.5 31.8 L75.7 31.3 L81.0 30.9 L86.3 31.0 L91.5 31.9 L96.8 34.0 L102.1 37.1 L107.3 41.3 L112.6 46.0 L117.9 50.9 L123.1 55.4 L128.4 59.1 L133.7 61.5 L138.9 62.5 L144.2 62.1 L149.5 60.4 L154.7 57.9 L160.0 54.9 L165.3 52.1 L170.5 49.6 L175.8 47.9 L181.1 46.8 L186.3 46.3 L191.6 46.2 L196.9 45.9 L202.1 45.3 L207.4 43.9 L212.7 41.5 L217.9 38.3 L223.2 34.4 L228.5 30.2 L233.7 26.2 L239.0 22.9 L244.3 20.8 L249.5 20.0 L254.8 20.7 L260.1 22.8 L265.3 26.1 L270.6 30.0 L275.9 34.1 L281.1 37.8 L286.4 40.9 L291.7 43.1 L296.9 44.5 L302.2 45.1 L307.5 45.4 L312.7 45.6 L318.0 46.2"><title>worst: api_app</title></path><text class="chart-tick" x="2" y="94">472ms peak</text></svg>
+          
+        </div>
+      
+        <div class="obs-card">
+          <div class="obs-card-head">
+            <span class="obs-card-title">Traffic</span>
+          </div>
+          <p class="obs-note">everything the tunnel served, per second</p>
+          <svg class="chart" viewBox="0 0 320 96" role="img" preserveAspectRatio="none" aria-label="1 series, peak 18.4/s"><title>1 series, peak 18.4/s</title><path class="chart-line" style="stroke:var(--s-prod)" d="M2.0 33.0 L7.3 28.1 L12.5 23.6 L17.8 20.1 L23.1 17.8 L28.3 16.8 L33.6 17.0 L38.9 18.0 L44.1 19.5 L49.4 21.1 L54.7 22.5 L59.9 23.3 L65.2 23.5 L70.5 23.2 L75.7 22.7 L81.0 22.3 L86.3 22.4 L91.5 23.3 L96.8 25.3 L102.1 28.3 L107.3 32.3 L112.6 36.9 L117.9 41.6 L123.1 46.0 L128.4 49.5 L133.7 51.8 L138.9 52.8 L144.2 52.4 L149.5 50.8 L154.7 48.3 L160.0 45.5 L165.3 42.7 L170.5 40.4 L175.8 38.7 L181.1 37.7 L186.3 37.2 L191.6 37.1 L196.9 36.8 L202.1 36.2 L207.4 34.8 L212.7 32.6 L217.9 29.5 L223.2 25.7 L228.5 21.7 L233.7 17.8 L239.0 14.6 L244.3 12.5 L249.5 11.8 L254.8 12.5 L260.1 14.5 L265.3 17.7 L270.6 21.4 L275.9 25.4 L281.1 29.0 L286.4 32.0 L291.7 34.1 L296.9 35.4 L302.2 36.0 L307.5 36.3 L312.7 36.5 L318.0 37.0"><title>served</title></path><text class="chart-tick" x="2" y="94">18.4/s peak</text></svg>
+          
+        </div>
+      
+        <div class="obs-card">
+          <div class="obs-card-head">
+            <span class="obs-card-title">Errors</span>
+          </div>
+          <p class="obs-note">5xx share against the 5% the alert fires at</p>
+          <svg class="chart" viewBox="0 0 320 96" role="img" preserveAspectRatio="none" aria-label="1 series, peak 2.9%"><title>1 series, peak 2.9%</title><rect class="chart-band" x="2" y="6.0" width="316" height="10.2"/><line class="chart-ref" x1="2" y1="16.2" x2="318" y2="16.2"/><path class="chart-line" style="stroke:var(--s-prod)" d="M2.0 65.0 L7.3 60.3 L12.5 56.1 L17.8 52.8 L23.1 50.6 L28.3 49.7 L33.6 49.8 L38.9 50.8 L44.1 52.2 L49.4 53.8 L54.7 55.0 L59.9 55.8 L65.2 56.0 L70.5 55.7 L75.7 55.2 L81.0 54.8 L86.3 54.9 L91.5 55.8 L96.8 57.7 L102.1 60.6 L107.3 64.4 L112.6 68.7 L117.9 73.2 L123.1 77.4 L128.4 80.7 L133.7 82.9 L138.9 83.8 L144.2 83.4 L149.5 81.9 L154.7 79.6 L160.0 76.9 L165.3 74.3 L170.5 72.1 L175.8 70.4 L181.1 69.5 L186.3 69.0 L191.6 68.9 L196.9 68.7 L202.1 68.1 L207.4 66.8 L212.7 64.6 L217.9 61.7 L223.2 58.1 L228.5 54.3 L233.7 50.6 L239.0 47.6 L244.3 45.6 L249.5 44.9 L254.8 45.5 L260.1 47.5 L265.3 50.5 L270.6 54.0 L275.9 57.8 L281.1 61.2 L286.4 64.1 L291.7 66.1 L296.9 67.3 L302.2 67.9 L307.5 68.1 L312.7 68.3 L318.0 68.9"><title>5xx</title></path><text class="chart-tick" x="2" y="94">2.9% peak</text></svg>
+          
+        </div>
+      
+        <div class="obs-card">
+          <div class="obs-card-head">
+            <span class="obs-card-title">Saturation</span>
+          </div>
+          <p class="obs-note">cluster CPU then memory, against 70% (scales a service out) and 80% (buys a machine)</p>
+          <div class="bullet is-warn"><span class="bullet-track"><i class="bullet-fill" style="width:71.0%"></i><i class="bullet-mark is-warn" style="left:70.0%"></i><i class="bullet-mark is-bad" style="left:80.0%"></i></span><span class="bullet-value">71.0%</span></div><div class="bullet"><span class="bullet-track"><i class="bullet-fill" style="width:58.0%"></i><i class="bullet-mark is-warn" style="left:70.0%"></i><i class="bullet-mark is-bad" style="left:80.0%"></i></span><span class="bullet-value">58.0%</span></div>
+          
+        </div>
+      
+    </section>
+  
+</div>
+  </aside>
 </div></section>
-      <section data-view="components" hidden><div class="page-head">
+      <section data-view="components" hidden>
+<div data-live-html="#" data-live-ms="8000">
+  
+<div class="page-head">
   <div>
     <div class="eyebrow">Components</div>
     <h1>What you are running</h1>
@@ -1996,6 +2232,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
   </div>
 </section>
 
+</div>
 
 <section class="panel">
   <div class="panel-head"><h2>Redeploy a stack</h2></div>
@@ -2034,6 +2271,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
 
       
       <section data-view="component-api" hidden>
+        
         
           
 <div class="page-head">
@@ -2129,7 +2367,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-31T14:54:20Z" data-localtime>2026-08-31T14:54:20Z</time>
+          <time datetime="2026-09-01T04:37:41Z" data-localtime>2026-09-01T04:37:41Z</time>
           
         </div>
       </div>
@@ -3335,28 +3573,42 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         <h2>Logs</h2>
         <span class="spacer"></span>
         <span class="muted mono">api_app</span>
+        <span class="live" data-topo-live><i></i>live</span>
+        
+        <button class="btn btn-sm" type="button" data-logs-toggle hidden
+                aria-pressed="false">Pause</button>
         
         <form method="get" action="#view-component-api" class="inline-form">
           <input type="hidden" name="tab" value="logs">
           <label class="sr-only" for="log-lines">Lines</label>
           <select id="log-lines" name="lines">
             
+            <option value="100" >100 lines</option>
+            
+            <option value="200" selected>200 lines</option>
+            
+            <option value="500" >500 lines</option>
+            
+            <option value="1000" >1000 lines</option>
+            
+            <option value="2000" >2000 lines</option>
+            
           </select>
           <button class="btn btn-sm" type="submit">Show</button>
         </form>
       </div>
-      <div class="panel-body">
-        <pre class="logs">2026-08-12T14:02:11.881Z INFO  [main] com.acme.aichat.Application - Ktor started on 0.0.0.0:8080
-2026-08-12T14:02:11.902Z INFO  [main] com.acme.aichat.Redis - connected to cache_redis:6379
-2026-08-12T14:04:38.117Z INFO  [eventLoop-3] com.acme.aichat.Chat - completion in 812ms (model=gpt-4o-mini)
-2026-08-12T14:05:02.559Z WARN  [eventLoop-1] com.acme.aichat.RateLimit - throttled tenant=acme-9931
-2026-08-12T14:06:44.230Z INFO  [eventLoop-7] com.acme.aichat.Chat - completion in 1.4s (model=gpt-4o)
-2026-08-12T14:07:19.004Z ERROR [eventLoop-2] com.acme.aichat.Upload - stream closed before EOF
-2026-08-12T14:09:55.771Z INFO  [eventLoop-5] com.acme.aichat.Health - ok
-</pre>
+      <div class="panel-body" data-logs
+           data-logs-url="#"
+           data-logs-cursor="1755000006000000000"
+           data-logs-limit="200">
+        
+        <div class="logs" data-logs-stream><!--cursor:1755000006000000000--><div class="line"><span class="ts">12:00:00</span> 2026-08-12T14:02:11.881Z INFO  [main] com.acme.aichat.Application - Ktor started on 0.0.0.0:8080</div><div class="line"><span class="ts">12:00:01</span> 2026-08-12T14:02:11.902Z INFO  [main] com.acme.aichat.Redis - connected to cache_redis:6379</div><div class="line"><span class="ts">12:00:02</span> 2026-08-12T14:04:38.117Z INFO  [eventLoop-3] com.acme.aichat.Chat - completion in 812ms (model=gpt-4o-mini)</div><div class="line lvl-warn"><span class="ts">12:00:03</span> 2026-08-12T14:05:02.559Z WARN  [eventLoop-1] com.acme.aichat.RateLimit - throttled tenant=acme-9931</div><div class="line"><span class="ts">12:00:04</span> 2026-08-12T14:06:44.230Z INFO  [eventLoop-7] com.acme.aichat.Chat - completion in 1.4s (model=gpt-4o)</div><div class="line lvl-err"><span class="ts">12:00:05</span> 2026-08-12T14:07:19.004Z ERROR [eventLoop-2] com.acme.aichat.Upload - stream closed before EOF</div><div class="line"><span class="ts">12:00:06</span> 2026-08-12T14:09:55.771Z INFO  [eventLoop-5] com.acme.aichat.Health - ok</div></div>
         <p class="hint">
-          The last  lines, newest at the bottom. Everything is also in
-          Loki — use Grafana for search, filters and anything older than this.
+          The last 200 lines, newest at the bottom, and it follows the
+          tail from here. It scrolls with new lines only while you are already at
+          the bottom, so scrolling up to read something does not fight you.
+          Everything is also in Loki — use Grafana for search, filters and
+          anything older than this.
         </p>
       </div>
     </section>
@@ -3368,6 +3620,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
       </section>
       
       <section data-view="component-api-staging" hidden>
+        
         
           
 <div class="page-head">
@@ -3463,7 +3716,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-31T14:54:20Z" data-localtime>2026-08-31T14:54:20Z</time>
+          <time datetime="2026-09-01T04:37:41Z" data-localtime>2026-09-01T04:37:41Z</time>
           
         </div>
       </div>
@@ -4584,28 +4837,42 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <h2>Logs</h2>
         <span class="spacer"></span>
         <span class="muted mono">api-staging_app</span>
+        <span class="live" data-topo-live><i></i>live</span>
+        
+        <button class="btn btn-sm" type="button" data-logs-toggle hidden
+                aria-pressed="false">Pause</button>
         
         <form method="get" action="#view-component-api-staging" class="inline-form">
           <input type="hidden" name="tab" value="logs">
           <label class="sr-only" for="log-lines">Lines</label>
           <select id="log-lines" name="lines">
             
+            <option value="100" >100 lines</option>
+            
+            <option value="200" selected>200 lines</option>
+            
+            <option value="500" >500 lines</option>
+            
+            <option value="1000" >1000 lines</option>
+            
+            <option value="2000" >2000 lines</option>
+            
           </select>
           <button class="btn btn-sm" type="submit">Show</button>
         </form>
       </div>
-      <div class="panel-body">
-        <pre class="logs">2026-08-12T14:02:11.881Z INFO  [main] com.acme.aichat.Application - Ktor started on 0.0.0.0:8080
-2026-08-12T14:02:11.902Z INFO  [main] com.acme.aichat.Redis - connected to cache_redis:6379
-2026-08-12T14:04:38.117Z INFO  [eventLoop-3] com.acme.aichat.Chat - completion in 812ms (model=gpt-4o-mini)
-2026-08-12T14:05:02.559Z WARN  [eventLoop-1] com.acme.aichat.RateLimit - throttled tenant=acme-9931
-2026-08-12T14:06:44.230Z INFO  [eventLoop-7] com.acme.aichat.Chat - completion in 1.4s (model=gpt-4o)
-2026-08-12T14:07:19.004Z ERROR [eventLoop-2] com.acme.aichat.Upload - stream closed before EOF
-2026-08-12T14:09:55.771Z INFO  [eventLoop-5] com.acme.aichat.Health - ok
-</pre>
+      <div class="panel-body" data-logs
+           data-logs-url="#"
+           data-logs-cursor="1755000006000000000"
+           data-logs-limit="200">
+        
+        <div class="logs" data-logs-stream><!--cursor:1755000006000000000--><div class="line"><span class="ts">12:00:00</span> 2026-08-12T14:02:11.881Z INFO  [main] com.acme.aichat.Application - Ktor started on 0.0.0.0:8080</div><div class="line"><span class="ts">12:00:01</span> 2026-08-12T14:02:11.902Z INFO  [main] com.acme.aichat.Redis - connected to cache_redis:6379</div><div class="line"><span class="ts">12:00:02</span> 2026-08-12T14:04:38.117Z INFO  [eventLoop-3] com.acme.aichat.Chat - completion in 812ms (model=gpt-4o-mini)</div><div class="line lvl-warn"><span class="ts">12:00:03</span> 2026-08-12T14:05:02.559Z WARN  [eventLoop-1] com.acme.aichat.RateLimit - throttled tenant=acme-9931</div><div class="line"><span class="ts">12:00:04</span> 2026-08-12T14:06:44.230Z INFO  [eventLoop-7] com.acme.aichat.Chat - completion in 1.4s (model=gpt-4o)</div><div class="line lvl-err"><span class="ts">12:00:05</span> 2026-08-12T14:07:19.004Z ERROR [eventLoop-2] com.acme.aichat.Upload - stream closed before EOF</div><div class="line"><span class="ts">12:00:06</span> 2026-08-12T14:09:55.771Z INFO  [eventLoop-5] com.acme.aichat.Health - ok</div></div>
         <p class="hint">
-          The last  lines, newest at the bottom. Everything is also in
-          Loki — use Grafana for search, filters and anything older than this.
+          The last 200 lines, newest at the bottom, and it follows the
+          tail from here. It scrolls with new lines only while you are already at
+          the bottom, so scrolling up to read something does not fight you.
+          Everything is also in Loki — use Grafana for search, filters and
+          anything older than this.
         </p>
       </div>
     </section>
@@ -4617,6 +4884,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
       </section>
       
       <section data-view="component-cache" hidden>
+        
         
           
 <div class="page-head">
@@ -4710,7 +4978,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-31T14:54:20Z" data-localtime>2026-08-31T14:54:20Z</time>
+          <time datetime="2026-09-01T04:37:41Z" data-localtime>2026-09-01T04:37:41Z</time>
           
         </div>
       </div>
@@ -4907,9 +5175,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis+sentinel://default:ced64e2ea72e04155838c02c1b8c572c2ccd4e0ba988c64e@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
+              <code>redis+sentinel://default:f1860619e19a6394a5e9b75aac050e7c30828860c08b167f@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis+sentinel://default:ced64e2ea72e04155838c02c1b8c572c2ccd4e0ba988c64e@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
+                      data-copy-text="redis+sentinel://default:f1860619e19a6394a5e9b75aac050e7c30828860c08b167f@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -4920,7 +5188,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="ced64e2ea72e04155838c02c1b8c572c2ccd4e0ba988c64e">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="f1860619e19a6394a5e9b75aac050e7c30828860c08b167f">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -4946,9 +5214,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="panel-body stack">
           
           <div class="conn">
-            <code>redis://default:ced64e2ea72e04155838c02c1b8c572c2ccd4e0ba988c64e@10.0.0.2:46379</code>
+            <code>redis://default:f1860619e19a6394a5e9b75aac050e7c30828860c08b167f@10.0.0.2:46379</code>
             <button class="btn btn-sm" type="button" data-copy
-                    data-copy-text="redis://default:ced64e2ea72e04155838c02c1b8c572c2ccd4e0ba988c64e@10.0.0.2:46379">Copy</button>
+                    data-copy-text="redis://default:f1860619e19a6394a5e9b75aac050e7c30828860c08b167f@10.0.0.2:46379">Copy</button>
           </div>
           <div class="table-wrap">
             <table>
@@ -5179,6 +5447,65 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   
 
   <!-- backups --------------------------------------------------------------->
+  
+  <div data-panel="backups" hidden>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Snapshots</h2>
+        <span class="spacer"></span>
+        <span class="eyebrow">from the backup target on this component's Settings tab</span>
+      </div>
+      <div class="panel-body">
+        
+        <p class="hint">No snapshots. Either nothing has been taken yet, or the backup
+        controller is not running — it is pinned to the master, so check
+        <code>cache_pbm-ctl</code> on the Cluster tab.</p>
+        
+        
+      </div>
+    </section>
+
+    <section class="panel danger-zone">
+      <div class="panel-head"><h2>Restore</h2></div>
+      <form method="post" action="#"
+            data-preview>
+        <input type="hidden" name="csrf" value="preview">
+        <div class="panel-body stack">
+          <p>
+            <strong>Restoring destroys everything written after the point you choose.</strong>
+            That is what restoring means — it is not a merge, and there is no undo. The set
+            refuses writes while it runs, and dataguard will not change this database's
+            shape until it has finished.
+          </p>
+          <div class="grid-2">
+            <div class="field">
+              <label for="r-snapshot">Snapshot</label>
+              <select id="r-snapshot" name="snapshot">
+                <option value="">— choose one —</option>
+                
+              </select>
+            </div>
+            <div class="field">
+              <label for="r-pitr">…or a point in time</label>
+              <input id="r-pitr" name="point_in_time" type="text"
+                     placeholder="2026-08-27T14:31:00">
+              <p class="hint">Any second inside a covered range above. Takes precedence
+              over the snapshot if you fill both in.</p>
+            </div>
+          </div>
+          <div class="field">
+            <label for="r-confirm">Type <code>cache</code> to confirm</label>
+            <input id="r-confirm" name="confirm" type="text" autocomplete="off" required>
+          </div>
+        </div>
+        <div class="sticky-save">
+          <button class="btn btn-danger" type="submit">Restore this database</button>
+        </div>
+      </form>
+    </section>
+
+    
+  </div>
   
 
   
@@ -5624,28 +5951,42 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <h2>Logs</h2>
         <span class="spacer"></span>
         <span class="muted mono">cache_redis-1</span>
+        <span class="live" data-topo-live><i></i>live</span>
+        
+        <button class="btn btn-sm" type="button" data-logs-toggle hidden
+                aria-pressed="false">Pause</button>
         
         <form method="get" action="#view-component-cache" class="inline-form">
           <input type="hidden" name="tab" value="logs">
           <label class="sr-only" for="log-lines">Lines</label>
           <select id="log-lines" name="lines">
             
+            <option value="100" >100 lines</option>
+            
+            <option value="200" selected>200 lines</option>
+            
+            <option value="500" >500 lines</option>
+            
+            <option value="1000" >1000 lines</option>
+            
+            <option value="2000" >2000 lines</option>
+            
           </select>
           <button class="btn btn-sm" type="submit">Show</button>
         </form>
       </div>
-      <div class="panel-body">
-        <pre class="logs">2026-08-12T14:02:11.881Z INFO  [main] com.acme.aichat.Application - Ktor started on 0.0.0.0:8080
-2026-08-12T14:02:11.902Z INFO  [main] com.acme.aichat.Redis - connected to cache_redis:6379
-2026-08-12T14:04:38.117Z INFO  [eventLoop-3] com.acme.aichat.Chat - completion in 812ms (model=gpt-4o-mini)
-2026-08-12T14:05:02.559Z WARN  [eventLoop-1] com.acme.aichat.RateLimit - throttled tenant=acme-9931
-2026-08-12T14:06:44.230Z INFO  [eventLoop-7] com.acme.aichat.Chat - completion in 1.4s (model=gpt-4o)
-2026-08-12T14:07:19.004Z ERROR [eventLoop-2] com.acme.aichat.Upload - stream closed before EOF
-2026-08-12T14:09:55.771Z INFO  [eventLoop-5] com.acme.aichat.Health - ok
-</pre>
+      <div class="panel-body" data-logs
+           data-logs-url="#"
+           data-logs-cursor="1755000006000000000"
+           data-logs-limit="200">
+        
+        <div class="logs" data-logs-stream><!--cursor:1755000006000000000--><div class="line"><span class="ts">12:00:00</span> 2026-08-12T14:02:11.881Z INFO  [main] com.acme.aichat.Application - Ktor started on 0.0.0.0:8080</div><div class="line"><span class="ts">12:00:01</span> 2026-08-12T14:02:11.902Z INFO  [main] com.acme.aichat.Redis - connected to cache_redis:6379</div><div class="line"><span class="ts">12:00:02</span> 2026-08-12T14:04:38.117Z INFO  [eventLoop-3] com.acme.aichat.Chat - completion in 812ms (model=gpt-4o-mini)</div><div class="line lvl-warn"><span class="ts">12:00:03</span> 2026-08-12T14:05:02.559Z WARN  [eventLoop-1] com.acme.aichat.RateLimit - throttled tenant=acme-9931</div><div class="line"><span class="ts">12:00:04</span> 2026-08-12T14:06:44.230Z INFO  [eventLoop-7] com.acme.aichat.Chat - completion in 1.4s (model=gpt-4o)</div><div class="line lvl-err"><span class="ts">12:00:05</span> 2026-08-12T14:07:19.004Z ERROR [eventLoop-2] com.acme.aichat.Upload - stream closed before EOF</div><div class="line"><span class="ts">12:00:06</span> 2026-08-12T14:09:55.771Z INFO  [eventLoop-5] com.acme.aichat.Health - ok</div></div>
         <p class="hint">
-          The last  lines, newest at the bottom. Everything is also in
-          Loki — use Grafana for search, filters and anything older than this.
+          The last 200 lines, newest at the bottom, and it follows the
+          tail from here. It scrolls with new lines only while you are already at
+          the bottom, so scrolling up to read something does not fight you.
+          Everything is also in Loki — use Grafana for search, filters and
+          anything older than this.
         </p>
       </div>
     </section>
@@ -5657,6 +5998,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
       </section>
       
       <section data-view="component-documents" hidden>
+        
         
           
 <div class="page-head">
@@ -5750,7 +6092,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-08-31T14:54:20Z" data-localtime>2026-08-31T14:54:20Z</time>
+          <time datetime="2026-09-01T04:37:41Z" data-localtime>2026-09-01T04:37:41Z</time>
           
         </div>
       </div>
@@ -5935,9 +6277,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>mongodb://root:63838a8ec16d83188535aecb3573a3304c08c35a0f33662d@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
+              <code>mongodb://root:8d278a1bc65e790d200ca11f7bcdbe999f07e862e6e6869a@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:63838a8ec16d83188535aecb3573a3304c08c35a0f33662d@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
+                      data-copy-text="mongodb://root:8d278a1bc65e790d200ca11f7bcdbe999f07e862e6e6869a@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -5948,7 +6290,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="63838a8ec16d83188535aecb3573a3304c08c35a0f33662d">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="8d278a1bc65e790d200ca11f7bcdbe999f07e862e6e6869a">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -5997,6 +6339,14 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                    autocomplete="off" spellcheck="false"
                    placeholder="leave blank to keep the current one">
             <p class="hint">Leave blank to generate a strong one. Set it yourself if you are moving an existing database and its clients already know the password.</p>
+          </div>
+          
+          <div class="field">
+            <label for="s-ATLAS_URI">MongoDB Atlas connection string</label>
+            <input id="s-ATLAS_URI" type="text" name="ATLAS_URI"
+                   autocomplete="off" spellcheck="false"
+                   placeholder="leave blank to keep the current one">
+            <p class="hint">Only used by the Migrate section on the Backups tab, and only while a migration is running. A `Secret` rather than a field, so it lands in secret.env at 0600 and never in component.json — it is a full credential for a database that is not this one. Paste it exactly as Atlas gives it to you, including the password and the database name.</p>
           </div>
           
           <div class="btn-row">
@@ -6181,6 +6531,122 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   
 
   <!-- backups --------------------------------------------------------------->
+  
+  <div data-panel="backups" hidden>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Snapshots</h2>
+        <span class="spacer"></span>
+        <span class="eyebrow">from the backup target on this component's Settings tab</span>
+      </div>
+      <div class="panel-body">
+        
+        <p class="hint">No snapshots. Either nothing has been taken yet, or the backup
+        controller is not running — it is pinned to the master, so check
+        <code>documents_pbm-ctl</code> on the Cluster tab.</p>
+        
+        
+      </div>
+    </section>
+
+    <section class="panel danger-zone">
+      <div class="panel-head"><h2>Restore</h2></div>
+      <form method="post" action="#"
+            data-preview>
+        <input type="hidden" name="csrf" value="preview">
+        <div class="panel-body stack">
+          <p>
+            <strong>Restoring destroys everything written after the point you choose.</strong>
+            That is what restoring means — it is not a merge, and there is no undo. The set
+            refuses writes while it runs, and dataguard will not change this database's
+            shape until it has finished.
+          </p>
+          <div class="grid-2">
+            <div class="field">
+              <label for="r-snapshot">Snapshot</label>
+              <select id="r-snapshot" name="snapshot">
+                <option value="">— choose one —</option>
+                
+              </select>
+            </div>
+            <div class="field">
+              <label for="r-pitr">…or a point in time</label>
+              <input id="r-pitr" name="point_in_time" type="text"
+                     placeholder="2026-08-27T14:31:00">
+              <p class="hint">Any second inside a covered range above. Takes precedence
+              over the snapshot if you fill both in.</p>
+            </div>
+          </div>
+          <div class="field">
+            <label for="r-confirm">Type <code>documents</code> to confirm</label>
+            <input id="r-confirm" name="confirm" type="text" autocomplete="off" required>
+          </div>
+        </div>
+        <div class="sticky-save">
+          <button class="btn btn-danger" type="submit">Restore this database</button>
+        </div>
+      </form>
+    </section>
+
+    
+<section class="panel danger-zone">
+  <div class="panel-head">
+    <h2>Migrate</h2>
+    <span class="spacer"></span>
+    
+  </div>
+
+  <div class="panel-body stack">
+    <p>
+      Copies every database except <code>admin</code>, <code>local</code> and
+      <code>config</code>, then counts documents on both sides and fails if they
+      do not match. <strong>Writes made while it runs are not copied</strong> —
+      stop the application first, or accept that whatever it wrote during the
+      transfer stays behind.
+    </p>
+
+    
+      <div class="banner warn"><div>
+        No Atlas connection string is set. Add one on the
+        <a href="#view-component-documents">Credentials</a>
+        tab — it is stored as a secret, never in this component's spec file.
+      </div></div>
+    
+
+    
+  </div>
+
+  <form method="post" action="#"
+        data-preview>
+    <input type="hidden" name="csrf" value="preview">
+    <div class="panel-body stack">
+      <div class="field">
+        <label for="m-direction">Direction</label>
+        <select id="m-direction" name="direction">
+          <option value="export">This cluster → Atlas</option>
+          <option value="import">Atlas → this cluster</option>
+        </select>
+        <p class="hint">Either way the destination is <strong>replaced</strong>, not
+        merged. The job refuses to start if the destination already holds data and
+        you have not ticked the box below.</p>
+      </div>
+      <div class="field">
+        <label class="check">
+          <input type="checkbox" name="overwrite" value="yes">
+          <span>The destination may already hold data — overwrite it</span>
+        </label>
+      </div>
+      <div class="field">
+        <label for="m-confirm">Type <code>documents</code> to confirm</label>
+        <input id="m-confirm" name="confirm" type="text" autocomplete="off" required>
+      </div>
+    </div>
+    <div class="sticky-save">
+      <button class="btn btn-danger" type="submit">Start the migration</button>
+    </div>
+  </form>
+</section>
+  </div>
   
 
   
@@ -6658,28 +7124,42 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <h2>Logs</h2>
         <span class="spacer"></span>
         <span class="muted mono">documents_mongo-1</span>
+        <span class="live" data-topo-live><i></i>live</span>
+        
+        <button class="btn btn-sm" type="button" data-logs-toggle hidden
+                aria-pressed="false">Pause</button>
         
         <form method="get" action="#view-component-documents" class="inline-form">
           <input type="hidden" name="tab" value="logs">
           <label class="sr-only" for="log-lines">Lines</label>
           <select id="log-lines" name="lines">
             
+            <option value="100" >100 lines</option>
+            
+            <option value="200" selected>200 lines</option>
+            
+            <option value="500" >500 lines</option>
+            
+            <option value="1000" >1000 lines</option>
+            
+            <option value="2000" >2000 lines</option>
+            
           </select>
           <button class="btn btn-sm" type="submit">Show</button>
         </form>
       </div>
-      <div class="panel-body">
-        <pre class="logs">2026-08-12T14:02:11.881Z INFO  [main] com.acme.aichat.Application - Ktor started on 0.0.0.0:8080
-2026-08-12T14:02:11.902Z INFO  [main] com.acme.aichat.Redis - connected to cache_redis:6379
-2026-08-12T14:04:38.117Z INFO  [eventLoop-3] com.acme.aichat.Chat - completion in 812ms (model=gpt-4o-mini)
-2026-08-12T14:05:02.559Z WARN  [eventLoop-1] com.acme.aichat.RateLimit - throttled tenant=acme-9931
-2026-08-12T14:06:44.230Z INFO  [eventLoop-7] com.acme.aichat.Chat - completion in 1.4s (model=gpt-4o)
-2026-08-12T14:07:19.004Z ERROR [eventLoop-2] com.acme.aichat.Upload - stream closed before EOF
-2026-08-12T14:09:55.771Z INFO  [eventLoop-5] com.acme.aichat.Health - ok
-</pre>
+      <div class="panel-body" data-logs
+           data-logs-url="#"
+           data-logs-cursor="1755000006000000000"
+           data-logs-limit="200">
+        
+        <div class="logs" data-logs-stream><!--cursor:1755000006000000000--><div class="line"><span class="ts">12:00:00</span> 2026-08-12T14:02:11.881Z INFO  [main] com.acme.aichat.Application - Ktor started on 0.0.0.0:8080</div><div class="line"><span class="ts">12:00:01</span> 2026-08-12T14:02:11.902Z INFO  [main] com.acme.aichat.Redis - connected to cache_redis:6379</div><div class="line"><span class="ts">12:00:02</span> 2026-08-12T14:04:38.117Z INFO  [eventLoop-3] com.acme.aichat.Chat - completion in 812ms (model=gpt-4o-mini)</div><div class="line lvl-warn"><span class="ts">12:00:03</span> 2026-08-12T14:05:02.559Z WARN  [eventLoop-1] com.acme.aichat.RateLimit - throttled tenant=acme-9931</div><div class="line"><span class="ts">12:00:04</span> 2026-08-12T14:06:44.230Z INFO  [eventLoop-7] com.acme.aichat.Chat - completion in 1.4s (model=gpt-4o)</div><div class="line lvl-err"><span class="ts">12:00:05</span> 2026-08-12T14:07:19.004Z ERROR [eventLoop-2] com.acme.aichat.Upload - stream closed before EOF</div><div class="line"><span class="ts">12:00:06</span> 2026-08-12T14:09:55.771Z INFO  [eventLoop-5] com.acme.aichat.Health - ok</div></div>
         <p class="hint">
-          The last  lines, newest at the bottom. Everything is also in
-          Loki — use Grafana for search, filters and anything older than this.
+          The last 200 lines, newest at the bottom, and it follows the
+          tail from here. It scrolls with new lines only while you are already at
+          the bottom, so scrolling up to read something does not fight you.
+          Everything is also in Loki — use Grafana for search, filters and
+          anything older than this.
         </p>
       </div>
     </section>
@@ -8097,6 +8577,15 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <p class="hint">Leave blank to generate a strong one. Set it yourself if you are moving an existing database and its clients already know the password.</p>
       </div>
       
+      <div class="field">
+        <label for="s-ATLAS_URI">MongoDB Atlas connection string</label>
+        <input id="s-ATLAS_URI" type="text" name="ATLAS_URI"
+               autocomplete="off" spellcheck="false"
+               placeholder="leave blank to generate one"
+               value="">
+        <p class="hint">Only used by the Migrate section on the Backups tab, and only while a migration is running. A `Secret` rather than a field, so it lands in secret.env at 0600 and never in component.json — it is a full credential for a database that is not this one. Paste it exactly as Atlas gives it to you, including the password and the database name.</p>
+      </div>
+      
     </div>
   </div>
   
@@ -8693,6 +9182,8 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   </form>
 </section>
 
+<div data-live-html="#">
+  
 <section class="panel">
   <div class="panel-head">
     <h2>Tasks here</h2>
@@ -8826,6 +9317,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
     same pair the rings on the fleet view draw.
   </div>
 </section>
+</div>
 
 </section>
       
@@ -9008,6 +9500,8 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   </form>
 </section>
 
+<div data-live-html="#">
+  
 <section class="panel">
   <div class="panel-head">
     <h2>Tasks here</h2>
@@ -9077,6 +9571,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
     same pair the rings on the fleet view draw.
   </div>
 </section>
+</div>
 
 </section>
       
@@ -9264,6 +9759,8 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   </form>
 </section>
 
+<div data-live-html="#">
+  
 <section class="panel">
   <div class="panel-head">
     <h2>Tasks here</h2>
@@ -9333,6 +9830,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
     same pair the rings on the fleet view draw.
   </div>
 </section>
+</div>
 
 </section>
       
@@ -9515,6 +10013,8 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   </form>
 </section>
 
+<div data-live-html="#">
+  
 <section class="panel">
   <div class="panel-head">
     <h2>Tasks here</h2>
@@ -9560,6 +10060,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
     same pair the rings on the fleet view draw.
   </div>
 </section>
+</div>
 
 </section>
       
@@ -9628,6 +10129,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
 
 
+
+<div data-live-html="#" data-live-ms="10000">
+  
 <section class="panel">
   <div class="panel-head">
     <h2>Per component</h2>
@@ -9743,6 +10247,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
     every other component, none of which should influence one application's capacity.
   </div>
 </section>
+</div>
 
 <div class="page-head section-gap">
   <div>
@@ -9973,6 +10478,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
 <div data-panel="dataguard" hidden>
 
+<div data-live-html="#" data-live-ms="10000">
+  
+
 <div class="page-head">
   <div>
     <h2>Dataguard</h2>
@@ -10019,7 +10527,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788184460.071302" data-localtime-epoch>1788184460</time>
+              <time datetime="1788233861.54077" data-localtime-epoch>1788233861</time>
             
           </td>
           <td>
@@ -10089,6 +10597,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
     
   </div>
 </section>
+</div>
 
 <div class="page-head section-gap">
   <div>
@@ -10352,6 +10861,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
 
 
+
+<div data-live-html="#" data-live-ms="10000">
+  
 <section class="panel">
   <div class="panel-head">
     <h2>Per component</h2>
@@ -10427,6 +10939,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
     every other component, none of which should influence one application's capacity.
   </div>
 </section>
+</div>
 
 <div class="page-head section-gap">
   <div>
@@ -10657,6 +11170,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
 <div data-panel="dataguard" hidden>
 
+<div data-live-html="#" data-live-ms="10000">
+  
+
 <div class="page-head">
   <div>
     <h2>Dataguard</h2>
@@ -10703,7 +11219,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788184460.071302" data-localtime-epoch>1788184460</time>
+              <time datetime="1788233861.54077" data-localtime-epoch>1788233861</time>
             
           </td>
           <td>
@@ -10773,6 +11289,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
     
   </div>
 </section>
+</div>
 
 <div class="page-head section-gap">
   <div>
@@ -11082,6 +11599,8 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
 
 
+<div data-live-html="#" data-live-ms="10000">
+  
 <section class="panel">
   <div class="panel-head"><h2>Rules</h2></div>
   <div class="table-wrap">
@@ -11217,7 +11736,8 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
     <code>config/alerts_test.yml</code>. Run <code>promtool test rules</code> after editing —
     a rule whose selector has drifted looks exactly like a rule with nothing to report.
   </div>
-</section></section>
+</section>
+</div></section>
       <section data-view="storage" hidden>
 <div class="page-head">
   <div>
@@ -12236,7 +12756,16 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   // both required: the browser tab is visible, AND the map is scrolled into
   // view. A background tab polling a Docker socket every five seconds forever
   // is pure waste, and so is polling a section sitting below the fold.
-  var TOPO_MS = 5000;
+  // Default cadence. A panel that costs more to render than a socket walk —
+  // the observability column is a dozen range queries — declares its own with
+  // `data-live-ms`, so one expensive section cannot force everything else to be
+  // slow and cannot be forgotten about either.
+  var LIVE_MS = 5000;
+
+  function cadence(el) {
+    var want = parseInt(el.getAttribute("data-live-ms"), 10);
+    return want > 0 ? want : LIVE_MS;
+  }
 
   function pct(v) { return v === null || v === undefined ? "—" : Math.round(v) + "%"; }
 
@@ -12392,13 +12921,21 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
     }
   }
 
-  function markLive(state) {
-    var el = document.querySelector("[data-topo-live]");
-    if (!el) { return; }
-    el.classList.toggle("is-stale", state === "stale");
-    el.classList.toggle("is-idle", state === "paused");
-    el.lastChild.nodeValue = state;
+  // The indicator belongs to the panel it reports on. It used to be looked up
+  // globally, which was fine while exactly one section was live and wrong the
+  // moment a second one was: every panel would have driven the same dot.
+  function indicatorFor(host) {
+    return function (state) {
+      var el = (host || document).querySelector("[data-topo-live]")
+            || document.querySelector("[data-topo-live]");
+      if (!el) { return; }
+      el.classList.toggle("is-stale", state === "stale");
+      el.classList.toggle("is-idle", state === "paused");
+      el.lastChild.nodeValue = state;
+    };
   }
+
+  var markLive = indicatorFor(null);
 
   // Poll `tick` while `el` is genuinely being looked at: the browser tab
   // visible AND the element on screen. Extracted so the Map tab gets exactly
@@ -12425,7 +12962,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         // nothing to catch up on. Every later resume does.
         if (everRan) { tick(); } else { everRan = true; }
         if (onPause) { onPause("live"); }
-        timer = setInterval(tick, TOPO_MS);
+        timer = setInterval(tick, cadence(el));
       } else if (timer !== null) {
         clearInterval(timer);                // stop the timer, not just its body
         timer = null;
@@ -12469,6 +13006,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   for (var fi = 0; fi < fragments.length; fi++) {
     (function (host) {
       var url = host.getAttribute("data-live-html");
+      var mark = indicatorFor(host);
       livePoll(host, function () {
         fetch(url, { headers: { "Accept": "text/html" }, credentials: "same-origin" })
           .then(function (r) { return r.ok ? r.text() : Promise.reject(r.status); })
@@ -12478,11 +13016,99 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
               host.innerHTML = html;
               localiseTimes(host);
             }
+            mark("live");
           })
-          .catch(function () { /* logged out, or the preview build */ });
-      });
+          .catch(function () { mark("stale"); });
+      }, mark);
     })(fragments[fi]);
   }
+
+  // --- logs: follow the tail ------------------------------------------------
+  // Not `data-live-html`: that REPLACES a panel, and a log pane has to APPEND
+  // or every poll would throw away your scroll position and the selection you
+  // were making. The server hands back only what is new, keyed on a cursor, so
+  // a quiet service costs one empty response every few seconds.
+  (function () {
+    var pane = document.querySelector("[data-logs]");
+    if (!pane) { return; }
+    var stream = pane.querySelector("[data-logs-stream]");
+    var button = document.querySelector("[data-logs-toggle]");
+    var mark = indicatorFor(pane);
+    var url = pane.getAttribute("data-logs-url");
+    var cursor = pane.getAttribute("data-logs-cursor") || "";
+    var limit = parseInt(pane.getAttribute("data-logs-limit"), 10) || 200;
+    var paused = false;
+    var busy = false;
+
+    // Follow only while the reader is ALREADY at the bottom. Yanking someone
+    // back down because a line arrived while they were reading history is the
+    // behaviour that makes people turn tailing off.
+    function pinned() {
+      return stream.scrollHeight - stream.scrollTop - stream.clientHeight < 8;
+    }
+
+    function append(html) {
+      var wasPinned = pinned();
+      stream.insertAdjacentHTML("beforeend", html);
+      while (stream.children.length > limit) { stream.removeChild(stream.firstChild); }
+      if (wasPinned) { stream.scrollTop = stream.scrollHeight; }
+    }
+
+    function tick() {
+      if (paused || busy || !cursor) { return; }
+      busy = true;
+      fetch(url + (url.indexOf("?") < 0 ? "?" : "&") + "since=" + encodeURIComponent(cursor),
+            { headers: { "Accept": "text/html" }, credentials: "same-origin" })
+        .then(function (r) { return r.ok ? r.text() : Promise.reject(r.status); })
+        .then(function (html) {
+          var next = /^<!--cursor:(\d+)-->/.exec(html);
+          if (next) { cursor = next[1]; html = html.slice(next[0].length); }
+          if (html.trim()) { append(html); }
+          mark("live");
+        })
+        .catch(function () { mark("stale"); })
+        .then(function () { busy = false; });
+    }
+
+    if (button) {
+      button.hidden = false;
+      button.addEventListener("click", function () {
+        paused = !paused;
+        button.textContent = paused ? "Resume" : "Pause";
+        button.setAttribute("aria-pressed", paused ? "true" : "false");
+        mark(paused ? "paused" : "live");
+        // Resuming asks from the same cursor, so the gap fills in rather than
+        // being skipped: pausing stops the screen moving, not the recording.
+        if (!paused) { tick(); }
+      });
+    }
+    // Open at the newest line. The pane is scrolled to the top by default and
+    // the newest line is at the bottom, which is why this tab always needed a
+    // scroll before it said anything.
+    stream.scrollTop = stream.scrollHeight;
+    livePoll(pane, tick, function (state) { mark(paused ? "paused" : state); });
+  })();
+
+  // --- the visualiser wait page ---------------------------------------------
+  // It used to say "give it a few seconds and reload". The reason it had to was
+  // a bug that is now fixed on the server; this is the other half — the page
+  // asks, instead of the person.
+  (function () {
+    var wait = document.querySelector("[data-viewer-wait]");
+    if (!wait || !window.fetch) { return; }
+    var mark = indicatorFor(wait);
+    var status = wait.getAttribute("data-status-url");
+    var open = wait.getAttribute("data-open-url");
+    var timer = setInterval(function () {
+      fetch(status, { headers: { "Accept": "application/json" },
+                      credentials: "same-origin" })
+        .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+        .then(function (d) {
+          if (d && d.ready) { clearInterval(timer); window.location.href = open; }
+        })
+        .catch(function () { clearInterval(timer); mark("stale"); });
+    }, 2000);
+  })();
 })();
 </script>
 <script>

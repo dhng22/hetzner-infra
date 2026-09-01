@@ -500,6 +500,8 @@
         </div>
       </form>
     </section>
+
+    {% if migrate_offered %}{% include "_migrate.html" %}{% endif %}
   </div>
   {% endif %}
 
@@ -585,6 +587,12 @@
         <h2>Logs</h2>
         <span class="spacer"></span>
         <span class="muted mono">{{ component.service }}</span>
+        <span class="live" data-topo-live><i></i>live</span>
+        {# Hidden until the follower claims it, because with JS off there is
+           nothing to pause — the pane is a snapshot and the button would be a
+           control that does nothing. #}
+        <button class="btn btn-sm" type="button" data-logs-toggle hidden
+                aria-pressed="false">Pause</button>
         {# A GET form, so the depth lives in the URL: reloading, bookmarking or
            sharing the page keeps the view you chose, and the tab strip's own
            link to this tab is what resets it. #}
@@ -599,11 +607,19 @@
           <button class="btn btn-sm" type="submit">Show</button>
         </form>
       </div>
-      <div class="panel-body">
-        <pre class="logs">{{ logs }}</pre>
+      <div class="panel-body" data-logs
+           data-logs-url="{{ logs_href(component.name) }}"
+           data-logs-cursor="{{ log_cursor or '' }}"
+           data-logs-limit="{{ log_lines }}">
+        {# Rendered server-side first, so the tab is complete and correct with
+           JS off — the follower only appends what arrives after this. #}
+        <div class="logs" data-logs-stream>{% include "_logs.html" %}</div>
         <p class="hint">
-          The last {{ log_lines }} lines, newest at the bottom. Everything is also in
-          Loki — use Grafana for search, filters and anything older than this.
+          The last {{ log_lines }} lines, newest at the bottom, and it follows the
+          tail from here. It scrolls with new lines only while you are already at
+          the bottom, so scrolling up to read something does not fight you.
+          Everything is also in Loki — use Grafana for search, filters and
+          anything older than this.
         </p>
       </div>
     </section>

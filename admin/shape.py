@@ -389,9 +389,267 @@ def summary(service_fn, nodes, vm_query):
         "replicas_desired": sum(v["desired"] for v in views),
         "workers": len(workers),
         "workers_ready": len([n for n in workers if n["tone"] == "ok"]),
-        "max_workers": int(vm_query("autoscaler_max_workers") or 0),
-        "hosts": int(vm_query("autoscaler_current_hosts") or 0),
-        "min_workers": int(vm_query("autoscaler_effective_min_workers") or 0),
-        "cluster_cpu": vm_query("autoscaler_cluster_cpu_percent"),
-        "cluster_mem": vm_query("autoscaler_cluster_mem_percent"),
+        # `overseer_`, not `autoscaler_`. The fleet moved to the overseer and
+        # took its gauges with it, but these five names did not follow, so
+        # every one of them read None against the live cluster and the tiles
+        # showed 0 workers, 0 hosts and no cluster load at all. The two p95
+        # names above are NOT part of that move — replica counts are still the
+        # autoscaler's, and they were verified present before this was changed.
+        "max_workers": int(vm_query("overseer_max_workers") or 0),
+        "hosts": int(vm_query("overseer_current_hosts") or 0),
+        "min_workers": int(vm_query("overseer_effective_min_workers") or 0),
+        "cluster_cpu": vm_query("overseer_cluster_cpu_percent"),
+        "cluster_mem": vm_query("overseer_cluster_mem_percent"),
     }
+
+
+#: What makes a log line worth a colour. Matched against the line as written,
+#: so it catches both `ERROR` from a JVM logger and `level=error` from a Go one.
+#: Deliberately only two levels above "normal": a page where a third of the
+#: lines are coloured tells you nothing, and the reason anyone opens this tab is
+#: to find the one line that is not fine.
+_LOG_LEVELS = (
+    ("err", re.compile(r"\b(ERROR|FATAL|PANIC|SEVERE)\b|level=(error|fatal)", re.I)),
+    ("warn", re.compile(r"\bWARN(ING)?\b|level=warn(ing)?", re.I)),
+)
+
+
+def log_level(line):
+    """`err`, `warn`, or "" — the class the line is drawn with."""
+    for level, pattern in _LOG_LEVELS:
+        if pattern.search(line):
+            return level
+    return ""
+
+
+def log_rows(rows):
+    """
+    `[(timestamp_ns_or_None, text)]` -> the dicts the log pane renders.
+
+    The timestamp is split out of the text rather than pasted in front of it,
+    which is what lets it be dimmed separately — the styles for that
+    (`.logs .ts`, `.lvl-warn`, `.lvl-err`) have existed in the stylesheet since
+    the tab was written and nothing has ever emitted them.
+
+    A row with no timestamp is a CLI fallback line, which carries its own; it
+    keeps an empty stamp rather than being given a made-up one.
+    """
+    import datetime as dt
+
+    out = []
+    for ts, text in rows:
+        stamp = ""
+        if ts:
+            stamp = f"{dt.datetime.fromtimestamp(ts / 1e9, dt.timezone.utc):%H:%M:%S}"
+        out.append({"at": stamp, "text": text, "level": log_level(text)})
+    return out
+
+
+# --- observability ----------------------------------------------------------
+#
+# Three frameworks, on purpose, and they overlap: RED is a subset of the Golden
+# Signals, and USE shares "errors" with both. What separates them is SCOPE, and
+# each section says so on the page:
+#
+#   RED     per service    what a request meets
+#   USE     per node       what a machine is doing with itself
+#   GOLDEN  cluster-wide   the four numbers you wake somebody for
+#
+# Every expression below was run against this cluster's VictoriaMetrics before
+# it was written down. The one real gap is named on the card rather than drawn
+# as a mysteriously empty chart: no application here publishes an HTTP timer,
+# so per-service rate and errors have no source, and the card says which metric
+# would give it one.
+
+#: How much history the column draws, and how coarsely.
+OBS_MINUTES = 60
+OBS_STEP = 60
+
+#: Where cluster CPU and memory stop being comfortable. NOT invented for the
+#: chart — these are the numbers that actually act. `up_cpu` in
+#: `signals/classify.py` is what scales a service out; `NODE_PRESSURE_PCT` in
+#: `overseer/overseer.py` is what makes the fleet buy a machine. A saturation
+#: reading shown without them is a number with no consequence attached.
+SATURATION_WARN = 70.0
+SATURATION_DANGER = 80.0
+
+#: The ratio `HighErrorRate` fires at, drawn on the errors charts so the line
+#: and the alert rule cannot drift apart without somebody seeing it.
+ERROR_BUDGET_PCT = 5.0
+
+Q_STATUS_CLASS = (
+    'sum by (class) (label_replace(rate(cloudflared_tunnel_response_by_code[5m]),'
+    ' "class", "${1}xx", "status_code", "(.).*"))')
+Q_ERROR_RATIO = (
+    'sum(rate(cloudflared_tunnel_response_by_code{status_code=~"5.."}[5m]))'
+    ' / clamp_min(sum(rate(cloudflared_tunnel_response_by_code[5m])), 0.001)')
+Q_REQUEST_RATE = 'sum(rate(cloudflared_tunnel_response_by_code[5m]))'
+Q_LATENCY = 'overseer_service_latency_ms'
+Q_SLO = 'max(autoscaler_service_slo_p95_ms)'
+
+#: Utilisation, one row per node per resource.
+Q_UTILISATION = (
+    ("cpu", '100 - (avg by (instance) '
+            '(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)'),
+    ("memory", '100 * (1 - sum by (instance) (node_memory_MemAvailable_bytes)'
+               ' / sum by (instance) (node_memory_MemTotal_bytes))'),
+    ("disk", '100 * (1 - sum by (instance) '
+             '(node_filesystem_avail_bytes{mountpoint="/"})'
+             ' / sum by (instance) (node_filesystem_size_bytes{mountpoint="/"}))'),
+)
+
+#: Saturation is PSI — seconds per second of work STALLED waiting for a
+#: resource. Utilisation says a resource is busy; pressure says something is
+#: queueing behind it, which is the difference between fast and full.
+Q_PRESSURE = (
+    ("cpu stall", 'sum by (instance) '
+                  '(rate(node_pressure_cpu_waiting_seconds_total[5m]))'),
+    ("memory stall", 'sum by (instance) '
+                     '(rate(node_pressure_memory_waiting_seconds_total[5m]))'),
+    ("io stall", 'sum by (instance) '
+                 '(rate(node_pressure_io_waiting_seconds_total[5m]))'),
+)
+
+#: What counts as a resource error, over an hour rather than five minutes:
+#: these are rare by nature, and a RATE of "one OOM kill" is noise where a
+#: COUNT of "one OOM kill" is the answer.
+Q_RESOURCE_ERRORS = (
+    ("OOM kills", "sum(increase(node_vmstat_oom_kill[1h]))"),
+    ("container OOM", "sum(increase(container_oom_events_total[1h]))"),
+    ("tx errors", "sum(increase(node_network_transmit_errs_total[1h]))"),
+    ("rx errors", "sum(increase(node_network_receive_errs_total[1h]))"),
+    ("tx drops", "sum(increase(node_network_transmit_drop_total[1h]))"),
+)
+
+NO_TIMER_NOTE = (
+    "Measured at the tunnel, not per service: no application in this cluster "
+    "publishes an HTTP timer. A Ktor MicrometerMetrics plugin exporting "
+    "http_server_requests_seconds would split this per service — and would give "
+    "the HighErrorRate rule in config/alerts.yml, which already reads that "
+    "metric, something to fire on.")
+
+
+def _card(title, note, body, warning=""):
+    return {"title": title, "note": note, "body": body, "warning": warning}
+
+
+def _tone_for(value, warn, danger):
+    if value is None:
+        return ""
+    if value >= danger:
+        return "bad"
+    if value >= warn:
+        return "warn"
+    return ""
+
+
+def _as_percent(series):
+    """A 0..1 ratio series redrawn as 0..100, so it shares an axis with a %."""
+    return {name: [(t, v * 100.0) for t, v in points]
+            for name, points in series.items()}
+
+
+def _worst_series(series):
+    """The single series with the highest peak — a cluster-level rollup."""
+    if not series:
+        return {}
+    name, points = max(series.items(),
+                       key=lambda kv: max(v for _, v in kv[1]))
+    return {f"worst: {name}": points}
+
+
+def observability(vm_range, vm_query, charts):
+    """
+    The RED / USE / Golden column, already drawn.
+
+    `charts` is a parameter rather than an import for the same reason
+    `summary()` takes `vm_query`: this stays a pure function of its arguments,
+    so the fixtures can render the identical column from canned series and a
+    test can pin the shape without a cluster.
+
+    Returns `[{key, title, scope, cards: [{title, note, body, warning}]}]`.
+    `body` is markup; the template prints it and decides nothing, so this
+    function and `charts.py` are the only two places a chart decision is made.
+    """
+    def rng(expr, label=None):
+        return vm_range(expr, OBS_MINUTES, OBS_STEP, label)
+
+    latency = rng(Q_LATENCY, "service")
+    slo = vm_query(Q_SLO)
+    errors = _as_percent(rng(Q_ERROR_RATIO))
+
+    red = [
+        _card("Duration", "p95 per service, against the SLO it is judged by",
+              charts.line(latency, "ms", reference=slo, band=slo,
+                          empty="no service is publishing a timer yet")),
+        _card("Rate", "responses per second, by status class",
+              charts.stack(rng(Q_STATUS_CLASS, "class"), "/s"),
+              warning=NO_TIMER_NOTE),
+        _card("Errors", "share of responses that are 5xx",
+              charts.line(errors, "%", reference=ERROR_BUDGET_PCT,
+                          band=ERROR_BUDGET_PCT,
+                          empty="no responses recorded in this window")),
+    ]
+
+    utilisation = []
+    for resource, expr in Q_UTILISATION:
+        for node, points in rng(expr, "instance").items():
+            value = points[-1][1]
+            utilisation.append({
+                "name": f"{node} · {resource}", "value": value, "max": 100.0,
+                "tone": _tone_for(value, SATURATION_WARN, SATURATION_DANGER)})
+
+    pressure = {}
+    for resource, expr in Q_PRESSURE:
+        for node, points in rng(expr, "instance").items():
+            pressure[f"{node} · {resource}"] = points
+
+    resource_errors = []
+    for name, expr in Q_RESOURCE_ERRORS:
+        value = vm_query(expr)
+        resource_errors.append({"name": name,
+                                "value": 0.0 if value is None else value,
+                                "tone": "bad" if (value or 0) > 0 else ""})
+
+    use = [
+        _card("Utilisation", "how much of each machine is in use right now",
+              charts.bars(utilisation, "%", empty="no node is reporting")),
+        _card("Saturation",
+              "seconds per second of work stalled waiting for a resource — "
+              "queueing, which is what utilisation alone cannot tell you",
+              charts.line(pressure, "s/s",
+                          empty="nothing has queued in this window")),
+        _card("Errors", "counted over the last hour, not averaged",
+              charts.columns(resource_errors)),
+    ]
+
+    golden = [
+        _card("Latency", "the slowest service in the cluster",
+              charts.line(_worst_series(latency), "ms", reference=slo, band=slo,
+                          empty="no service is publishing a timer yet")),
+        _card("Traffic", "everything the tunnel served, per second",
+              charts.line(rng(Q_REQUEST_RATE), "/s",
+                          empty="no responses recorded in this window")),
+        _card("Errors", f"5xx share against the {ERROR_BUDGET_PCT:.0f}% the "
+                        f"alert fires at",
+              charts.line(errors, "%", reference=ERROR_BUDGET_PCT,
+                          band=ERROR_BUDGET_PCT,
+                          empty="no responses recorded in this window")),
+        _card("Saturation",
+              f"cluster CPU then memory, against {SATURATION_WARN:.0f}% "
+              f"(scales a service out) and {SATURATION_DANGER:.0f}% (buys a "
+              f"machine)",
+              charts.bullet(vm_query("overseer_cluster_cpu_percent"),
+                            SATURATION_WARN, SATURATION_DANGER)
+              + charts.bullet(vm_query("overseer_cluster_mem_percent"),
+                              SATURATION_WARN, SATURATION_DANGER)),
+    ]
+
+    return [
+        {"key": "red", "title": "RED",
+         "scope": "per service — what a request meets", "cards": red},
+        {"key": "use", "title": "USE",
+         "scope": "per node — what a machine is doing with itself", "cards": use},
+        {"key": "golden", "title": "Golden signals",
+         "scope": "cluster-wide — the four you wake somebody for", "cards": golden},
+    ]

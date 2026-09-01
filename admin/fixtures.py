@@ -14,6 +14,7 @@ between here and the live path is not duplicated any more.
 """
 
 import catalog
+import charts
 import shape
 
 _IMG = "ghcr.io/acme/aichat-api"
@@ -156,12 +157,12 @@ def system_view():
 def vm_query(expr):
     return {
         "count(autoscaler_service_p95_ms > on (service) autoscaler_service_slo_p95_ms)": 1.0,
-        "autoscaler_max_workers": 5.0,
-        "autoscaler_current_hosts": 4.0,
-        "autoscaler_current_workers": 3.0,
-        "autoscaler_effective_min_workers": 0.0,
-        "autoscaler_cluster_cpu_percent": 71.0,
-        "autoscaler_cluster_mem_percent": 58.0,
+        "overseer_max_workers": 5.0,
+        "overseer_current_hosts": 4.0,
+        "overseer_current_workers": 3.0,
+        "overseer_effective_min_workers": 0.0,
+        "overseer_cluster_cpu_percent": 71.0,
+        "overseer_cluster_mem_percent": 58.0,
     }.get(expr)
 
 
@@ -176,8 +177,16 @@ _LOG = """\
 """
 
 
-def logs(service_name, lines=200):
-    return _LOG
+def log_events(service_name, lines=200, since_ns=None):
+    """
+    Mirrors swarm.log_events(). A poll after the first returns nothing new,
+    which is the state the preview should show: a quiet service, following.
+    """
+    if since_ns:
+        return [], since_ns, ""
+    rows = [(1755000000000000000 + i * 10**9, line)
+            for i, line in enumerate(_LOG.strip().splitlines())]
+    return shape.log_rows(rows), rows[-1][0], ""
 
 
 def nodes():
@@ -428,6 +437,10 @@ def ensure_viewer(service):
     return True, ""
 
 
+def viewer_running(service):
+    return True
+
+
 def touch_viewer(component):
     pass
 
@@ -580,3 +593,57 @@ def infra_version():
         "behind": False,
         "remote_short": "9f2c1ab77e40",
     }
+
+
+def _wave(base, swing, points=61, step=60, phase=0.0):
+    """
+    A series that looks like a Tuesday afternoon rather than a sine wave.
+
+    The preview exists to prove the templates and the chart code, so the numbers
+    have to exercise the interesting cases — a rise, a plateau, a dip — without
+    being so regular that a broken axis still looks plausible.
+    """
+    import math
+    import time
+    now = int(time.time())
+    return [(now - (points - 1 - i) * step,
+             max(0.0, base + swing * math.sin(i / 6.0 + phase)
+                 + swing * 0.35 * math.sin(i / 2.3 + phase)))
+            for i in range(points)]
+
+
+#: What each preview expression answers with. Keyed by the constants in
+#: `shape.py` rather than by copied strings, so renaming a query here is a
+#: NameError instead of a silently empty chart.
+_RANGES = {
+    shape.Q_LATENCY: {"api_app": _wave(310, 120), "web_app": _wave(140, 40, phase=2)},
+    shape.Q_STATUS_CLASS: {"2xx": _wave(11, 3), "3xx": _wave(1.2, 0.4),
+                           "4xx": _wave(0.6, 0.3, phase=1), "5xx": _wave(0.15, 0.12)},
+    shape.Q_ERROR_RATIO: {"5xx": [(t, v / 100.0) for t, v in _wave(1.4, 1.1)]},
+    shape.Q_REQUEST_RATE: {"served": _wave(13, 4)},
+}
+for _name, _expr in shape.Q_UTILISATION:
+    _RANGES[_expr] = {"master": _wave(58, 12), "wkr-1": _wave(71, 9),
+                      "wkr-2": _wave(24, 8, phase=3)}
+for _name, _expr in shape.Q_PRESSURE:
+    _RANGES[_expr] = {"master": _wave(0.05, 0.04), "wkr-1": _wave(0.22, 0.15)}
+
+
+def vm_query_range(expr, minutes=60, step=60, label=None):
+    return _RANGES.get(expr, {})
+
+
+def observability():
+    """Mirrors swarm.observability() — the same function, canned series."""
+    return shape.observability(vm_query_range, _obs_instant, charts)
+
+
+def _obs_instant(expr):
+    """The instant readings the column asks for, beside its range queries."""
+    if expr == shape.Q_SLO:
+        return 500.0
+    for name, resource_expr in shape.Q_RESOURCE_ERRORS:
+        if expr == resource_expr:
+            return {"OOM kills": 0.0, "container OOM": 1.0, "tx errors": 0.0,
+                    "rx errors": 0.0, "tx drops": 2.0}[name]
+    return vm_query(expr)

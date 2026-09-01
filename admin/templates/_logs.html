@@ -1,0 +1,16 @@
+{# One element per line, rather than one blob of text.
+
+   The `.lvl-warn`, `.lvl-err` and `.ts` styles have been in the stylesheet
+   since this tab was written and nothing ever emitted them, because the whole
+   log arrived as a single escaped string. Splitting the timestamp out is also
+   what lets the follower append: each line is its own node, so trimming to the
+   chosen depth is dropping children rather than re-parsing the pane.
+
+   The cursor comment on the first line is read by the follower and stripped
+   before the rest is inserted. It is a comment so that a browser with no JS
+   renders exactly the lines and nothing else. #}
+{%- if log_cursor %}<!--cursor:{{ log_cursor }}-->{% endif -%}
+{%- for line in log_rows -%}
+<div class="line{% if line.level %} lvl-{{ line.level }}{% endif %}">{% if line.at %}<span class="ts">{{ line.at }}</span> {% endif %}{{ line.text }}</div>
+{%- endfor -%}
+{%- if not log_rows and log_note %}<div class="line muted">{{ log_note }}</div>{% endif -%}
