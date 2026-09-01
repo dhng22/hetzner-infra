@@ -47,7 +47,7 @@
   </section>
 
   {% with spec = values or {}, fields = cls.fields(), groups = cls.GROUPS,
-          secret_inputs = cls.SECRETS, creating = true %}
+          secret_inputs = cls.secrets_for('credentials'), creating = true %}
     {% include "_spec_form.html" %}
   {% endwith %}
 

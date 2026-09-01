@@ -740,7 +740,7 @@ def component_detail(name):
             component=component.name if component.MANAGER_FIELD == "dataguard" else None)
     # Any type that declares credentials gets the tab, and a type that does not
     # gets nothing. No branch here names a database.
-    if tab == "credentials" and type(component).SECRETS:
+    if tab == "credentials" and type(component).secrets_for("credentials"):
         extra["creds"] = component.credentials(data.master_ip())
         extra["firewall"] = _firewall_state(component)
     # `pbm list` shells into a container, so it runs only when the tab is open.
@@ -918,6 +918,16 @@ def migrate_component(name):
     if request.form.get("confirm", "").strip() != name:
         flash(f"Type {name} exactly to confirm the migration.", "bad")
         return redirect(_component_href(name, "backups"))
+    # The Atlas string is part of this form, not of the Credentials tab: it says
+    # where this migration is going, and it is only ever read by this one
+    # operation. Blank keeps whatever was stored, which is the same rule every
+    # other secret input on this panel follows.
+    problems = component.apply_secrets(request.form, tab="migrate",
+                                       generate_missing=False)
+    if problems:
+        for problem in problems:
+            flash(problem, "bad")
+        return redirect(_component_href(name, "backups"))
     ok, output = component.start_migration(
         request.form.get("direction", ""),
         overwrite=request.form.get("overwrite") == "yes")
@@ -969,13 +979,13 @@ def save_credentials(name):
     _require_csrf()
     _no_writes_in_preview()
     component = _load(name)
-    if not type(component).SECRETS:
+    if not type(component).secrets_for("credentials"):
         abort(404)
 
     if request.form.get("regenerate"):
         component.rotate_secrets()
     else:
-        problems = component.apply_secrets(request.form)
+        problems = component.apply_secrets(request.form, tab="credentials")
         if problems:
             for problem in problems:
                 flash(problem, "bad")

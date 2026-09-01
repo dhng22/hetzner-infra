@@ -136,12 +136,19 @@ class Secret:
     """
 
     def __init__(self, key, label, help="", minimum=8, maximum=128,
-                 generated=True):
+                 generated=True, tab="credentials"):
         self.key = key
         self.label = label
         self.help = help
         self.minimum = minimum
         self.maximum = maximum
+        #: Which tab asks for this. Storage is the same either way — 0600 in
+        #: `secret.env`, never in the spec file — but WHERE it is asked for is
+        #: part of what it means. The Credentials tab answers "how do I connect
+        #: to this component", and a credential for somebody else's cluster is
+        #: not an answer to that question; it belongs beside the operation that
+        #: uses it, and nowhere else.
+        self.tab = tab
         #: Whether blank means "make one up". True for a password this component
         #: owns; FALSE for a credential to somebody else's system, where a
         #: generated value is not a weak secret but a wrong one — it would look
@@ -459,7 +466,12 @@ class Component:
     def secret(self, key):
         return self.secret_values().get(key, "")
 
-    def apply_secrets(self, raw, generate_missing=True):
+    @classmethod
+    def secrets_for(cls, tab):
+        """The credentials one surface is responsible for asking about."""
+        return tuple(s for s in cls.SECRETS if s.tab == tab)
+
+    def apply_secrets(self, raw, generate_missing=True, tab=None):
         """
         Set this component's credentials from a form, generating any left blank.
 
@@ -467,12 +479,22 @@ class Component:
         used at create time, which is why blank has to mean "generate" rather
         than "unset" — a database with no password is not a state worth being
         able to reach by leaving a field empty.
+
+        `tab` scopes it to the secrets that surface actually asks for. Without
+        it a form could set a key it does not display simply by naming it, which
+        is not a privilege boundary — everything here is already root — but it
+        is the difference between a form that means what it shows and one that
+        does not. Whatever is out of scope is carried through untouched.
         """
         if not self.SECRETS:
             return []
         current = self.secret_values()
         problems, values = [], {}
         for spec in self.SECRETS:
+            if tab is not None and spec.tab != tab:
+                if current.get(spec.key):
+                    values[spec.key] = current[spec.key]
+                continue
             supplied = (raw.get(spec.key) or raw.get(spec.key.lower()) or "").strip()
             problem = spec.check(supplied)
             if problem:

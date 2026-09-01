@@ -231,14 +231,16 @@ class MongoComponent(Component):
                help="Leave blank to generate a strong one. Set it yourself if you "
                     "are moving an existing database and its clients already know "
                     "the password."),
+        # NOT on the Credentials tab. That tab answers "how do I connect to this
+        # component", and this is a credential for a cluster that is not this
+        # one — it belongs beside the operation that uses it. Storage is
+        # unchanged either way: `secret.env` at 0600, never `component.json`,
+        # because it carries a password for somebody else's database.
         Secret("ATLAS_URI", "MongoDB Atlas connection string", generated=False,
-               maximum=512,
-               help="Only used by the Migrate section on the Backups tab, and only "
-                    "while a migration is running. A `Secret` rather than a field, "
-                    "so it lands in secret.env at 0600 and never in component.json "
-                    "— it is a full credential for a database that is not this one. "
-                    "Paste it exactly as Atlas gives it to you, including the "
-                    "password and the database name."),
+               maximum=512, tab="migrate",
+               help="Paste it exactly as Atlas gives it to you, including the "
+                    "password and the database name. It is stored for the next "
+                    "migration and shown as set rather than read back."),
     )
 
     def password(self):

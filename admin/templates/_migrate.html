@@ -29,14 +29,6 @@
       transfer stays behind.
     </p>
 
-    {% if not component.secret('ATLAS_URI') %}
-      <div class="banner warn"><div>
-        No Atlas connection string is set. Add one on the
-        <a href="{{ component_href(component.name, 'credentials') }}">Credentials</a>
-        tab — it is stored as a secret, never in this component's spec file.
-      </div></div>
-    {% endif %}
-
     {% if migrate %}
       <div class="field">
         <label>Last run</label>
@@ -50,6 +42,23 @@
         {% if preview %}data-preview{% endif %}>
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
     <div class="panel-body stack">
+      {# The Atlas string is asked for HERE rather than on the Credentials tab.
+         That tab answers "how do I connect to this component"; this is a
+         credential for a cluster that is not this one, and it is read by this
+         one operation and nothing else. Where it is STORED does not change:
+         `secret.env` at 0600, never the spec file. #}
+      {% for secret in component.secrets_for('migrate') %}
+      <div class="field">
+        <label for="m-{{ secret.key }}">{{ secret.label }}</label>
+        <input id="m-{{ secret.key }}" name="{{ secret.key }}" type="password"
+               autocomplete="off" spellcheck="false"
+               placeholder="{% if component.secret(secret.key) %}one is stored — leave blank to reuse it{% else %}mongodb+srv://user:password@cluster.mongodb.net/{% endif %}">
+        <p class="hint">
+          {{ secret.help }}
+          {% if component.secret(secret.key) %}<strong>One is already stored.</strong>{% endif %}
+        </p>
+      </div>
+      {% endfor %}
       <div class="field">
         <label for="m-direction">Direction</label>
         <select id="m-direction" name="direction">

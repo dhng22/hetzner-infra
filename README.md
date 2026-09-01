@@ -500,7 +500,11 @@ line without `=` is an error rather than a silent drop.
 > One exception, in the other direction: a credential to somebody ELSE'S system
 > — the MongoDB Atlas connection string the Migrate section reads — is a
 > `Secret` with `generated=False`, so leaving it blank means unset rather than
-> "make one up". A random Atlas URI is not a weak secret, it is a wrong one.
+> "make one up". A random Atlas URI is not a weak secret, it is a wrong one. It
+> is also asked for on the Migrate section rather than the Credentials tab:
+> that tab answers "how do I connect to this component", and a credential for a
+> cluster that is not this one is not an answer to it. Where a secret is STORED
+> and where it is ASKED FOR are separate decisions (`Secret(tab=...)`).
 
 **Moving a Mongo database in or out.** The Backups tab has a **Migrate**
 section: snapshot transfer both ways between this cluster and Atlas, run as a

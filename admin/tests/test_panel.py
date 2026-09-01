@@ -2392,6 +2392,90 @@ class MigrateTest(DatabaseHarness, PanelTest):
         self.assertNotIn("ATLAS_URI", str(component.as_dict()))
         self.assertIn("ATLAS_URI", [s.key for s in type(component).SECRETS])
 
+    def test_it_is_asked_for_beside_the_migration_and_not_on_credentials(self):
+        """
+        The Credentials tab answers "how do I connect to this component". A
+        credential for a cluster that is NOT this one is not an answer to that
+        question, and putting it there implies this component uses it for
+        something — it does not. It is read by one operation, so it is asked for
+        where that operation is.
+        """
+        self.make_mongo("placed")
+        creds = self.client.get(
+            "/components/placed?tab=credentials").get_data(as_text=True)
+        self.assertNotIn("ATLAS_URI", creds)
+        backups = self.client.get(
+            "/components/placed?tab=backups").get_data(as_text=True)
+        self.assertIn("ATLAS_URI", backups)
+        self.assertIn("MongoDB Atlas connection string", backups)
+
+    def test_the_create_form_does_not_ask_for_it_either(self):
+        """Nothing about creating a database needs somewhere to migrate it to."""
+        self.login()
+        page = self.client.get(
+            "/components/new?type=mongo").get_data(as_text=True)
+        self.assertNotIn("ATLAS_URI", page)
+        self.assertIn("MONGO_PASSWORD", page)
+
+    def test_the_credentials_form_cannot_set_a_key_it_does_not_show(self):
+        """
+        Not a privilege boundary — everything here is already root — but the
+        difference between a form that means what it shows and one that does
+        not. It also stops a credentials save from silently clearing it.
+        """
+        csrf = self.login()
+        self.make_mongo("scoped")
+        component = self.components.load("scoped")
+        component.apply_secrets({"ATLAS_URI": "mongodb+srv://kept@atlas/"},
+                                tab="migrate", generate_missing=False)
+        self.client.post("/components/scoped/credentials",
+                         data={"csrf": csrf, "MONGO_PASSWORD": "a-new-password",
+                               "ATLAS_URI": "mongodb+srv://sneaky@elsewhere/"},
+                         follow_redirects=True)
+        fresh = self.components.load("scoped")
+        self.assertEqual(fresh.secret("MONGO_PASSWORD"), "a-new-password")
+        self.assertEqual(fresh.secret("ATLAS_URI"), "mongodb+srv://kept@atlas/")
+
+    def test_the_migrate_form_stores_it_and_blank_reuses_what_is_there(self):
+        csrf = self.login()
+        self.make_mongo("storing")
+        component_cls = type(self.components.load("storing"))
+        real = component_cls.start_migration
+        component_cls.start_migration = lambda self, d, overwrite=False: (True, "ok")
+        try:
+            self.client.post("/components/storing/migrate",
+                             data={"csrf": csrf, "direction": "export",
+                                   "confirm": "storing",
+                                   "ATLAS_URI": "mongodb+srv://one@atlas/"},
+                             follow_redirects=True)
+            self.assertEqual(self.components.load("storing").secret("ATLAS_URI"),
+                             "mongodb+srv://one@atlas/")
+            # Blank means "the one you already have", as every other secret
+            # input on this panel means.
+            self.client.post("/components/storing/migrate",
+                             data={"csrf": csrf, "direction": "import",
+                                   "confirm": "storing", "ATLAS_URI": ""},
+                             follow_redirects=True)
+            self.assertEqual(self.components.load("storing").secret("ATLAS_URI"),
+                             "mongodb+srv://one@atlas/")
+        finally:
+            component_cls.start_migration = real
+
+    def test_a_rotate_does_not_invent_an_atlas_string(self):
+        """
+        `generated=False`. A random value here would not be a weak secret, it
+        would be a wrong one — it would look configured and fail every use.
+        """
+        self.make_mongo("rotated")
+        component = self.components.load("rotated")
+        component.apply_secrets({"ATLAS_URI": "mongodb+srv://real@atlas/"},
+                                tab="migrate", generate_missing=False)
+        before = component.secret("MONGO_PASSWORD")
+        component.rotate_secrets()
+        fresh = self.components.load("rotated")
+        self.assertNotEqual(fresh.secret("MONGO_PASSWORD"), before)
+        self.assertEqual(fresh.secret("ATLAS_URI"), "mongodb+srv://real@atlas/")
+
     def test_a_wrong_confirmation_starts_nothing(self):
         csrf = self.login()
         self.make_mongo("typed")
