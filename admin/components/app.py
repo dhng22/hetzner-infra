@@ -124,8 +124,30 @@ class AppComponent(Component):
                        "make these two symmetric.", group="autoscale"),
             Field("sustain_down_seconds", "Sustain down (s)", "number", 900,
                   minimum=60, maximum=86400, group="autoscale"),
-            Field("up_factor", "Growth step", "cpu", 0.5, minimum=0.05, maximum=4.0,
-                  help="+50% of current, minimum +1. One at a time cannot track a spike.", group="autoscale"),
+            Field("up_factor", "Growth cap", "cpu", 0.5, minimum=0.05, maximum=4.0,
+                  help="The most it may add in one step, as a share of what is "
+                       "running — +50% here, minimum +1. It is a CAP, not the "
+                       "step: how far over its line the service actually is "
+                       "decides how much of it gets used, so a mild breach adds "
+                       "less than a severe one and nothing ever adds more than "
+                       "this.", group="autoscale"),
+            Field("down_factor", "Shrink cap", "cpu", 0.5, minimum=0.01, maximum=1.0,
+                  help="The most it may shed in one step, same idea in reverse. "
+                       "Shrinking used to be one replica at a time, which took "
+                       "eighteen cooldowns to walk 20 back to 2 and cost money "
+                       "for every one of them. Safe at 50% because a service may "
+                       "only shrink when its peak CPU per replica is under the "
+                       "scale-down line, so halving leaves it under the "
+                       "scale-up one.", group="autoscale"),
+            Field("stabilize_down_seconds", "Shrink patience (s)", "number", 300,
+                  minimum=0, maximum=3600, group="autoscale",
+                  help="How long a smaller count has to keep being the answer "
+                       "before it is acted on. Sustain-down damps the SIGNAL; "
+                       "this damps the decision, so a metric that flickers "
+                       "either side of the window does not drag the replica "
+                       "count along with it. 0 turns it off. Growth is never "
+                       "delayed by it — slow to add capacity is an outage, slow "
+                       "to remove it is a bill."),
             Field("cooldown_seconds", "Replica cooldown (s)", "number", 60,
                   minimum=0, maximum=3600, group="autoscale"),
             Field("priority", "Priority", "number", 100, minimum=0, maximum=1000,
@@ -203,6 +225,8 @@ class AppComponent(Component):
             "autoscale.sustain_up_seconds": str(s["sustain_up_seconds"]),
             "autoscale.sustain_down_seconds": str(s["sustain_down_seconds"]),
             "autoscale.up_factor": str(s["up_factor"]),
+            "autoscale.down_factor": str(s["down_factor"]),
+            "autoscale.stabilize_down_seconds": str(s["stabilize_down_seconds"]),
             "autoscale.cooldown_seconds": str(s["cooldown_seconds"]),
             "autoscale.priority": str(s["priority"]),
         })

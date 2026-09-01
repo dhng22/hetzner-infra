@@ -1061,6 +1061,19 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
 .bullet-mark.is-warn { background: var(--warn); }
 .bullet-mark.is-bad { background: var(--bad); }
 .bullet-value { font: 400 11px var(--mono); text-align: right; }
+
+/* --- log filter --------------------------------------------------------------
+   Its own row under the panel head rather than squeezed into it: two text
+   inputs, two selects and a checkbox do not belong on the same line as a
+   heading, and on a narrow screen they wrap into something unreadable there.
+   -------------------------------------------------------------------------- */
+.log-filter { padding: 0 var(--s-4) var(--s-3); border-bottom: 1px solid var(--line); }
+.log-filter-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.log-filter-row input[type="search"] { flex: 1 1 180px; min-width: 0; }
+.log-filter-row select { flex: 0 0 auto; }
+.log-filter-regex { flex: 0 0 auto; white-space: nowrap; }
+.log-filter .hint { margin-top: 6px; }
+.hint.is-bad { color: var(--bad); }
 </style>
 <script>
 (function () {
@@ -2367,7 +2380,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-01T04:37:41Z" data-localtime>2026-09-01T04:37:41Z</time>
+          <time datetime="2026-09-01T05:04:46Z" data-localtime>2026-09-01T05:04:46Z</time>
           
         </div>
       </div>
@@ -3385,7 +3398,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         
         
 <div class="field">
-  <label for="f-up_factor">Growth step</label>
+  <label for="f-up_factor">Growth cap</label>
 
   
     <input id="f-up_factor" name="up_factor"
@@ -3398,7 +3411,45 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
            value="0.5">
   
 
-  <p class="hint">+50% of current, minimum +1. One at a time cannot track a spike.</p>
+  <p class="hint">The most it may add in one step, as a share of what is running — +50% here, minimum +1. It is a CAP, not the step: how far over its line the service actually is decides how much of it gets used, so a mild breach adds less than a severe one and nothing ever adds more than this.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-down_factor">Shrink cap</label>
+
+  
+    <input id="f-down_factor" name="down_factor"
+           type="number"
+           step="0.05"
+           min="0.01"
+           max="1.0"
+           
+           
+           value="0.5">
+  
+
+  <p class="hint">The most it may shed in one step, same idea in reverse. Shrinking used to be one replica at a time, which took eighteen cooldowns to walk 20 back to 2 and cost money for every one of them. Safe at 50% because a service may only shrink when its peak CPU per replica is under the scale-down line, so halving leaves it under the scale-up one.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-stabilize_down_seconds">Shrink patience (s)</label>
+
+  
+    <input id="f-stabilize_down_seconds" name="stabilize_down_seconds"
+           type="number"
+           
+           min="0"
+           max="3600"
+           
+           
+           value="300">
+  
+
+  <p class="hint">How long a smaller count has to keep being the answer before it is acted on. Sustain-down damps the SIGNAL; this damps the decision, so a metric that flickers either side of the window does not drag the replica count along with it. 0 turns it off. Growth is never delayed by it — slow to add capacity is an outage, slow to remove it is a bill.</p>
 </div>
       
         
@@ -3577,9 +3628,29 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         
         <button class="btn btn-sm" type="button" data-logs-toggle hidden
                 aria-pressed="false">Pause</button>
-        
-        <form method="get" action="#view-component-api" class="inline-form">
-          <input type="hidden" name="tab" value="logs">
+      </div>
+      
+      <form method="get" action="#view-component-api"
+            class="log-filter">
+        <input type="hidden" name="tab" value="logs">
+        <div class="log-filter-row">
+          <label class="sr-only" for="log-q">Containing</label>
+          <input id="log-q" name="q" type="search" value=""
+                 placeholder="containing…" autocomplete="off">
+          <label class="sr-only" for="log-exclude">Excluding</label>
+          <input id="log-exclude" name="exclude" type="search"
+                 value="" placeholder="but not…"
+                 autocomplete="off">
+          <label class="sr-only" for="log-level">Level</label>
+          <select id="log-level" name="level">
+            
+            <option value="" selected>any level</option>
+            
+            <option value="warn" >warnings and errors</option>
+            
+            <option value="err" >errors only</option>
+            
+          </select>
           <label class="sr-only" for="log-lines">Lines</label>
           <select id="log-lines" name="lines">
             
@@ -3594,9 +3665,15 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
             <option value="2000" >2000 lines</option>
             
           </select>
-          <button class="btn btn-sm" type="submit">Show</button>
-        </form>
-      </div>
+          <label class="check log-filter-regex">
+            <input type="checkbox" name="regex" >
+            <span>Regex</span>
+          </label>
+          <button class="btn btn-sm btn-primary" type="submit">Search</button>
+          
+        </div>
+        
+      </form>
       <div class="panel-body" data-logs
            data-logs-url="#"
            data-logs-cursor="1755000006000000000"
@@ -3604,11 +3681,13 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         
         <div class="logs" data-logs-stream><!--cursor:1755000006000000000--><div class="line"><span class="ts">12:00:00</span> 2026-08-12T14:02:11.881Z INFO  [main] com.acme.aichat.Application - Ktor started on 0.0.0.0:8080</div><div class="line"><span class="ts">12:00:01</span> 2026-08-12T14:02:11.902Z INFO  [main] com.acme.aichat.Redis - connected to cache_redis:6379</div><div class="line"><span class="ts">12:00:02</span> 2026-08-12T14:04:38.117Z INFO  [eventLoop-3] com.acme.aichat.Chat - completion in 812ms (model=gpt-4o-mini)</div><div class="line lvl-warn"><span class="ts">12:00:03</span> 2026-08-12T14:05:02.559Z WARN  [eventLoop-1] com.acme.aichat.RateLimit - throttled tenant=acme-9931</div><div class="line"><span class="ts">12:00:04</span> 2026-08-12T14:06:44.230Z INFO  [eventLoop-7] com.acme.aichat.Chat - completion in 1.4s (model=gpt-4o)</div><div class="line lvl-err"><span class="ts">12:00:05</span> 2026-08-12T14:07:19.004Z ERROR [eventLoop-2] com.acme.aichat.Upload - stream closed before EOF</div><div class="line"><span class="ts">12:00:06</span> 2026-08-12T14:09:55.771Z INFO  [eventLoop-5] com.acme.aichat.Health - ok</div></div>
         <p class="hint">
-          The last 200 lines, newest at the bottom, and it follows the
-          tail from here. It scrolls with new lines only while you are already at
-          the bottom, so scrolling up to read something does not fight you.
-          Everything is also in Loki — use Grafana for search, filters and
-          anything older than this.
+          The last
+          200 lines, newest at the bottom, and it follows
+          the tail from here — narrowed the same way, so the pane does not fill
+          up with lines the filter just excluded. It scrolls with new lines only
+          while you are already at the bottom, so scrolling up to read something
+          does not fight you. For anything older than 24 hours, or for a query
+          across several components at once, use Grafana.
         </p>
       </div>
     </section>
@@ -3716,7 +3795,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-01T04:37:41Z" data-localtime>2026-09-01T04:37:41Z</time>
+          <time datetime="2026-09-01T05:04:46Z" data-localtime>2026-09-01T05:04:46Z</time>
           
         </div>
       </div>
@@ -4649,7 +4728,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         
         
 <div class="field">
-  <label for="f-up_factor">Growth step</label>
+  <label for="f-up_factor">Growth cap</label>
 
   
     <input id="f-up_factor" name="up_factor"
@@ -4662,7 +4741,45 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
            value="0.5">
   
 
-  <p class="hint">+50% of current, minimum +1. One at a time cannot track a spike.</p>
+  <p class="hint">The most it may add in one step, as a share of what is running — +50% here, minimum +1. It is a CAP, not the step: how far over its line the service actually is decides how much of it gets used, so a mild breach adds less than a severe one and nothing ever adds more than this.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-down_factor">Shrink cap</label>
+
+  
+    <input id="f-down_factor" name="down_factor"
+           type="number"
+           step="0.05"
+           min="0.01"
+           max="1.0"
+           
+           
+           value="0.5">
+  
+
+  <p class="hint">The most it may shed in one step, same idea in reverse. Shrinking used to be one replica at a time, which took eighteen cooldowns to walk 20 back to 2 and cost money for every one of them. Safe at 50% because a service may only shrink when its peak CPU per replica is under the scale-down line, so halving leaves it under the scale-up one.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-stabilize_down_seconds">Shrink patience (s)</label>
+
+  
+    <input id="f-stabilize_down_seconds" name="stabilize_down_seconds"
+           type="number"
+           
+           min="0"
+           max="3600"
+           
+           
+           value="300">
+  
+
+  <p class="hint">How long a smaller count has to keep being the answer before it is acted on. Sustain-down damps the SIGNAL; this damps the decision, so a metric that flickers either side of the window does not drag the replica count along with it. 0 turns it off. Growth is never delayed by it — slow to add capacity is an outage, slow to remove it is a bill.</p>
 </div>
       
         
@@ -4841,9 +4958,29 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         
         <button class="btn btn-sm" type="button" data-logs-toggle hidden
                 aria-pressed="false">Pause</button>
-        
-        <form method="get" action="#view-component-api-staging" class="inline-form">
-          <input type="hidden" name="tab" value="logs">
+      </div>
+      
+      <form method="get" action="#view-component-api-staging"
+            class="log-filter">
+        <input type="hidden" name="tab" value="logs">
+        <div class="log-filter-row">
+          <label class="sr-only" for="log-q">Containing</label>
+          <input id="log-q" name="q" type="search" value=""
+                 placeholder="containing…" autocomplete="off">
+          <label class="sr-only" for="log-exclude">Excluding</label>
+          <input id="log-exclude" name="exclude" type="search"
+                 value="" placeholder="but not…"
+                 autocomplete="off">
+          <label class="sr-only" for="log-level">Level</label>
+          <select id="log-level" name="level">
+            
+            <option value="" selected>any level</option>
+            
+            <option value="warn" >warnings and errors</option>
+            
+            <option value="err" >errors only</option>
+            
+          </select>
           <label class="sr-only" for="log-lines">Lines</label>
           <select id="log-lines" name="lines">
             
@@ -4858,9 +4995,15 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
             <option value="2000" >2000 lines</option>
             
           </select>
-          <button class="btn btn-sm" type="submit">Show</button>
-        </form>
-      </div>
+          <label class="check log-filter-regex">
+            <input type="checkbox" name="regex" >
+            <span>Regex</span>
+          </label>
+          <button class="btn btn-sm btn-primary" type="submit">Search</button>
+          
+        </div>
+        
+      </form>
       <div class="panel-body" data-logs
            data-logs-url="#"
            data-logs-cursor="1755000006000000000"
@@ -4868,11 +5011,13 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         
         <div class="logs" data-logs-stream><!--cursor:1755000006000000000--><div class="line"><span class="ts">12:00:00</span> 2026-08-12T14:02:11.881Z INFO  [main] com.acme.aichat.Application - Ktor started on 0.0.0.0:8080</div><div class="line"><span class="ts">12:00:01</span> 2026-08-12T14:02:11.902Z INFO  [main] com.acme.aichat.Redis - connected to cache_redis:6379</div><div class="line"><span class="ts">12:00:02</span> 2026-08-12T14:04:38.117Z INFO  [eventLoop-3] com.acme.aichat.Chat - completion in 812ms (model=gpt-4o-mini)</div><div class="line lvl-warn"><span class="ts">12:00:03</span> 2026-08-12T14:05:02.559Z WARN  [eventLoop-1] com.acme.aichat.RateLimit - throttled tenant=acme-9931</div><div class="line"><span class="ts">12:00:04</span> 2026-08-12T14:06:44.230Z INFO  [eventLoop-7] com.acme.aichat.Chat - completion in 1.4s (model=gpt-4o)</div><div class="line lvl-err"><span class="ts">12:00:05</span> 2026-08-12T14:07:19.004Z ERROR [eventLoop-2] com.acme.aichat.Upload - stream closed before EOF</div><div class="line"><span class="ts">12:00:06</span> 2026-08-12T14:09:55.771Z INFO  [eventLoop-5] com.acme.aichat.Health - ok</div></div>
         <p class="hint">
-          The last 200 lines, newest at the bottom, and it follows the
-          tail from here. It scrolls with new lines only while you are already at
-          the bottom, so scrolling up to read something does not fight you.
-          Everything is also in Loki — use Grafana for search, filters and
-          anything older than this.
+          The last
+          200 lines, newest at the bottom, and it follows
+          the tail from here — narrowed the same way, so the pane does not fill
+          up with lines the filter just excluded. It scrolls with new lines only
+          while you are already at the bottom, so scrolling up to read something
+          does not fight you. For anything older than 24 hours, or for a query
+          across several components at once, use Grafana.
         </p>
       </div>
     </section>
@@ -4978,7 +5123,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-01T04:37:41Z" data-localtime>2026-09-01T04:37:41Z</time>
+          <time datetime="2026-09-01T05:04:46Z" data-localtime>2026-09-01T05:04:46Z</time>
           
         </div>
       </div>
@@ -5175,9 +5320,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis+sentinel://default:f1860619e19a6394a5e9b75aac050e7c30828860c08b167f@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
+              <code>redis+sentinel://default:eb27e8f4299487ee8429fd15dd873d3d6603b88707449447@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis+sentinel://default:f1860619e19a6394a5e9b75aac050e7c30828860c08b167f@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
+                      data-copy-text="redis+sentinel://default:eb27e8f4299487ee8429fd15dd873d3d6603b88707449447@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -5188,7 +5333,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="f1860619e19a6394a5e9b75aac050e7c30828860c08b167f">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="eb27e8f4299487ee8429fd15dd873d3d6603b88707449447">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -5214,9 +5359,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="panel-body stack">
           
           <div class="conn">
-            <code>redis://default:f1860619e19a6394a5e9b75aac050e7c30828860c08b167f@10.0.0.2:46379</code>
+            <code>redis://default:eb27e8f4299487ee8429fd15dd873d3d6603b88707449447@10.0.0.2:46379</code>
             <button class="btn btn-sm" type="button" data-copy
-                    data-copy-text="redis://default:f1860619e19a6394a5e9b75aac050e7c30828860c08b167f@10.0.0.2:46379">Copy</button>
+                    data-copy-text="redis://default:eb27e8f4299487ee8429fd15dd873d3d6603b88707449447@10.0.0.2:46379">Copy</button>
           </div>
           <div class="table-wrap">
             <table>
@@ -5955,9 +6100,29 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         
         <button class="btn btn-sm" type="button" data-logs-toggle hidden
                 aria-pressed="false">Pause</button>
-        
-        <form method="get" action="#view-component-cache" class="inline-form">
-          <input type="hidden" name="tab" value="logs">
+      </div>
+      
+      <form method="get" action="#view-component-cache"
+            class="log-filter">
+        <input type="hidden" name="tab" value="logs">
+        <div class="log-filter-row">
+          <label class="sr-only" for="log-q">Containing</label>
+          <input id="log-q" name="q" type="search" value=""
+                 placeholder="containing…" autocomplete="off">
+          <label class="sr-only" for="log-exclude">Excluding</label>
+          <input id="log-exclude" name="exclude" type="search"
+                 value="" placeholder="but not…"
+                 autocomplete="off">
+          <label class="sr-only" for="log-level">Level</label>
+          <select id="log-level" name="level">
+            
+            <option value="" selected>any level</option>
+            
+            <option value="warn" >warnings and errors</option>
+            
+            <option value="err" >errors only</option>
+            
+          </select>
           <label class="sr-only" for="log-lines">Lines</label>
           <select id="log-lines" name="lines">
             
@@ -5972,9 +6137,15 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
             <option value="2000" >2000 lines</option>
             
           </select>
-          <button class="btn btn-sm" type="submit">Show</button>
-        </form>
-      </div>
+          <label class="check log-filter-regex">
+            <input type="checkbox" name="regex" >
+            <span>Regex</span>
+          </label>
+          <button class="btn btn-sm btn-primary" type="submit">Search</button>
+          
+        </div>
+        
+      </form>
       <div class="panel-body" data-logs
            data-logs-url="#"
            data-logs-cursor="1755000006000000000"
@@ -5982,11 +6153,13 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         
         <div class="logs" data-logs-stream><!--cursor:1755000006000000000--><div class="line"><span class="ts">12:00:00</span> 2026-08-12T14:02:11.881Z INFO  [main] com.acme.aichat.Application - Ktor started on 0.0.0.0:8080</div><div class="line"><span class="ts">12:00:01</span> 2026-08-12T14:02:11.902Z INFO  [main] com.acme.aichat.Redis - connected to cache_redis:6379</div><div class="line"><span class="ts">12:00:02</span> 2026-08-12T14:04:38.117Z INFO  [eventLoop-3] com.acme.aichat.Chat - completion in 812ms (model=gpt-4o-mini)</div><div class="line lvl-warn"><span class="ts">12:00:03</span> 2026-08-12T14:05:02.559Z WARN  [eventLoop-1] com.acme.aichat.RateLimit - throttled tenant=acme-9931</div><div class="line"><span class="ts">12:00:04</span> 2026-08-12T14:06:44.230Z INFO  [eventLoop-7] com.acme.aichat.Chat - completion in 1.4s (model=gpt-4o)</div><div class="line lvl-err"><span class="ts">12:00:05</span> 2026-08-12T14:07:19.004Z ERROR [eventLoop-2] com.acme.aichat.Upload - stream closed before EOF</div><div class="line"><span class="ts">12:00:06</span> 2026-08-12T14:09:55.771Z INFO  [eventLoop-5] com.acme.aichat.Health - ok</div></div>
         <p class="hint">
-          The last 200 lines, newest at the bottom, and it follows the
-          tail from here. It scrolls with new lines only while you are already at
-          the bottom, so scrolling up to read something does not fight you.
-          Everything is also in Loki — use Grafana for search, filters and
-          anything older than this.
+          The last
+          200 lines, newest at the bottom, and it follows
+          the tail from here — narrowed the same way, so the pane does not fill
+          up with lines the filter just excluded. It scrolls with new lines only
+          while you are already at the bottom, so scrolling up to read something
+          does not fight you. For anything older than 24 hours, or for a query
+          across several components at once, use Grafana.
         </p>
       </div>
     </section>
@@ -6092,7 +6265,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-01T04:37:41Z" data-localtime>2026-09-01T04:37:41Z</time>
+          <time datetime="2026-09-01T05:04:46Z" data-localtime>2026-09-01T05:04:46Z</time>
           
         </div>
       </div>
@@ -6277,9 +6450,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>mongodb://root:8d278a1bc65e790d200ca11f7bcdbe999f07e862e6e6869a@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
+              <code>mongodb://root:a5b3f2a2719df9a9d84fa46aa38484f5c0ae213d7930fc63@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:8d278a1bc65e790d200ca11f7bcdbe999f07e862e6e6869a@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
+                      data-copy-text="mongodb://root:a5b3f2a2719df9a9d84fa46aa38484f5c0ae213d7930fc63@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -6290,7 +6463,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="8d278a1bc65e790d200ca11f7bcdbe999f07e862e6e6869a">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="a5b3f2a2719df9a9d84fa46aa38484f5c0ae213d7930fc63">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -7128,9 +7301,29 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         
         <button class="btn btn-sm" type="button" data-logs-toggle hidden
                 aria-pressed="false">Pause</button>
-        
-        <form method="get" action="#view-component-documents" class="inline-form">
-          <input type="hidden" name="tab" value="logs">
+      </div>
+      
+      <form method="get" action="#view-component-documents"
+            class="log-filter">
+        <input type="hidden" name="tab" value="logs">
+        <div class="log-filter-row">
+          <label class="sr-only" for="log-q">Containing</label>
+          <input id="log-q" name="q" type="search" value=""
+                 placeholder="containing…" autocomplete="off">
+          <label class="sr-only" for="log-exclude">Excluding</label>
+          <input id="log-exclude" name="exclude" type="search"
+                 value="" placeholder="but not…"
+                 autocomplete="off">
+          <label class="sr-only" for="log-level">Level</label>
+          <select id="log-level" name="level">
+            
+            <option value="" selected>any level</option>
+            
+            <option value="warn" >warnings and errors</option>
+            
+            <option value="err" >errors only</option>
+            
+          </select>
           <label class="sr-only" for="log-lines">Lines</label>
           <select id="log-lines" name="lines">
             
@@ -7145,9 +7338,15 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
             <option value="2000" >2000 lines</option>
             
           </select>
-          <button class="btn btn-sm" type="submit">Show</button>
-        </form>
-      </div>
+          <label class="check log-filter-regex">
+            <input type="checkbox" name="regex" >
+            <span>Regex</span>
+          </label>
+          <button class="btn btn-sm btn-primary" type="submit">Search</button>
+          
+        </div>
+        
+      </form>
       <div class="panel-body" data-logs
            data-logs-url="#"
            data-logs-cursor="1755000006000000000"
@@ -7155,11 +7354,13 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         
         <div class="logs" data-logs-stream><!--cursor:1755000006000000000--><div class="line"><span class="ts">12:00:00</span> 2026-08-12T14:02:11.881Z INFO  [main] com.acme.aichat.Application - Ktor started on 0.0.0.0:8080</div><div class="line"><span class="ts">12:00:01</span> 2026-08-12T14:02:11.902Z INFO  [main] com.acme.aichat.Redis - connected to cache_redis:6379</div><div class="line"><span class="ts">12:00:02</span> 2026-08-12T14:04:38.117Z INFO  [eventLoop-3] com.acme.aichat.Chat - completion in 812ms (model=gpt-4o-mini)</div><div class="line lvl-warn"><span class="ts">12:00:03</span> 2026-08-12T14:05:02.559Z WARN  [eventLoop-1] com.acme.aichat.RateLimit - throttled tenant=acme-9931</div><div class="line"><span class="ts">12:00:04</span> 2026-08-12T14:06:44.230Z INFO  [eventLoop-7] com.acme.aichat.Chat - completion in 1.4s (model=gpt-4o)</div><div class="line lvl-err"><span class="ts">12:00:05</span> 2026-08-12T14:07:19.004Z ERROR [eventLoop-2] com.acme.aichat.Upload - stream closed before EOF</div><div class="line"><span class="ts">12:00:06</span> 2026-08-12T14:09:55.771Z INFO  [eventLoop-5] com.acme.aichat.Health - ok</div></div>
         <p class="hint">
-          The last 200 lines, newest at the bottom, and it follows the
-          tail from here. It scrolls with new lines only while you are already at
-          the bottom, so scrolling up to read something does not fight you.
-          Everything is also in Loki — use Grafana for search, filters and
-          anything older than this.
+          The last
+          200 lines, newest at the bottom, and it follows
+          the tail from here — narrowed the same way, so the pane does not fill
+          up with lines the filter just excluded. It scrolls with new lines only
+          while you are already at the bottom, so scrolling up to read something
+          does not fight you. For anything older than 24 hours, or for a query
+          across several components at once, use Grafana.
         </p>
       </div>
     </section>
@@ -7775,7 +7976,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         
         
 <div class="field">
-  <label for="f-up_factor">Growth step</label>
+  <label for="f-up_factor">Growth cap</label>
 
   
     <input id="f-up_factor" name="up_factor"
@@ -7788,7 +7989,45 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
            value="0.5">
   
 
-  <p class="hint">+50% of current, minimum +1. One at a time cannot track a spike.</p>
+  <p class="hint">The most it may add in one step, as a share of what is running — +50% here, minimum +1. It is a CAP, not the step: how far over its line the service actually is decides how much of it gets used, so a mild breach adds less than a severe one and nothing ever adds more than this.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-down_factor">Shrink cap</label>
+
+  
+    <input id="f-down_factor" name="down_factor"
+           type="number"
+           step="0.05"
+           min="0.01"
+           max="1.0"
+           
+           
+           value="0.5">
+  
+
+  <p class="hint">The most it may shed in one step, same idea in reverse. Shrinking used to be one replica at a time, which took eighteen cooldowns to walk 20 back to 2 and cost money for every one of them. Safe at 50% because a service may only shrink when its peak CPU per replica is under the scale-down line, so halving leaves it under the scale-up one.</p>
+</div>
+      
+        
+        
+<div class="field">
+  <label for="f-stabilize_down_seconds">Shrink patience (s)</label>
+
+  
+    <input id="f-stabilize_down_seconds" name="stabilize_down_seconds"
+           type="number"
+           
+           min="0"
+           max="3600"
+           
+           
+           value="300">
+  
+
+  <p class="hint">How long a smaller count has to keep being the answer before it is acted on. Sustain-down damps the SIGNAL; this damps the decision, so a metric that flickers either side of the window does not drag the replica count along with it. 0 turns it off. Growth is never delayed by it — slow to add capacity is an outage, slow to remove it is a bill.</p>
 </div>
       
         
@@ -10527,7 +10766,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788233861.54077" data-localtime-epoch>1788233861</time>
+              <time datetime="1788235486.1832268" data-localtime-epoch>1788235486</time>
             
           </td>
           <td>
@@ -11219,7 +11458,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788233861.54077" data-localtime-epoch>1788233861</time>
+              <time datetime="1788235486.1832268" data-localtime-epoch>1788235486</time>
             
           </td>
           <td>

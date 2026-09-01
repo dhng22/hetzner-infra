@@ -37,6 +37,7 @@ os.environ["INFRA_DIR"] = _SEED
 import app as panel          # noqa: E402
 import components            # noqa: E402
 import fixtures              # noqa: E402
+import shape                 # noqa: E402
 
 
 #: The components the preview cluster is running. Written through the real
@@ -110,6 +111,9 @@ def detail_contexts():
             "logs": True,
             "log_lines": panel.LOG_LINES_DEFAULT,
             "log_line_choices": panel.LOG_LINE_CHOICES,
+            "log_filter": shape.LogFilter(),
+            "log_levels": shape.LEVEL_CHOICES,
+            "log_stream_url": "#",
             "newest": panel._newest_deploy(component.name, view),
         }
         # Gated on the tabs the component actually declares, exactly as the live

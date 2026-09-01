@@ -593,33 +593,70 @@
            control that does nothing. #}
         <button class="btn btn-sm" type="button" data-logs-toggle hidden
                 aria-pressed="false">Pause</button>
-        {# A GET form, so the depth lives in the URL: reloading, bookmarking or
-           sharing the page keeps the view you chose, and the tab strip's own
-           link to this tab is what resets it. #}
-        <form method="get" action="{{ component_href(component.name) }}" class="inline-form">
-          <input type="hidden" name="tab" value="logs">
+      </div>
+      {# A GET form, so the whole view lives in the URL: reloading, bookmarking
+         or sending someone the link keeps the search you were looking at, and
+         the tab strip's own link to this tab is what clears it.
+
+         The search runs on LOKI, over everything it has retained — not over the
+         lines already on screen. That distinction is the reason this is worth
+         having: the line you are hunting is usually not in the last two
+         hundred. #}
+      <form method="get" action="{{ component_href(component.name) }}"
+            class="log-filter">
+        <input type="hidden" name="tab" value="logs">
+        <div class="log-filter-row">
+          <label class="sr-only" for="log-q">Containing</label>
+          <input id="log-q" name="q" type="search" value="{{ log_filter.contains }}"
+                 placeholder="containing…" autocomplete="off">
+          <label class="sr-only" for="log-exclude">Excluding</label>
+          <input id="log-exclude" name="exclude" type="search"
+                 value="{{ log_filter.excludes }}" placeholder="but not…"
+                 autocomplete="off">
+          <label class="sr-only" for="log-level">Level</label>
+          <select id="log-level" name="level">
+            {% for value, label in log_levels %}
+            <option value="{{ value }}" {% if value == log_filter.level %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
           <label class="sr-only" for="log-lines">Lines</label>
           <select id="log-lines" name="lines">
             {% for n in log_line_choices %}
             <option value="{{ n }}" {% if n == log_lines %}selected{% endif %}>{{ n }} lines</option>
             {% endfor %}
           </select>
-          <button class="btn btn-sm" type="submit">Show</button>
-        </form>
-      </div>
+          <label class="check log-filter-regex">
+            <input type="checkbox" name="regex" {% if log_filter.regex %}checked{% endif %}>
+            <span>Regex</span>
+          </label>
+          <button class="btn btn-sm btn-primary" type="submit">Search</button>
+          {% if log_filter.active %}
+          <a class="btn btn-sm" href="{{ component_href(component.name, 'logs') }}">Clear</a>
+          {% endif %}
+        </div>
+        {% if log_filter.problem %}
+        <p class="hint is-bad">{{ log_filter.problem }}</p>
+        {% elif log_filter.regex %}
+        <p class="hint">Both boxes are read as RE2 — the syntax Loki itself uses.
+        <code>(?i)</code> for case-insensitive, <code>|</code> to match either.</p>
+        {% endif %}
+      </form>
       <div class="panel-body" data-logs
-           data-logs-url="{{ logs_href(component.name) }}"
+           data-logs-url="{{ log_stream_url }}"
            data-logs-cursor="{{ log_cursor or '' }}"
            data-logs-limit="{{ log_lines }}">
         {# Rendered server-side first, so the tab is complete and correct with
            JS off — the follower only appends what arrives after this. #}
         <div class="logs" data-logs-stream>{% include "_logs.html" %}</div>
         <p class="hint">
-          The last {{ log_lines }} lines, newest at the bottom, and it follows the
-          tail from here. It scrolls with new lines only while you are already at
-          the bottom, so scrolling up to read something does not fight you.
-          Everything is also in Loki — use Grafana for search, filters and
-          anything older than this.
+          {% if log_filter.active %}The last {{ log_lines }} MATCHING lines out of
+          everything Loki has kept for the past 24 hours{% else %}The last
+          {{ log_lines }} lines{% endif %}, newest at the bottom, and it follows
+          the tail from here — narrowed the same way, so the pane does not fill
+          up with lines the filter just excluded. It scrolls with new lines only
+          while you are already at the bottom, so scrolling up to read something
+          does not fight you. For anything older than 24 hours, or for a query
+          across several components at once, use Grafana.
         </p>
       </div>
     </section>

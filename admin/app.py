@@ -169,6 +169,34 @@ LOG_LINE_CHOICES = (100, 200, 500, 1000, 2000)
 LOG_LINES_DEFAULT = 200
 
 
+def _log_filter():
+    """
+    The Logs tab's filter, from the query string.
+
+    A GET form, like the line depth beside it, so a narrowed view is a URL: it
+    survives a reload, it can be bookmarked, and it can be pasted to somebody
+    else. Nothing here validates the shape of what was typed beyond "can this be
+    run" — a search box that second-guesses your search is a search box you
+    fight.
+    """
+    return shape.LogFilter(contains=request.args.get("q", ""),
+                           excludes=request.args.get("exclude", ""),
+                           level=request.args.get("level", ""),
+                           regex=request.args.get("regex") == "on")
+
+
+def _log_stream_url(name):
+    """
+    Where the follower polls, carrying the filter that is on screen.
+
+    The tail has to be narrowed by the same rule as the page under it, or the
+    pane would fill up with lines the filter had just excluded.
+    """
+    keep = {k: v for k, v in request.args.items()
+            if k in ("q", "exclude", "level", "regex", "lines") and v}
+    return url_for("component_logs_fragment", name=name, **keep)
+
+
 def _log_lines():
     """The requested log depth, or the default for anything not on the list."""
     try:
@@ -516,7 +544,8 @@ def component_logs_fragment(name):
     component = _load(name)
     raw = request.args.get("since", "")
     since = int(raw) if raw.isdigit() else None
-    rows, cursor, note = data.log_events(component.service, _log_lines(), since)
+    rows, cursor, note = data.log_events(component.service, _log_lines(), since,
+                                         log_filter=_log_filter())
     return render_template("_logs.html", log_rows=rows, log_cursor=cursor,
                            log_note="" if since else note)
 
@@ -688,11 +717,16 @@ def component_detail(name):
     if tab == "logs":
         extra["log_lines"] = _log_lines()
         extra["log_line_choices"] = LOG_LINE_CHOICES
-        rows, cursor, note = data.log_events(component.service, extra["log_lines"])
+        log_filter = _log_filter()
+        rows, cursor, note = data.log_events(component.service, extra["log_lines"],
+                                             log_filter=log_filter)
         extra["logs"] = True
         extra["log_rows"] = rows
         extra["log_cursor"] = cursor
         extra["log_note"] = note
+        extra["log_filter"] = log_filter
+        extra["log_levels"] = shape.LEVEL_CHOICES
+        extra["log_stream_url"] = _log_stream_url(name)
     if tab == "deployments":
         extra["webhook"] = webhook_for(name)
         extra["deployments"], extra["rollout"] = data.deployments(name, component.service)

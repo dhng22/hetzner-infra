@@ -6,8 +6,10 @@ up against **HPA** (horizontal pod autoscaler), **Cluster Autoscaler** and
 **VPA**, names what is genuinely missing, and — just as carefully — names where
 copying Kubernetes would make this system worse.
 
-Nothing here is implemented. It exists so the next change to the scaling loop is
-a choice rather than an accident. The ranked candidates are at the bottom.
+The ranked candidates are at §6. **Three of the five have since been built** and
+each carries its outcome, including the one that delivered less than this
+document predicted; the analysis above them is left as written so the reasoning
+and the result can be read against each other.
 
 Everything below cites the code it describes. Where a Kubernetes default is
 quoted it is the upstream default, not a claim about anyone's cluster.
@@ -201,9 +203,13 @@ This one is close to parity and is not a candidate below.
 
 ## 6. Candidates, ranked
 
-Each is a real change with a real cost. Nothing is implemented until you choose.
+Each is a real change with a real cost.
 
-### 1. Proportional scale-down — *highest value, lowest risk*
+> **1, 2 and 3 below are implemented.** What follows is kept as the reasoning
+> that led to each, with the outcome recorded under it — including the one that
+> turned out to buy less than this document predicted. 4 and 5 are still open.
+
+### 1. Proportional scale-down — *implemented*
 
 Replace the flat `−1` with a bounded percentage step, mirroring HPA's
 `scaleDown.policies`. One function (`desired_replicas`, `workloads.py:512`), one
@@ -216,7 +222,20 @@ new policy field, tests in `signals/tests/`.
 * **Watch:** interacts with `admit()`'s monotonicity (`overseer.py:1360-1366`),
   which is written assuming admission never scales down.
 
-### 2. Ratio-based scale-up
+**Outcome.** `desired_replicas` now computes the count from the measurement
+rather than stepping, and `down_factor` (default 0.5, label
+`autoscale.down_factor`) caps the step. An idle service walks 20 → 10 → 5 → 3 → 2
+instead of taking eighteen cooldowns. The step is *proportional*: a service at
+5% CPU cuts harder than one at 28%.
+
+The safety argument turned out to be provable rather than empirical, and is
+written into the code: a service may only shrink when its **peak** per-replica
+CPU is under `down_cpu` (30%), and the arithmetic aims at the middle of its own
+band, so the count it lands on has a projected load below `up_cpu` (70%). It
+cannot shrink into an immediate scale-up. A test asserts exactly that across the
+whole legal range of peaks.
+
+### 2. Ratio-based scale-up — *implemented, and it buys less than this said*
 
 Use `ceil(current × metric / target)` where a target actually exists — CPU and
 memory have one; latency has an SLO — and keep `up_factor` as the cap.
@@ -226,7 +245,27 @@ memory have one; latency has an SLO — and keep `up_factor` as the cap.
   which is exactly what `sustain_up`'s `min_over_time` was introduced to stop.
   Would need the ratio computed from the held value, not the instantaneous one.
 
-### 3. Recommendation history
+**Outcome, and the correction.** It is computed from the held value, as the risk
+note required. But keeping `up_factor` as the cap — which this document asked
+for — means the ratio almost never gets to make the count *larger*: with the
+band's midpoint at 50% and `up_cpu` at 70%, any CPU reading that triggers a
+scale-up already asks for at least 1.4× the current count, and the cap is 1.5×.
+**The cap binds essentially always, so scaling up is no faster than it was.**
+
+What it did change is real but points the other way — every effect is toward
+*less* over-provisioning:
+
+* A latency breach with modest CPU now adds **one** replica instead of 50%.
+  That is the incident recorded in `classify.decide`'s docstring — one 904ms
+  request scaling a service 2 → 3 → 4 at 11% CPU — made a third as expensive.
+* A memory-triggered scale-up is proportional, and `up_mem`/its midpoint put
+  that ratio below the cap, so it too adds less than the flat step did.
+
+If faster scale-up is actually wanted, the knob is `up_factor` and it is already
+per-service. Raising the *default* is a money decision, not a code change, and
+is deliberately not made here.
+
+### 3. Recommendation history — *implemented*
 
 Keep the last N computed counts per service and take max-over-window when
 shrinking, as HPA does.
@@ -236,6 +275,20 @@ shrinking, as HPA does.
   level-triggered and re-derived every pass. That property is worth a lot — it is
   why a restart mid-decision is harmless — and this is the first thing that would
   erode it.
+
+**Outcome.** `workloads.Stabilizer`, 300s by default
+(`autoscale.stabilize_down_seconds`, 0 disables), taking the max recommendation
+over the window when shrinking and never delaying growth — HPA's rule and HPA's
+default. Both processes run it, from the same function over the same numbers,
+because the overseer sizes the fleet from these totals and sizing for a shrink
+the autoscaler is about to damp would delete a worker whose replicas are still
+on it.
+
+The level-triggered property is preserved in the only way that matters: what is
+remembered is the **raw** recommendation, never the damped one, so nothing feeds
+back on itself; and an empty history shrinks *sooner*, which is exactly the
+behaviour this replaced. A restart is therefore safe rather than merely
+survivable, and there is a test named for that.
 
 ### 4. A pending-task trigger for the fleet
 

@@ -1149,7 +1149,7 @@ class PanelTest(unittest.TestCase):
         self.create_app("noisy")
         asked = []
         real = self.panel.data.log_events
-        self.panel.data.log_events = lambda service, lines=200, since_ns=None: (
+        self.panel.data.log_events = lambda service, lines=200, since_ns=None, log_filter=None: (
             asked.append(lines) or ([{"at": "", "text": "a line", "level": ""}],
                                     None, ""))
         try:
@@ -1167,7 +1167,7 @@ class PanelTest(unittest.TestCase):
         """A choice the form offers and the route refuses is a dead control."""
         self.create_app("optioned")
         real = self.panel.data.log_events
-        self.panel.data.log_events = lambda service, lines=200, since_ns=None: (
+        self.panel.data.log_events = lambda service, lines=200, since_ns=None, log_filter=None: (
             [{"at": "", "text": "a line", "level": ""}], None, "")
         try:
             page = self.client.get(
@@ -1248,7 +1248,7 @@ class LivePanelTest(PanelTest):
         self.create_app("tailed")
         asked = []
         real = self.panel.data.log_events
-        self.panel.data.log_events = lambda service, lines=200, since_ns=None: (
+        self.panel.data.log_events = lambda service, lines=200, since_ns=None, log_filter=None: (
             asked.append(since_ns) or ([{"at": "10:00:00", "text": "hello",
                                          "level": "err"}], 42, ""))
         try:
@@ -1262,11 +1262,79 @@ class LivePanelTest(PanelTest):
         self.assertTrue(body.startswith("<!--cursor:42-->"))
         self.assertIn('class="line lvl-err"', body)
 
+    def test_the_filter_reaches_loki_rather_than_the_lines_on_screen(self):
+        """
+        The whole point. A filter applied to the answer would narrow the two
+        hundred lines already fetched; this one narrows the query, so Loki
+        searches everything it has kept.
+        """
+        self.create_app("searched")
+        seen = []
+        real = self.panel.data.log_events
+        self.panel.data.log_events = (
+            lambda service, lines=200, since_ns=None, log_filter=None: (
+                seen.append(log_filter) or ([], None, "")))
+        try:
+            self.client.get("/components/searched"
+                            "?tab=logs&q=timeout&exclude=healthz&level=warn")
+        finally:
+            self.panel.data.log_events = real
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0].logql().count("`"), 6)
+        self.assertIn("|= `timeout`", seen[0].logql())
+        self.assertIn("!= `healthz`", seen[0].logql())
+
+    def test_the_follower_is_narrowed_the_same_way_as_the_page(self):
+        """
+        Otherwise the pane fills up with exactly the lines the filter was
+        excluding, which reads as the filter not working.
+        """
+        self.create_app("followed")
+        page = self.client.get(
+            "/components/followed?tab=logs&q=boom&level=err").get_data(as_text=True)
+        stream = page.split('data-logs-url="')[1].split('"')[0]
+        self.assertIn("q=boom", stream)
+        self.assertIn("level=err", stream)
+
+        seen = []
+        real = self.panel.data.log_events
+        self.panel.data.log_events = (
+            lambda service, lines=200, since_ns=None, log_filter=None: (
+                seen.append((since_ns, log_filter.contains)) or ([], None, "")))
+        try:
+            self.client.get(stream.replace("&amp;", "&") + "&since=5")
+        finally:
+            self.panel.data.log_events = real
+        self.assertEqual(seen, [(5, "boom")])
+
+    def test_a_broken_regex_shows_a_message_instead_of_a_stack_trace(self):
+        self.create_app("badregex")
+        page = self.client.get(
+            "/components/badregex?tab=logs&q=a(&regex=on").get_data(as_text=True)
+        self.assertIn("not a valid regex", page)
+
+    def test_a_filter_that_is_on_offers_a_way_back_off(self):
+        """A narrowing with no visible undo is a page people reload to escape."""
+        self.create_app("clearable")
+        page = self.client.get(
+            "/components/clearable?tab=logs&q=x").get_data(as_text=True)
+        self.assertIn(">Clear<", page)
+        plain = self.client.get(
+            "/components/clearable?tab=logs").get_data(as_text=True)
+        self.assertNotIn(">Clear<", plain)
+
+    def test_the_filter_survives_a_reload_because_it_is_in_the_url(self):
+        self.create_app("bookmarked")
+        page = self.client.get(
+            "/components/bookmarked?tab=logs&q=needle&regex=on").get_data(as_text=True)
+        self.assertIn('value="needle"', page)
+        self.assertIn('name="regex" checked', page)
+
     def test_a_junk_cursor_is_a_first_page_not_an_error(self):
         self.create_app("junked")
         asked = []
         real = self.panel.data.log_events
-        self.panel.data.log_events = lambda service, lines=200, since_ns=None: (
+        self.panel.data.log_events = lambda service, lines=200, since_ns=None, log_filter=None: (
             asked.append(since_ns) or ([], None, ""))
         try:
             for query in ("", "?since=", "?since=drop+table", "?since=-1"):

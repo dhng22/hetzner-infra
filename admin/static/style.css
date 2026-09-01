@@ -1021,3 +1021,16 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
 .bullet-mark.is-warn { background: var(--warn); }
 .bullet-mark.is-bad { background: var(--bad); }
 .bullet-value { font: 400 11px var(--mono); text-align: right; }
+
+/* --- log filter --------------------------------------------------------------
+   Its own row under the panel head rather than squeezed into it: two text
+   inputs, two selects and a checkbox do not belong on the same line as a
+   heading, and on a narrow screen they wrap into something unreadable there.
+   -------------------------------------------------------------------------- */
+.log-filter { padding: 0 var(--s-4) var(--s-3); border-bottom: 1px solid var(--line); }
+.log-filter-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.log-filter-row input[type="search"] { flex: 1 1 180px; min-width: 0; }
+.log-filter-row select { flex: 0 0 auto; }
+.log-filter-regex { flex: 0 0 auto; white-space: nowrap; }
+.log-filter .hint { margin-top: 6px; }
+.hint.is-bad { color: var(--bad); }

@@ -767,6 +767,13 @@ def export_service_metrics(found, targets, verdicts, running, pending):
 # what a verdict becomes
 # ---------------------------------------------------------------------------
 
+#: The recommendation history behind a shrink, mirroring the overseer's. Both
+#: run the same function over the same numbers, so they agree about when a
+#: smaller count has been the answer for long enough; and because the record is
+#: the RAW recommendation, neither can feed its own damping back into itself.
+_stabilizer = workloads.Stabilizer()
+
+
 def target_replicas(workload, verdict):
     """
     The count to write, from the dispatched direction and ceiling.
@@ -787,8 +794,20 @@ def target_replicas(workload, verdict):
     current = workload.spec_replicas
     if not verdict:
         return current
-    want = workloads.bounded(
-        policy, workloads.desired_replicas(policy, verdict.get("direction"), current))
+    raw = workloads.bounded(policy, workloads.desired_replicas(
+        policy, verdict.get("direction"), current,
+        held=(verdict.get("latency_ms"), verdict.get("cpu_pct"),
+              verdict.get("mem_pct")),
+        # Absent from a verdict an older overseer sent, which reads as "no
+        # measurement" and falls back to the single-replica step this used to
+        # always take. That is what makes the two deployable in either order.
+        peak=(verdict.get("latency_peak_ms"), verdict.get("cpu_peak_pct"),
+              verdict.get("mem_peak_pct"))))
+    # A smaller count has to keep being the answer before it is written. Growth
+    # is never delayed — being slow to add capacity is an outage, being slow to
+    # remove it is a bill.
+    want = _stabilizer.stabilise(workload.name, raw, current,
+                                 policy.stabilize_down, time.time())
     ceiling = verdict.get("replica_ceiling")
     if ceiling is None:
         return want
@@ -885,6 +904,9 @@ def loop():
         log.warning("holding: the service list is unreadable")
         return
     M_MANAGED.set(len(found))
+    # Bounded: a component that is deleted must not keep a shrink history alive
+    # for the lifetime of the process.
+    _stabilizer.forget({w.name for w in found})
 
     # 2. INVENTORY, for the two things this loop reads Swarm placement for:
     #    the stalled-handover nudge and the running/pending counts.

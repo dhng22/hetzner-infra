@@ -20,6 +20,7 @@ shared code would belong to neither. Both default to no-ops so this is usable
 from a test or a script with no wiring at all.
 """
 
+import math
 import re
 from collections import namedtuple
 
@@ -162,8 +163,30 @@ Policy = namedtuple("Policy", [
     # memory is not: a replica near its limit is one allocation from an OOM
     # kill, which no amount of latency headroom warns you about.
     "up_mem", "down_mem",
+    # The most of itself a service may shed in one step, as `up_factor` is the
+    # most it may add. Scaling down used to be a flat -1, which took eighteen
+    # cooldowns to walk 20 replicas back to 2 and cost money the whole way.
+    "down_factor",
+    # How long a SMALLER count has to keep being the answer before it is acted
+    # on. Kubernetes calls this `behavior.scaleDown.stabilizationWindowSeconds`;
+    # it damps the recommendation, where `sustain_down` damps the signal.
+    "stabilize_down",
 ])
 
+
+#: The most of itself a service may shed in one step. Symmetric with
+#: `up_factor`'s default on purpose — the ASYMMETRY that keeps scaling
+#: conservative lives in the windows (90s up, 900s down) and in the stabilizer
+#: below, not in the size of the step. Halving is also provably safe against
+#: CPU: a service may only shrink when its peak per-replica CPU is under
+#: `down_cpu` (30%), so after halving it is near 60%, still under `up_cpu` (70%).
+DOWN_FACTOR = 0.5
+
+#: How long a smaller count has to keep being the answer. Kubernetes' default
+#: for the same idea is 300s and this is the same number for the same reason:
+#: long enough that one quiet minute does not shed capacity, short enough that
+#: an idle evening is not paid for. 0 turns it off.
+STABILIZE_DOWN = 300
 
 #: How busy a replica has to be before a latency breach counts as ITS problem.
 #: Imported rather than restated: the overseer reads the same two numbers off
@@ -259,7 +282,8 @@ def fixed_policy(spec_replicas, labels=None, service_name=""):
     return Policy(False, fixed, fixed, t["slo_ms"], t["up_ratio"], t["down_ratio"],
                   t["up_cpu"], t["down_cpu"], t["sustain_up"], t["sustain_down"],
                   0.5, 60, 100, t["histogram"], t["unit"], t["histogram_explicit"],
-                  t["busy_cpu"], t["busy_mem"], t["up_mem"], t["down_mem"])
+                  t["busy_cpu"], t["busy_mem"], t["up_mem"], t["down_mem"],
+                  DOWN_FACTOR, STABILIZE_DOWN)
 
 
 def policy_from_labels(service_name, labels, spec_replicas):
@@ -300,6 +324,10 @@ def policy_from_labels(service_name, labels, spec_replicas):
             _label_num(labels, "autoscale.priority", 100, int, 0, 1000, service_name),
             t["histogram"], t["unit"], t["histogram_explicit"],
             t["busy_cpu"], t["busy_mem"], t["up_mem"], t["down_mem"],
+            _label_num(labels, "autoscale.down_factor", DOWN_FACTOR, float,
+                       0.01, 1.0, service_name),
+            _label_num(labels, "autoscale.stabilize_down_seconds", STABILIZE_DOWN,
+                       int, 0, 3600, service_name),
         )
     except Exception as exc:  # noqa: BLE001
         on_error("policy")
@@ -509,7 +537,41 @@ def discover_workloads(dkr, on_skip=None):
 # a direction, turned into a count
 # ---------------------------------------------------------------------------
 
-def desired_replicas(policy, direction, current):
+def aim(low, high):
+    """
+    The load a replica should be carrying: the middle of its own band.
+
+    Not the scale-up line and not the scale-down one. A count that lands exactly
+    on the up threshold scales up again on the next loop, and one that lands on
+    the down threshold scales down again — the only resting point is between
+    them, so that is what the arithmetic below aims at. It is derived from the
+    service's OWN thresholds rather than being a constant, so a component that
+    moves its band moves its target with it and nothing here has to know.
+    """
+    return (low + high) / 2.0
+
+
+def _by_ratio(current, value, target):
+    """
+    How many replicas it would take to bring `value` down to `target`.
+
+    Kubernetes' HPA arithmetic — `ceil(current × metric / target)` — and it is
+    here for the reason HPA has it: a fixed step converges at a rate that has
+    nothing to do with how far over the line the service actually is. A service
+    at four times its target crawled there in several loops of ×1.5.
+
+    Only CPU and memory are ever passed in. LATENCY DELIBERATELY IS NOT: it is
+    not linear in replica count and it is not even necessarily caused by this
+    service (see `classify.decide`), so a request that took five times the SLO
+    is not a request for five times the replicas. Latency still triggers a
+    scale-up; it just gets the conservative step rather than a multiplier.
+    """
+    if value is None or current <= 0 or target <= 0:
+        return None
+    return int(math.ceil(current * value / target))
+
+
+def desired_replicas(policy, direction, current, held=None, peak=None):
     """
     A DIRECTION turned into a replica count, within this service's own bounds.
 
@@ -524,15 +586,113 @@ def desired_replicas(policy, direction, current):
     HOLD. A missing verdict is not "nothing is wrong", it is "nobody has told us
     anything", and the two are only the same when the fleet is allowed to drift
     on a guess.
+
+    `held` and `peak` are the same `(latency_ms, cpu_pct, mem_pct)` triples
+    `classify.decide` judged — the sustained minimum over the scale-up window
+    and the maximum over the scale-down one. They are OPTIONAL, and when they
+    are absent this falls back to the fixed step it used to always take. That
+    matters: a missing cadvisor series must produce a cautious number, never an
+    arbitrary one computed from a gap.
+
+    The factors are now CAPS rather than the step itself. Nothing scales up
+    faster than `up_factor` ever allowed; what changed is that it can scale up
+    by less when less is called for, and down by more than one replica when the
+    service is plainly idle.
     """
     if not policy.autoscale or not direction:
         return current
+
+    cpu_aim = aim(policy.down_cpu, policy.up_cpu)
+    mem_aim = aim(policy.down_mem, policy.up_mem)
+
+    def ratio(reading):
+        """
+        The count the measurements ask for, or None when there are none.
+
+        `None` and `0` are different answers and the callers below test for the
+        first explicitly: a service measured at zero load legitimately wants as
+        few replicas as its floor allows, and reading that as "no measurement"
+        would quietly give it the one-replica step instead of the shrink it
+        earned.
+        """
+        _lat, cpu, mem = reading or (None, None, None)
+        wanted = [n for n in (_by_ratio(current, cpu, cpu_aim),
+                              _by_ratio(current, mem, mem_aim)) if n is not None]
+        # The MAX, as HPA does across its metrics: the resource that needs the
+        # most replicas is the one that decides, because satisfying it satisfies
+        # the others and satisfying any other one leaves it still over the line.
+        return max(wanted) if wanted else None
+
     if direction == classify.DIRECTION_UP:
-        step = max(1, int(current * policy.up_factor))
-        return min(policy.max_replicas, current + step)
+        ceiling = current + max(1, int(current * policy.up_factor))
+        wanted = ratio(held)
+        # `current + 1` because up means up: a latency breach with modest CPU
+        # produces a ratio BELOW the current count, and answering a scale-up
+        # with a scale-down would be a control loop arguing with itself.
+        step = (max(current + 1, min(ceiling, wanted))
+                if wanted is not None else ceiling)
+        return min(policy.max_replicas, step)
+
     if direction == classify.DIRECTION_DOWN and current > policy.min_replicas:
-        return current - 1
+        floor = current - max(1, int(current * policy.down_factor))
+        wanted = ratio(peak)
+        step = (min(current - 1, max(floor, wanted))
+                if wanted is not None else current - 1)
+        return max(policy.min_replicas, step)
+
     return current
+
+
+class Stabilizer:
+    """
+    A shrink has to keep being the answer before it is acted on.
+
+    `sustain_down` already damps the SIGNAL — a service must be quiet for the
+    whole 900-second window before `decide` will say down at all. This damps the
+    RECOMMENDATION, which is a different thing and only became worth having once
+    the count above stopped being a flat -1: a metric that oscillates either side
+    of the window boundary now produces a count that oscillates with it, and the
+    replica count would follow.
+
+    Kubernetes does exactly this (`behavior.scaleDown.stabilizationWindowSeconds`,
+    default 300s) and takes the MAXIMUM recommendation over the window when
+    scaling down. So does this.
+
+    It is the only state in either control loop that is not re-derived every
+    pass, which is a property worth protecting — it is why a restart mid-decision
+    is harmless. Two things keep the cost bounded: what is remembered is the RAW
+    recommendation and never the damped one, so nothing feeds back on itself;
+    and losing the history means shrinking sooner, which is exactly the
+    behaviour this replaced. A restart is therefore safe, not merely survivable.
+    """
+
+    def __init__(self):
+        self._seen = {}                       # name -> [(at, raw_want), ...]
+
+    def stabilise(self, name, want, current, window, now):
+        """
+        The count to act on, having recorded `want` as the latest raw answer.
+
+        Growing is never delayed — Kubernetes' own scale-up stabilization window
+        defaults to zero for the same reason. Being slow to add capacity is an
+        outage; being slow to remove it is a bill.
+        """
+        history = self._seen.setdefault(name, [])
+        history.append((now, want))
+        if window > 0:
+            cutoff = now - window
+            del history[:next((i for i, (at, _) in enumerate(history)
+                               if at >= cutoff), len(history))]
+        else:
+            del history[:-1]
+        if want >= current:
+            return want
+        return max(w for _, w in history)
+
+    def forget(self, live_names):
+        """Drop services that no longer exist, so this cannot grow forever."""
+        for name in [n for n in self._seen if n not in live_names]:
+            del self._seen[name]
 
 
 def bounded(policy, count):

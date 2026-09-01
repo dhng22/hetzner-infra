@@ -609,6 +609,22 @@ def busy_components():
 Reading = namedtuple("Reading", ["held", "peak"])
 EMPTY = Reading((None, None, None), (None, None, None))
 
+#: The recommendation history behind a shrink. One per process, shared by every
+#: service, pruned each loop against what still exists.
+_stabilizer = workloads.Stabilizer()
+
+
+def _held_of(verdict):
+    """The scale-up triple as it travels in a verdict."""
+    return (verdict.get("latency_ms"), verdict.get("cpu_pct"), verdict.get("mem_pct"))
+
+
+def _peak_of(verdict):
+    """The scale-down triple. Absent from an older verdict, which reads as
+    "no measurement" and falls back to the single-replica step."""
+    return (verdict.get("latency_peak_ms"), verdict.get("cpu_peak_pct"),
+            verdict.get("mem_peak_pct"))
+
 
 def measure(services):
     """
@@ -2749,11 +2765,20 @@ def loop():
     #    replicas that will be created, never for a number nobody asked for.
     live = {w.name: w.spec_replicas for w in found}
     wants = {}
+    now = time.time()
     for w in found:
-        direction = decided.get(w.name, {}).get("direction")
-        wants[w.name] = workloads.bounded(
-            w.policy, workloads.desired_replicas(w.policy, direction, w.spec_replicas))
+        verdict = decided.get(w.name, {})
+        raw = workloads.bounded(w.policy, workloads.desired_replicas(
+            w.policy, verdict.get("direction"), w.spec_replicas,
+            held=_held_of(verdict), peak=_peak_of(verdict)))
+        # Stabilised HERE as well as in the autoscaler, from the same function
+        # and the same numbers, because this total is what the fleet is sized
+        # from. Sizing for a shrink the autoscaler is going to damp would delete
+        # a worker whose replicas are still running on it.
+        wants[w.name] = _stabilizer.stabilise(
+            w.name, raw, w.spec_replicas, w.policy.stabilize_down, now)
         S_WANTED.labels(w.name).set(wants[w.name])
+    _stabilizer.forget({w.name for w in found})
 
     demand = workloads.ZERO
     for w in found:
@@ -2903,9 +2928,19 @@ def judge(watched):
         lat, cpu, mem = reading.held
         if lat is not None:
             G_LATENCY.labels(s.name).set(lat)
+        peak_lat, peak_cpu, peak_mem = reading.peak
         decided[s.name] = {"service": s.name, "direction": direction, "reason": reason,
                            "cause": classify.CAUSE_LOCAL, "target": None,
                            "latency_ms": lat, "cpu_pct": cpu, "mem_pct": mem,
+                           # The scale-DOWN side of the same measurement. Only
+                           # the held values used to cross the wire, so the
+                           # autoscaler could see that a service was busy and
+                           # never how idle it had been — which is the number a
+                           # proportional shrink is computed from. Unknown keys
+                           # are ignored by both ends, so an old autoscaler
+                           # reading a new verdict simply keeps its old -1 step.
+                           "latency_peak_ms": peak_lat, "cpu_peak_pct": peak_cpu,
+                           "mem_peak_pct": peak_mem,
                            "enabled": s.enabled}
         if direction == classify.DIRECTION_HOLD and reason:
             needs_cause.append((s, cpu, mem))

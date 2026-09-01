@@ -550,7 +550,7 @@ def deployments(name, service_name, limit=25):
     return state.history(name, limit=limit), live
 
 
-def _loki_rows(service_name, lines, since_ns=None):
+def _loki_rows(service_name, lines, since_ns=None, log_filter=None):
     """
     `[(timestamp_ns, text), ...]` from Loki, or None if Loki could not answer.
 
@@ -561,14 +561,23 @@ def _loki_rows(service_name, lines, since_ns=None):
     `since_ns` is the tail cursor. Loki's `start` is inclusive, so it is nudged
     by one nanosecond — without that, every poll re-delivers the newest line it
     already showed, forever.
+
+    A filter is appended to the SELECTOR rather than applied to the answer, so
+    the search runs over the whole retained window on Loki's side. Filtering
+    afterwards would only ever narrow the two hundred lines already fetched,
+    which is a highlighter and not a search — the line you are looking for is
+    usually not among them.
     """
     now = _dt.datetime.now(_dt.timezone.utc).timestamp()
     start = int(since_ns) + 1 if since_ns else int((now - LOG_WINDOW_SECONDS) * 1e9)
+    selector = '{swarm_service="%s"}' % service_name.replace('"', '')
+    if log_filter is not None:
+        selector += log_filter.logql()
     try:
         resp = requests.get(
             f"{LOKI_URL}/loki/api/v1/query_range",
             params={
-                "query": '{swarm_service="%s"}' % service_name.replace('"', ''),
+                "query": selector,
                 "start": start,
                 "end": int(now * 1e9),
                 "limit": lines,
@@ -589,7 +598,7 @@ def _loki_rows(service_name, lines, since_ns=None):
     return rows
 
 
-def log_events(service_name, lines=200, since_ns=None):
+def log_events(service_name, lines=200, since_ns=None, log_filter=None):
     """
     A service's log lines as rows the template can style, plus a tail cursor.
 
@@ -612,7 +621,12 @@ def log_events(service_name, lines=200, since_ns=None):
     no timestamps we can trust as a cursor, so it reports None and the tab falls
     back to being a snapshot — correct, and visibly not live.
     """
-    rows = _loki_rows(service_name, lines, since_ns)
+    if log_filter is not None and log_filter.problem:
+        # Operator input that cannot be run. Saying so beats both a stack trace
+        # and an empty page that looks like a quiet service.
+        return [], since_ns, log_filter.problem
+
+    rows = _loki_rows(service_name, lines, since_ns, log_filter)
     if rows:
         return shape.log_rows(rows), rows[-1][0], ""
     if rows == [] and since_ns:
@@ -632,11 +646,20 @@ def log_events(service_name, lines=200, since_ns=None):
         return [], None, f"Could not read logs for {service_name}: {exc}"
 
     if out:
-        return shape.log_rows([(None, line) for line in out.splitlines()]), None, ""
+        # Filtered here because `docker service logs` cannot be asked to. Same
+        # object, same decision — a line the tab would colour as a warning is a
+        # line the "warnings and errors" filter keeps, whichever source answered.
+        kept = [line for line in out.splitlines()
+                if log_filter is None or log_filter.matches(line)]
+        if kept:
+            return shape.log_rows([(None, line) for line in kept]), None, ""
     if rows is None:
         return [], None, (f"Could not reach Loki at {LOKI_URL}, and the Docker CLI has "
                           f"no local logs for {service_name}. Check "
                           f"`docker service ls | grep loki`.")
+    if log_filter is not None and log_filter.active:
+        return [], since_ns, (f"Nothing from {service_name} in the last 24h matches "
+                              f"that filter.")
     return [], since_ns, f"No log output from {service_name} in the last 24h."
 
 

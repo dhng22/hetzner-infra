@@ -76,6 +76,11 @@ class ContractTest(unittest.TestCase):
 
     def setUp(self):
         A._dispatched.clear()
+        # The shrink history is the one piece of state the autoscaler carries
+        # between loops, so it also carries between tests in one process. An
+        # empty set means "no service exists any more", which is exactly the
+        # reset a fresh test wants.
+        A._stabilizer.forget(())
         self.manager = D.Manager("autoscaler", frozenset({classify.CAUSE_LOCAL}),
                                  f"http://127.0.0.1:{self.port}/signal")
 
@@ -83,6 +88,8 @@ class ContractTest(unittest.TestCase):
         verdict = {"service": "api_app", "direction": direction, "reason": reason,
                    "cause": cause, "target": None, "latency_ms": 904.0,
                    "cpu_pct": 40.0, "mem_pct": 12.0,
+                   "latency_peak_ms": 120.0, "cpu_peak_pct": 8.0,
+                   "mem_peak_pct": 20.0,
                    "replica_ceiling": 8, "pinned": False}
         verdict.update(extra)
         self.assertTrue(D.deliver(self.manager, [verdict]),
@@ -99,6 +106,24 @@ class ContractTest(unittest.TestCase):
 
     def test_a_dispatched_down_arrives_and_shrinks(self):
         self.dispatch(classify.DIRECTION_DOWN)
+        w = workload("api_app", min_replicas=1, max_replicas=8)._replace(spec_replicas=4)
+        # 8% peak CPU against a band whose middle is 50%: four replicas are
+        # doing the work of one, so the shrink is proportional rather than -1.
+        self.assertEqual(A.target_replicas(w, A.dispatched_for("api_app")), 2)
+
+    def test_a_verdict_with_no_peaks_still_shrinks_by_one(self):
+        """
+        An overseer that predates the peak fields, talking to this autoscaler.
+        Unknown keys are ignored in both directions, so the pair has to
+        interoperate for the length of a rollout — and a missing measurement
+        must fall back to the cautious step, never to a number invented from a
+        gap.
+        """
+        verdict = self.dispatch(classify.DIRECTION_DOWN)
+        for key in ("latency_peak_ms", "cpu_peak_pct", "mem_peak_pct"):
+            verdict.pop(key)
+        A._dispatched.clear()
+        self.assertTrue(D.deliver(self.manager, [verdict]))
         w = workload("api_app", min_replicas=1, max_replicas=8)._replace(spec_replicas=4)
         self.assertEqual(A.target_replicas(w, A.dispatched_for("api_app")), 3)
 
@@ -125,6 +150,11 @@ class ContractTest(unittest.TestCase):
         got = A.dispatched_for("api_app")
         for key in ("service", "direction", "reason", "cause", "target",
                     "latency_ms", "cpu_pct", "mem_pct",
+                    # The scale-DOWN half of the same measurement. Only the held
+                    # values used to cross, so the autoscaler could see that a
+                    # service was busy and never how idle it had been — which is
+                    # the number a proportional shrink is computed from.
+                    "latency_peak_ms", "cpu_peak_pct", "mem_peak_pct",
                     # Added when the fleet moved: the autoscaler no longer packs
                     # anything, so what fits and where it may run have to cross
                     # the wire or it cannot act on either.

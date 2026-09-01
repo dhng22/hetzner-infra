@@ -213,3 +213,85 @@ class LogShapeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LogFilterTest(unittest.TestCase):
+    """
+    Narrowing the Logs tab.
+
+    The property that matters most is where the narrowing HAPPENS: it becomes a
+    LogQL line filter, so Loki searches everything it has retained. Filtering
+    the answer instead would only narrow the two hundred lines already on
+    screen, and the line anyone is hunting is usually not among them.
+    """
+
+    def test_an_empty_filter_changes_the_query_not_at_all(self):
+        f = shape.LogFilter()
+        self.assertFalse(f.active)
+        self.assertEqual(f.logql(), "")
+        self.assertTrue(f.matches("anything at all"))
+
+    def test_text_becomes_a_line_filter_loki_can_run(self):
+        f = shape.LogFilter(contains="timeout", excludes="/healthz")
+        self.assertEqual(f.logql(), " |= `timeout` != `/healthz`")
+
+    def test_regex_switches_the_operators_rather_than_quoting_the_pattern(self):
+        f = shape.LogFilter(contains="tim(e|)out", excludes="health.*", regex=True)
+        self.assertEqual(f.logql(), " |~ `tim(e|)out` !~ `health.*`")
+
+    def test_a_level_filter_uses_the_same_patterns_that_colour_the_line(self):
+        """
+        If the filter and the colour disagreed, "errors only" could hide a line
+        the page had just drawn in red — which is the sort of thing that costs
+        an hour before anyone doubts the tool.
+        """
+        expression = shape.LogFilter(level="err").logql()
+        for name, source in shape.LEVEL_PATTERNS:
+            if name == "err":
+                self.assertIn(source, expression)
+
+    def test_warnings_and_errors_never_hides_the_more_severe_one(self):
+        """A severity filter that excluded the worse thing would be a trap."""
+        f = shape.LogFilter(level="warn")
+        self.assertTrue(f.matches("WARN slow"))
+        self.assertTrue(f.matches("ERROR boom"))
+        self.assertFalse(f.matches("INFO fine"))
+        self.assertIn(dict(shape.LEVEL_PATTERNS)["err"], f.logql())
+
+    def test_errors_only_really_means_only(self):
+        f = shape.LogFilter(level="err")
+        self.assertTrue(f.matches("ERROR boom"))
+        self.assertFalse(f.matches("WARN slow"))
+
+    def test_a_broken_regex_is_reported_and_never_run(self):
+        f = shape.LogFilter(contains="a(", regex=True)
+        self.assertTrue(f.problem)
+        self.assertFalse(f.active)
+        self.assertEqual(f.logql(), "")
+
+    def test_a_backtick_is_refused_because_logql_cannot_quote_one(self):
+        """
+        LogQL raw strings are backtick-delimited and have no escape for a
+        backtick. Dropping the character would silently search for something
+        else, so this refuses instead.
+        """
+        f = shape.LogFilter(contains="a`b")
+        self.assertTrue(f.problem)
+        self.assertFalse(f.active)
+
+    def test_the_python_side_agrees_with_the_query_it_would_have_sent(self):
+        """
+        The CLI fallback cannot be asked to filter, so the same object does it
+        in Python. Both halves have to make the same decision or the two sources
+        would show different logs for the same filter.
+        """
+        f = shape.LogFilter(contains="timeout", excludes="healthz", level="warn")
+        self.assertTrue(f.matches("WARN upstream timeout"))
+        self.assertFalse(f.matches("WARN /healthz timeout"))   # excluded
+        self.assertFalse(f.matches("INFO upstream timeout"))   # wrong level
+        self.assertFalse(f.matches("WARN upstream refused"))   # no match
+
+    def test_a_regex_that_is_valid_matches_the_same_way_in_both(self):
+        f = shape.LogFilter(contains=r"tenant=\d+", regex=True)
+        self.assertTrue(f.matches("throttled tenant=9931"))
+        self.assertFalse(f.matches("throttled tenant=acme"))

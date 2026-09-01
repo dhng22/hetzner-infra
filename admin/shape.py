@@ -408,10 +408,18 @@ def summary(service_fn, nodes, vm_query):
 #: Deliberately only two levels above "normal": a page where a third of the
 #: lines are coloured tells you nothing, and the reason anyone opens this tab is
 #: to find the one line that is not fine.
-_LOG_LEVELS = (
-    ("err", re.compile(r"\b(ERROR|FATAL|PANIC|SEVERE)\b|level=(error|fatal)", re.I)),
-    ("warn", re.compile(r"\bWARN(ING)?\b|level=warn(ing)?", re.I)),
+#:
+#: Kept as SOURCE rather than compiled patterns because the same expressions are
+#: handed to Loki to filter with. If the colour and the filter used different
+#: definitions of "an error", filtering to errors could hide a line the page had
+#: just drawn in red. Both are RE2-compatible, which is what Loki parses.
+LEVEL_PATTERNS = (
+    ("err", r"(?i)\b(ERROR|FATAL|PANIC|SEVERE)\b|level=(error|fatal)"),
+    ("warn", r"(?i)\bWARN(ING)?\b|level=warn(ing)?"),
 )
+
+_LOG_LEVELS = tuple((level, re.compile(source))
+                    for level, source in LEVEL_PATTERNS)
 
 
 def log_level(line):
@@ -420,6 +428,107 @@ def log_level(line):
         if pattern.search(line):
             return level
     return ""
+
+
+#: What the Logs tab may be narrowed to. `warn` means "warnings AND errors" —
+#: a severity filter that excluded the more severe thing would be a trap.
+LEVEL_CHOICES = (("", "any level"), ("warn", "warnings and errors"),
+                 ("err", "errors only"))
+
+
+class LogFilter:
+    """
+    A narrowing of the Logs tab, expressed once and applied in two places.
+
+    It becomes a LogQL line filter wherever Loki is answering, so the search
+    runs over the WHOLE retained window on Loki's side rather than over the two
+    hundred lines that happen to be on screen — which is the difference between
+    a filter and a highlighter. The same object also filters in Python, because
+    the `docker service logs` fallback cannot be asked to filter anything.
+
+    Never raises on operator input. A regex that does not compile is reported as
+    `problem` and the filter reports itself inactive, so the tab shows an
+    explanation instead of either a stack trace or a silently empty page.
+    """
+
+    def __init__(self, contains="", excludes="", level="", regex=False):
+        self.contains = (contains or "").strip()
+        self.excludes = (excludes or "").strip()
+        self.level = level if level in dict(LEVEL_CHOICES) else ""
+        self.regex = bool(regex)
+        self.problem = ""
+        self._match = None
+        self._drop = None
+
+        # LogQL raw strings are backtick-quoted and cannot contain a backtick.
+        # Refusing is better than escaping: there is no escape for it, and
+        # quietly dropping the character would search for something else.
+        for value in (self.contains, self.excludes):
+            if "`" in value:
+                self.problem = "A backtick cannot be searched for."
+                return
+        if self.regex:
+            for value, where in ((self.contains, "match"), (self.excludes, "exclude")):
+                if not value:
+                    continue
+                try:
+                    re.compile(value)
+                except re.error as exc:
+                    self.problem = f"The {where} pattern is not a valid regex: {exc}"
+                    return
+            self._match = re.compile(self.contains) if self.contains else None
+            self._drop = re.compile(self.excludes) if self.excludes else None
+
+    @property
+    def active(self):
+        return not self.problem and bool(self.contains or self.excludes or self.level)
+
+    def logql(self):
+        """
+        The line filters to append to a stream selector, or "".
+
+        Order matters for cost, not for correctness: the cheapest and most
+        selective filter first, so Loki discards most lines before running a
+        regular expression over them.
+        """
+        if not self.active:
+            return ""
+        parts = []
+        operator = "|~" if self.regex else "|="
+        negated = "!~" if self.regex else "!="
+        if self.contains:
+            parts.append(f"{operator} `{self.contains}`")
+        if self.excludes:
+            parts.append(f"{negated} `{self.excludes}`")
+        if self.level:
+            wanted = [source for name, source in LEVEL_PATTERNS
+                      if self.level == "warn" or name == self.level]
+            parts.append("|~ `" + "|".join(wanted) + "`")
+        return " " + " ".join(parts)
+
+    def matches(self, text):
+        """The same decision, in Python, for the CLI fallback."""
+        if not self.active:
+            return True
+        if self.level:
+            found = log_level(text)
+            if self.level == "err" and found != "err":
+                return False
+            if self.level == "warn" and found not in ("warn", "err"):
+                return False
+        if self.contains:
+            if self.regex:
+                if not self._match.search(text):
+                    return False
+            elif self.contains not in text:
+                return False
+        if self.excludes:
+            if self.regex:
+                if self._drop.search(text):
+                    return False
+            elif self.excludes in text:
+                return False
+        return True
 
 
 def log_rows(rows):

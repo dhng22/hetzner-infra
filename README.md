@@ -549,6 +549,11 @@ rolls production back:
   rename an exporter, grep for the old prefix, and check the new one actually
   answers.
 
+- **Scaling is proportional now, in both directions.** How far over or under
+  its line a service actually is decides how far it moves; `up_factor` and
+  `down_factor` are the caps, not the steps. A shrink also has to keep being the
+  answer for `stabilize_down_seconds` before it is acted on. If you tuned a
+  service around the old flat +50% / −1, re-read those three numbers.
 - **A component's SLO is the whole policy for that component.** If its real p95
   already exceeds it, the scaler runs to the ceiling on day one and
   `ReplicaCeiling` fires. Set it from a real latency distribution, not a wish.

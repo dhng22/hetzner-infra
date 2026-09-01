@@ -177,7 +177,7 @@ _LOG = """\
 """
 
 
-def log_events(service_name, lines=200, since_ns=None):
+def log_events(service_name, lines=200, since_ns=None, log_filter=None):
     """
     Mirrors swarm.log_events(). A poll after the first returns nothing new,
     which is the state the preview should show: a quiet service, following.
@@ -185,7 +185,10 @@ def log_events(service_name, lines=200, since_ns=None):
     if since_ns:
         return [], since_ns, ""
     rows = [(1755000000000000000 + i * 10**9, line)
-            for i, line in enumerate(_LOG.strip().splitlines())]
+            for i, line in enumerate(_LOG.strip().splitlines())
+            if log_filter is None or log_filter.matches(line)]
+    if not rows:
+        return [], since_ns, "Nothing in the last 24h matches that filter."
     return shape.log_rows(rows), rows[-1][0], ""
 
 
