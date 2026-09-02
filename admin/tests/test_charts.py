@@ -130,6 +130,169 @@ class ToneTest(unittest.TestCase):
         self.assertIn("OOM kills", svg)
 
 
+class AxisTest(unittest.TestCase):
+    """
+    A line with no scale on either edge is a shape, not a measurement. These
+    pin the furniture that makes it one — and pin it OUTSIDE the viewBox,
+    because the plot is stretched to the column width and text inside it would
+    be stretched with it.
+    """
+
+    def test_a_time_chart_says_what_both_planes_are(self):
+        for label, body in (
+                ("line", charts.line({"api": series(1.0, 2.0)}, "ms",
+                                     y="p95 latency (ms)", x="last 60 min")),
+                ("stack", charts.stack({"2xx": series(1.0, 2.0)}, "/s",
+                                       y="responses per second",
+                                       x="last 60 min")),
+                ("columns", charts.columns([{"name": "OOM", "value": 2.0}],
+                                           y="events counted"))):
+            with self.subTest(chart=label):
+                self.assertIn("chart-axes", body)
+                self.assertIn("y:", body)
+                self.assertIn("x:", body)
+
+    def test_the_axis_ends_are_printed_not_only_implied(self):
+        svg = charts.line({"api": series(10.0, 5407.0)}, "ms")
+        self.assertIn("chart-y", svg)
+        self.assertIn("chart-x", svg)
+        # Both ends of time, named relative to the newest sample: this module
+        # is pure and the reader's timezone is not one of its arguments.
+        self.assertIn("now", svg)
+        self.assertIn("1 min ago", svg)
+
+    def test_the_axis_top_is_a_number_somebody_would_write_down(self):
+        """A peak of 5407 gives an axis of 6k, not one labelled 5.4k."""
+        self.assertEqual(charts._nice(5407.0), 6000.0)
+        self.assertEqual(charts._nice(100.0), 100.0)
+        self.assertEqual(charts._nice(0.0), 1.0)
+        self.assertIn("6.0k", charts.line({"a": series(5407.0, 10.0)}))
+
+    def test_the_axis_top_is_never_below_the_peak_it_has_to_hold(self):
+        for peak in (0.004, 0.4, 7.0, 99.0, 101.0, 1234.0, 999999.0):
+            with self.subTest(peak=peak):
+                self.assertGreaterEqual(charts._nice(peak), peak)
+
+    def test_a_series_needs_no_legend_entry_it_has_no_colour_for(self):
+        """
+        Past the fourth series there is no distinct hue left, so a fifth named
+        legend row would claim a distinction the picture does not make.
+        """
+        many = {f"n{i}": series(1.0, 2.0) for i in range(7)}
+        legend = charts.line(many)
+        self.assertIn("+3 more", legend)
+        # Named in the legend is the claim; the line itself and its readout
+        # still carry every series, because those are not claiming a hue.
+        self.assertNotIn("</i>n6</span>", legend)
+        self.assertIn("n6 1.0", legend)
+
+
+class HoverTest(unittest.TestCase):
+    """
+    The readout. `data-tip` is handled globally and by delegation in app.js, so
+    these charts get a no-delay tooltip with no chart-specific JavaScript — and
+    keep it after the live poll replaces the markup, which a listener bound to
+    a chart element would not survive.
+    """
+
+    def test_every_sample_carries_its_own_reading(self):
+        svg = charts.line({"api": series(1.0, 2.0, 3.0)}, "ms")
+        self.assertEqual(svg.count('class="chart-slice"'), 3)
+        self.assertIn("now · api 3.0ms", svg)
+        self.assertIn("2 min ago · api 1.0ms", svg)
+
+    def test_the_slices_cover_the_plot_with_no_dead_ground(self):
+        """Every pixel belongs to one sample, so there is nowhere that answers
+        nothing."""
+        svg = charts.line({"a": series(1.0, 2.0, 3.0, 4.0)})
+        edges = [(float(x), float(w)) for x, w in
+                 re.findall(r'chart-slice" x="([\d.]+)" y="[\d.]+" width="([\d.]+)"',
+                            svg)]
+        self.assertEqual(len(edges), 4)
+        self.assertAlmostEqual(edges[0][0], charts.PAD_L, places=1)
+        for (x, w), (nxt, _) in zip(edges, edges[1:]):
+            self.assertAlmostEqual(x + w, nxt, places=1)
+        self.assertAlmostEqual(edges[-1][0] + edges[-1][1],
+                               charts.W - charts.PAD_R, places=1)
+
+    def test_a_stack_reads_out_each_layer_not_the_running_total(self):
+        """
+        The stacked HEIGHT is what the picture already shows. What it cannot
+        show is which part of it belongs to which colour.
+        """
+        svg = charts.stack({"2xx": [(0, 3.0)], "5xx": [(0, 1.0)]}, "/s")
+        self.assertIn("2xx 3.0/s", svg)
+        self.assertIn("5xx 1.0/s", svg)
+        self.assertIn("total 4.0/s", svg)
+
+    def test_a_gap_is_left_out_of_the_readout_rather_than_carried(self):
+        """
+        A line has to join two points across a gap; a tooltip does not, and one
+        that did would be reporting a measurement nobody took.
+        """
+        svg = charts.line({"a": [(0, 1.0), (60, 2.0)], "b": [(0, 5.0)]})
+        self.assertIn("1 min ago · a 1.0, b 5.0", svg)
+        self.assertIn("now · a 2.0", svg)
+        self.assertNotIn("now · a 2.0, b", svg)
+
+    def test_a_series_name_cannot_break_out_of_the_readout(self):
+        svg = charts.line({'" onmouseover="x': series(1.0)})
+        self.assertNotIn('onmouseover="x', svg)
+
+    def test_two_bullets_in_one_card_say_which_is_which(self):
+        """Two unlabelled bullets are two identical pictures of two different
+        resources, and the reader has only their order to go on."""
+        body = (charts.bullet(10.0, 70, 80, label="CPU")
+                + charts.bullet(20.0, 70, 80, label="memory"))
+        self.assertIn("CPU", body)
+        self.assertIn("memory", body)
+        self.assertEqual(body.count("bullet-scale"), 2)
+        self.assertIn("0 → 100%", body)
+
+
+class WindowTest(unittest.TestCase):
+    """
+    The measure window, on every card. A 5-minute rate and an hour's total are
+    drawn identically; only this line separates them.
+    """
+
+    def test_the_window_is_read_out_of_the_query_not_typed_beside_it(self):
+        self.assertEqual(shape._window("", "increase(node_vmstat_oom_kill[3h])"),
+                         "totalled over 3h")
+        self.assertEqual(shape._window("now", "sum by (i) (rate(x[90s]))"),
+                         "now · rate over 90s")
+        # Two rates over the same window are one fact, not two.
+        self.assertEqual(shape._window("", "rate(a[5m]) / rate(b[5m])"),
+                         "rate over 5m")
+        # A bare gauge has no lookback to report, and does not invent one.
+        self.assertEqual(shape._window("now", "overseer_cluster_cpu_percent"),
+                         "now")
+
+    def test_every_card_states_the_span_it_measured_over(self):
+        sections = shape.observability(
+            lambda expr, minutes, step, label=None: {},
+            lambda expr: None, charts)
+        for section in sections:
+            for card in section["cards"]:
+                with self.subTest(card=f'{section["key"]}/{card["title"]}'):
+                    self.assertTrue(card["window"])
+
+    def test_a_current_reading_is_not_dressed_up_as_a_range(self):
+        """
+        Utilisation and cluster saturation are the newest sample, not the hour
+        the charts beside them draw. Saying "last 60 min" over a single reading
+        is the confusion this line exists to remove.
+        """
+        sections = shape.observability(
+            lambda expr, minutes, step, label=None: {},
+            lambda expr: None, charts)
+        cards = {(s["key"], c["title"]): c["window"]
+                 for s in sections for c in s["cards"]}
+        self.assertTrue(cards[("use", "Utilisation")].startswith(shape.LATEST_SPAN))
+        self.assertEqual(cards[("golden", "Saturation")], shape.LATEST_SPAN)
+        self.assertTrue(cards[("red", "Duration")].startswith(shape.RANGE_SPAN))
+
+
 class ColumnTest(unittest.TestCase):
     """The assembled RED / USE / Golden column."""
 

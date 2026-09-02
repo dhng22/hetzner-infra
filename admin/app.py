@@ -230,6 +230,7 @@ def _globals():
         # question you have on every other page too.
         "infra": data.infra_version(),
         "types": components.TYPES,
+        "obs_refresh": shape.OBS_REFRESH_SECONDS,
         "system_access": system_access,
         "section_href": _section_href,
         "component_href": _component_href,
@@ -1624,10 +1625,21 @@ def save_settings():
     values = envstore.load_infra()
     updates = {}
     for key in request.form.getlist("key"):
-        if not settings_def.editable(key) or key not in values:
+        if not settings_def.editable(key):
+            continue
+        # Compared against the SAME value the row was rendered from, which for
+        # a setting this cluster's infra.env predates is the repo's default.
+        # Requiring the key to already be in the file was a silent refusal of
+        # exactly the saves `envstore.save_infra` grew its append path for: the
+        # row renders, the form submits, the flash says nothing changed, and
+        # the knob is unreachable on any cluster older than it is. `editable()`
+        # is the check that matters — an unlisted key is not editable, so a
+        # hand-made POST still cannot write one.
+        current = values.get(key, settings_def.DEFAULTS.get(key))
+        if current is None:
             continue
         submitted = request.form.get(f"value__{key}")
-        if submitted is not None and submitted.strip() != values[key]:
+        if submitted is not None and submitted.strip() != current:
             updates[key] = submitted.strip()
 
     if not updates:
@@ -1649,8 +1661,51 @@ def save_settings():
         messages.append(f"{stack}: {'redeployed' if ok else 'deploy failed — ' + output}")
     if not stacks:
         messages.append("No redeploy needed for these values.")
+
+    ok, note = _repo_check(changed)
+    if note:
+        all_ok = all_ok and ok
+        messages.append(note)
     flash(" ".join(messages), "ok" if all_ok else "bad")
     return redirect(url_for("settings"))
+
+
+#: Settings whose only consumer is `bin/infra-update`, on its own timer.
+#: Nothing to redeploy, and therefore nothing that reports back — which is why
+#: saving one is verified instead.
+REPO_KEYS = ("INFRA_REPO_URL", "INFRA_REPO_BRANCH")
+
+
+def _repo_check(changed):
+    """
+    Did that save leave the master able to pull? (ok, one-line note or "").
+
+    A settings save that says "Saved." and then fails silently every five
+    minutes is the failure this whole section exists to end: the repo settings
+    redeploy nothing, so without asking, the first sign of a wrong value is a
+    cluster that quietly stops updating. The master answers, not the panel —
+    see `hostops.repo_check`.
+    """
+    if not any(key in changed for key in REPO_KEYS):
+        return True, ""
+    if not hostops.available():
+        return True, ("Cannot check it from here; the updater will try within "
+                      "its poll interval and report on the left rail.")
+    ok, out = hostops.repo_check()
+    last = next((line for line in reversed(out.splitlines()) if line.strip()),
+                "no output")
+    # Two answers that are neither pass nor fail, and the first is the one that
+    # matters most: `repo-check` is a verb this master only has once it has
+    # UPDATED, and the first thing anyone uses this section for is a master
+    # that cannot update. Reading that refusal as a bad URL would send you
+    # back to correct a value you had just corrected.
+    if not ok and out.startswith("refused:"):
+        return True, ("Not checked — this master's host helper predates the "
+                      "check. The updater will try on its next poll; the left "
+                      "rail is where it reports.")
+    if ok and "already running" in out:
+        return True, "Not checked — an update was already running. Watch the left rail."
+    return ok, (f"Repo reachable — {last}" if ok else f"Repo check FAILED — {last}")
 
 
 #: Groups the Autoscaler page owns. They are edited there, next to the live
@@ -1699,6 +1754,8 @@ def _infra_values():
 
 
 PREVIEW_INFRA = {
+    "INFRA_REPO_URL": "https://x-access-token:ghp_2f19c8ad3b7e@github.com/acme/infra.git",
+    "INFRA_REPO_BRANCH": "master",
     "APP_NAME": "aichat", "ROOT_DOMAIN": "acme.dev", "HCLOUD_LOCATION": "hel1",
     "HCLOUD_NETWORK_NAME": "prod-net", "HCLOUD_SSH_KEY_NAME": "my-laptop",
     "WORKER_IMAGE": "ubuntu-24.04",

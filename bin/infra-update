@@ -57,6 +57,27 @@ esac
 
 log() { printf '%s %s\n' "$(date -Is)" "$*"; }
 
+# A timer job has no terminal, so a git that decides it wants a password has
+# nowhere to ask and nothing to wait for. Without this it still fails, but it
+# fails after libcurl has retried, and by a route that reads like a network
+# problem rather than a credential one. Say it up front instead.
+export GIT_TERMINAL_PROMPT=0
+
+#: Anything git said, with the credentials taken back out of it.
+#: git names the URL it failed on, and that URL carries the token — so passing
+#: git's own words through untouched is how the repo credential ends up in
+#: journald and in the tooltip the panel prints. (The token is still visible in
+#: this process's argv to a root that goes looking; /etc/infra/infra.env is
+#: root-only, so that is the same audience.)
+redact() {
+    sed -e 's#://[^/@[:space:]]*@#://***@#g' \
+        -e 's#gh[pousr]_[A-Za-z0-9]\{16,\}#***#g' \
+        -e 's#github_pat_[A-Za-z0-9_]\{16,\}#***#g'
+}
+
+#: git's complaint, redacted and squashed to one line the panel can print.
+why() { printf '%s' "$1" | redact | tr '\n' ' ' | cut -c1-220; }
+
 #: Read one field out of the state file, or "" if it is absent or unreadable.
 state_get() {
     python3 - "$VERSION_FILE" "$1" <<'PYEOF' 2>/dev/null || true
@@ -120,14 +141,47 @@ case "${INFRA_REPO_URL:-}" in
 esac
 BRANCH="${INFRA_REPO_BRANCH:-master}"
 
+# A token pasted in as `https://TOKEN@github.com/...` is userinfo with no
+# password, and git reads it as a USERNAME. So git makes the request with no
+# credential at all, takes the 401, and then asks for a password that no timer
+# job has anywhere to read from — which is how a perfectly good token produces
+# "could not read Password". GitHub wants the token as the PASSWORD, under any
+# username at all.
+#
+# Rewritten here rather than by asking for a different string in infra.env,
+# because the string people are given to paste is the token. Anything that
+# already carries a colon is somebody's deliberate `user:secret` and is left
+# exactly as it is, as is any scheme that is not http(s).
+case "$INFRA_REPO_URL" in
+  http://*|https://*)
+    _rest="${INFRA_REPO_URL#*://}"
+    case "${_rest%%/*}" in
+      *@*)
+        case "${_rest%%@*}" in
+          *:*) ;;
+          *) INFRA_REPO_URL="${INFRA_REPO_URL%%://*}://x-access-token:${_rest}" ;;
+        esac
+        ;;
+    esac
+    ;;
+esac
+
 # --- what is running, and what is upstream -----------------------------------
 running="$(state_get commit)"
 
 # ls-remote rather than a clone: one request, no working tree, and it is the
 # only thing that needs to happen on a tick where nothing has changed. A poll
 # that cloned the repo every minute would be a poll nobody left switched on.
-remote="$(git ls-remote "$INFRA_REPO_URL" "refs/heads/$BRANCH" 2>/dev/null | awk '{print $1}')" \
-  || die "cannot reach the repo. Check INFRA_REPO_URL and the token in it."
+#
+# git's stderr is CAPTURED rather than discarded. "cannot reach the repo" was
+# the only thing this could ever say, so an expired token, a renamed branch and
+# a dead network all produced the same sentence — and the one that actually
+# happened (a token GitHub answers "Bad credentials" to) is the one that
+# sentence sends you looking in the wrong place for.
+if ! ls_remote="$(git ls-remote "$INFRA_REPO_URL" "refs/heads/$BRANCH" 2>&1)"; then
+  die "cannot reach the repo: $(why "$ls_remote")"
+fi
+remote="$(printf '%s\n' "$ls_remote" | awk 'NR==1{print $1}')"
 [ -n "$remote" ] || die "branch '$BRANCH' does not exist in the repo"
 
 # READ BEFORE WRITING. The commit is recorded BEFORE the deploys, so a run that
@@ -166,8 +220,10 @@ work="$(mktemp -d /tmp/infra-update.XXXXXX)"
 cleanup() { rm -rf "$work"; }
 trap cleanup EXIT
 
-git clone --quiet --depth 1 --branch "$BRANCH" "$INFRA_REPO_URL" "$work/repo" \
-  || die "clone failed"
+if ! clone_out="$(git clone --quiet --depth 1 --branch "$BRANCH" \
+                     "$INFRA_REPO_URL" "$work/repo" 2>&1)"; then
+  die "clone failed: $(why "$clone_out")"
+fi
 got="$(git -C "$work/repo" rev-parse HEAD)"
 
 # The same preflight bootstrap runs, for the same reason: a bundle missing a

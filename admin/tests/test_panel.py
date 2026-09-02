@@ -1090,6 +1090,169 @@ class PanelTest(unittest.TestCase):
         # APP_NAME is BOOT-mode, so it must be ignored even when posted.
         self.assertEqual(written, {"MIN_WORKERS": "3"})
 
+    # --- the Panel section: where this master updates itself from -----------
+
+    def _save_settings(self, form, values, host=None):
+        """POST /settings with infra.env and the host channel stubbed out."""
+        import envstore
+        import hostops
+        csrf = self.login()
+        saved = (envstore.load_infra, envstore.save_infra, envstore.deploy_stack,
+                 hostops.available, hostops.repo_check)
+        written, deployed = {}, []
+        envstore.load_infra = lambda: dict(values)
+        envstore.save_infra = lambda updates: written.update(updates) or list(updates)
+        envstore.deploy_stack = lambda name: deployed.append(name) or (True, "ok")
+        hostops.available = lambda: host is not None
+        hostops.repo_check = lambda: host
+        try:
+            page = self.client.post("/settings", follow_redirects=True,
+                                    data=dict(form, csrf=csrf)).get_data(as_text=True)
+        finally:
+            (envstore.load_infra, envstore.save_infra, envstore.deploy_stack,
+             hostops.available, hostops.repo_check) = saved
+        return written, deployed, page
+
+    #: An infra.env with the repo settings a real cluster's cloud-init ships.
+    REPO_ENV = {"INFRA_REPO_URL": "https://x-access-token:t0k@github.com/a/b.git",
+                "INFRA_REPO_BRANCH": "master", "APP_NAME": "aichat"}
+
+    def _settings_page(self, values):
+        import envstore
+        self.login()
+        real = envstore.load_infra
+        envstore.load_infra = lambda: dict(values)
+        try:
+            return self.client.get("/settings").get_data(as_text=True)
+        finally:
+            envstore.load_infra = real
+
+    def test_the_repo_the_master_pulls_from_is_the_first_thing_settings_offers(self):
+        """
+        It governs whether any other setting on the page can ever be applied: a
+        master that cannot pull is a master where every other save is the last
+        one that will ever take effect.
+        """
+        page = self._settings_page(self.REPO_ENV)
+        self.assertIn("INFRA_REPO_URL", page)
+        self.assertIn("INFRA_REPO_BRANCH", page)
+        self.assertLess(page.index(">Panel<"), page.index(">Identity<"))
+
+    def test_the_repo_url_is_editable_and_still_behind_a_reveal(self):
+        """
+        It is the first setting that is both: a value you have to be able to
+        type, carrying a credential you should not have to display to type it.
+        Every masked field before this one was read-only, so `masked` was only
+        ever reached on a branch that could not be edited.
+        """
+        page = self._settings_page(self.REPO_ENV)
+        at = page.index("set-INFRA_REPO_URL")
+        row = page[page.rindex('<div class="setting-row">', 0, at):
+                   page.index("</p>", at)]
+        self.assertIn('type="password"', row)
+        self.assertIn('name="value__INFRA_REPO_URL"', row)
+        self.assertIn("data-reveal", row)
+        # The branch beside it is not a credential and is not hidden.
+        self.assertIn('type="text" name="value__INFRA_REPO_BRANCH" value="master"',
+                      page)
+
+    def test_saving_the_repo_redeploys_nothing_and_asks_the_master_instead(self):
+        """
+        These settings have no stack: `bin/infra-update` re-reads infra.env on
+        its own timer. That is also why the save is VERIFIED — with nothing to
+        redeploy there is nothing that would report a wrong value back, so the
+        first sign of one would be a cluster that quietly stopped updating.
+        """
+        written, deployed, page = self._save_settings(
+            {"key": ["INFRA_REPO_URL"],
+             "value__INFRA_REPO_URL": "https://x-access-token:t@github.com/a/b.git"},
+            {"INFRA_REPO_URL": "https://old@github.com/a/b.git"},
+            host=(True, "running abc -> upstream abc on master\n--check: stopping"))
+        self.assertEqual(written, {
+            "INFRA_REPO_URL": "https://x-access-token:t@github.com/a/b.git"})
+        self.assertEqual(deployed, [])
+        self.assertIn("Repo reachable", page)
+
+    def test_a_repo_the_master_cannot_reach_is_reported_as_a_failure(self):
+        """
+        The value is still saved — refusing to write it would leave you unable
+        to correct a URL from the page that shows it. What must not happen is
+        the save reading as a success.
+        """
+        written, _, page = self._save_settings(
+            {"key": ["INFRA_REPO_URL"], "value__INFRA_REPO_URL": "https://nope/x.git"},
+            {"INFRA_REPO_URL": "https://old@github.com/a/b.git"},
+            host=(False, "ERROR: cannot reach the repo: fatal: could not read Password"))
+        self.assertEqual(written, {"INFRA_REPO_URL": "https://nope/x.git"})
+        self.assertIn("Repo check FAILED", page)
+        self.assertIn("could not read Password", page)
+        self.assertIn("banner bad", page)
+
+    def test_a_cluster_with_no_host_channel_is_told_so_not_told_it_worked(self):
+        written, _, page = self._save_settings(
+            {"key": ["INFRA_REPO_BRANCH"], "value__INFRA_REPO_BRANCH": "next"},
+            {"INFRA_REPO_BRANCH": "master"}, host=None)
+        self.assertEqual(written, {"INFRA_REPO_BRANCH": "next"})
+        self.assertIn("Cannot check it from here", page)
+
+    def test_a_master_whose_helper_predates_the_check_is_not_called_a_failure(self):
+        """
+        `repo-check` is a verb a master only has once it has UPDATED — and the
+        first thing anyone uses this section for is a master that cannot
+        update. Reading the forced command's refusal as a bad URL would send
+        you back to correct a value you had just corrected.
+        """
+        _, _, page = self._save_settings(
+            {"key": ["INFRA_REPO_URL"], "value__INFRA_REPO_URL": "https://a/b.git"},
+            {"INFRA_REPO_URL": "https://old/b.git"},
+            host=(False, "refused: the admin panel may only run: ufw-allow <port>"))
+        self.assertIn("predates the check", page)
+        self.assertNotIn("FAILED", page)
+        self.assertNotIn("banner bad", page)
+
+    def test_a_setting_the_file_predates_can_be_saved_through_the_route(self):
+        """
+        `envstore.save_infra` grew an append path for settings added after a
+        cluster was built; the route in front of it went on refusing exactly
+        those, because it required the key to already be in the file. The row
+        rendered from the repo's default, the form submitted, the flash said
+        nothing had changed, and the knob was unreachable on any cluster older
+        than it was.
+        """
+        written, _, page = self._save_settings(
+            {"key": ["WORKER_MAX_CORES"], "value__WORKER_MAX_CORES": "12"},
+            {"MIN_WORKERS": "1"})          # infra.env predates the ceiling
+        self.assertEqual(written, {"WORKER_MAX_CORES": "12"})
+        self.assertNotIn("Nothing changed", page)
+
+    def test_the_repo_url_never_reaches_the_fleet_env(self):
+        """
+        It carries a token, and fleet.env is handed wholesale to the overseer
+        and to dataguard. The allow-list is by GROUP, so this is really a test
+        that Panel was not added to AUTOSCALER_ENV_GROUPS by reflex.
+        """
+        import settings_def
+        delivered = settings_def.autoscaler_env(
+            {key: f"value-of-{key}" for key in settings_def.FIELDS})
+        for key in ("INFRA_REPO_URL", "INFRA_REPO_BRANCH"):
+            self.assertNotIn(key, delivered)
+
+    def test_the_host_verb_has_nothing_to_smuggle_a_repo_through(self):
+        """
+        `bin/panel-hostops` is the panel's only reach onto the master, and its
+        own header says never to add a verb taking a free-form string. This one
+        takes no argument at all: the URL comes from infra.env, which the panel
+        writes through its own bind mount, so the verb widens a compromised
+        panel by exactly one `git ls-remote`.
+        """
+        import pathlib
+        root = pathlib.Path(__file__).resolve().parents[2]
+        script = (root / "bin" / "panel-hostops").read_text()
+        body = script[script.index("repo-check)"):]
+        body = body[:body.index(";;")]
+        self.assertNotIn("$arg", body)
+        self.assertIn("--check", body)
+
 
     # --- deployments and logs ----------------------------------------------
 

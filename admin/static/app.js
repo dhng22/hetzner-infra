@@ -249,6 +249,16 @@
 
     if ((el = ev.target.closest("[data-reveal]"))) {
       ev.preventDefault();
+      // An editable secret is an <input>; a read-only one is a <span> whose
+      // text is swapped. Same button, because "show me what that says" is one
+      // affordance and having two of them is how they drift apart.
+      var field = el.parentElement.querySelector("[data-secret-input]");
+      if (field) {
+        var hide = field.type === "text";
+        field.type = hide ? "password" : "text";
+        el.textContent = hide ? "Reveal" : "Hide";
+        return;
+      }
       var target = el.parentElement.querySelector("[data-secret-text]");
       if (!target) { return; }
       var nowHidden = target.classList.toggle("masked");

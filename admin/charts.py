@@ -13,6 +13,18 @@ here therefore refresh themselves with no new client code at all — and the
 "which HTML changed" comparison that stops the DOM flickering keeps working,
 because two identical readings produce two identical strings.
 
+AXES ARE HTML, THE PLOT IS SVG. The plot carries `preserveAspectRatio="none"`
+so it stretches to whatever width the column gives it, which stretches any
+`<text>` inside it by the same factor. So the SVG holds geometry only and every
+label — the value axis, the time axis, the legend, the caption naming what each
+axis is — is HTML laid out around it, in the page's own type.
+
+HOVER COSTS NO JAVASCRIPT. Each sample gets an invisible full-height slice
+carrying `data-tip`, and `static/app.js` already owns a delegated, no-delay
+tooltip parented to <body>. Delegation is what makes it survive the live poll:
+a listener bound to a chart element would be thrown away with the element the
+next time the fragment is replaced.
+
 COLOUR IS NOT CHOSEN HERE. The four series hues are the categorical palette
 already validated for both themes in `static/style.css` — `--s-prod`,
 `--s-staging`, `--s-data`, `--s-observe`, with `--s-platform` as the neutral
@@ -23,6 +35,7 @@ is actually reporting a threshold.
 """
 
 import html
+import math
 
 #: The categorical series hues, in the order the stylesheet validated them.
 #: A fifth series folds into the neutral rather than inventing a hue.
@@ -34,7 +47,17 @@ NEUTRAL_VAR = "--s-platform"
 #: to its container — but the RATIO is what the eye actually judges.
 W = 320
 H = 96
-PAD_L, PAD_R, PAD_T, PAD_B = 2, 2, 6, 12
+PAD_L, PAD_R, PAD_T, PAD_B = 2, 2, 6, 4
+
+#: How many series are NAMED in a legend before the rest are only counted.
+#: Past the fourth there is no distinct hue left to name them by, so a fifth
+#: legend row would claim a distinction the picture does not make.
+LEGEND_MAX = 4
+
+#: Axis tops somebody would write down. A raw peak of 5407 gives an axis
+#: labelled "5.4k", which reads as a measurement rather than as a scale; the
+#: ladder is fine-grained enough that rounding up never wastes half the height.
+_NICE_STEPS = (1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10)
 
 
 def series_var(index):
@@ -70,6 +93,35 @@ def fmt(value, unit=""):
     return f"{text}{unit}"
 
 
+def ago(stamp, latest):
+    """
+    How far back a sample sits, relative to the newest one in the same chart.
+
+    Relative rather than a clock time, and that is not laziness: this module is
+    pure, the server renders UTC, and the reader is somewhere else. Everywhere
+    the panel prints an absolute instant it hands the conversion to the browser
+    (`<time data-localtime>`), which a `data-tip` attribute cannot do. "12 min
+    ago" is true in every timezone.
+    """
+    minutes = int(round((latest - stamp) / 60.0))
+    if minutes <= 0:
+        return "now"
+    if minutes < 90:
+        return f"{minutes} min ago"
+    return f"{minutes / 60.0:.1f} h ago"
+
+
+def _nice(value):
+    """A round number at or above `value`, for an axis top that reads as one."""
+    if value <= 0:
+        return 1.0
+    magnitude = 10.0 ** math.floor(math.log10(value))
+    for step in _NICE_STEPS:
+        if value <= step * magnitude * (1 + 1e-9):
+            return step * magnitude
+    return 10.0 * magnitude
+
+
 def _empty(label):
     """
     What a chart with no data draws.
@@ -88,23 +140,68 @@ def _frame(body, title, extra_class=""):
             f'<title>{_esc(title)}</title>{body}</svg>')
 
 
-def _scale(series, floor_zero=True, headroom=1.08):
+def _caption(y_axis, x_axis):
+    """What each plane is for, said in words under the picture."""
+    parts = []
+    if y_axis:
+        parts.append(f"y: {y_axis}")
+    if x_axis:
+        parts.append(f"x: {x_axis}")
+    return " · ".join(parts)
+
+
+def _ticks(values):
+    return "".join(
+        f"<span>{_esc(v[0])}<b>{_esc(v[1])}</b></span>" if isinstance(v, tuple)
+        else f"<span>{_esc(v)}</span>" for v in values)
+
+
+def _wrap(plot, y_ticks=(), x_ticks=(), caption="", legend=(), spread=False):
+    """
+    The plot, plus the furniture that says what it is measuring.
+
+    A picture of a line with no scale on either edge is a shape, not a
+    measurement. Everything that makes it a measurement lives out here: the two
+    ends of the value axis, the two ends of the time axis, which colour is which
+    series, and one caption naming both planes.
+    """
+    plain = "" if y_ticks else " is-plain"
+    out = [f'<figure class="chart-wrap{plain}">']
+    if y_ticks:
+        out.append(f'<div class="chart-y">{_ticks(y_ticks)}</div>')
+    out.append(plot)
+    if x_ticks:
+        klass = "chart-x is-spread" if spread else "chart-x"
+        out.append(f'<div class="{klass}">{_ticks(x_ticks)}</div>')
+    if legend:
+        out.append('<div class="chart-legend">' + "".join(
+            f'<span class="chart-key"><i style="background:var({var})"></i>'
+            f'{_esc(name)}</span>' for name, var in legend) + '</div>')
+    if caption:
+        out.append(f'<figcaption class="chart-axes">{_esc(caption)}</figcaption>')
+    out.append('</figure>')
+    return "".join(out)
+
+
+def _legend(names):
+    items = [(name, series_var(i)) for i, name in enumerate(names[:LEGEND_MAX])]
+    if len(names) > LEGEND_MAX:
+        items.append((f"+{len(names) - LEGEND_MAX} more", NEUTRAL_VAR))
+    return items
+
+
+def _scale(series):
     """
     (lo, hi) for the value axis, never a zero-height one.
 
     A flat series is the common case on a quiet cluster, and dividing by a range
     of zero is how a chart becomes a stack trace. A flat series is given a band
-    around itself so it draws as a straight line in the middle, which is what it
-    is.
+    above itself so it draws as a straight line partway up, which is what it is.
     """
     values = [v for points in series.values() for _, v in points]
     if not values:
         return 0.0, 1.0
-    hi = max(values) * headroom
-    lo = 0.0 if floor_zero else min(values)
-    if hi - lo < 1e-9:
-        return (lo - 1.0, hi + 1.0) if not floor_zero else (0.0, max(hi, 1.0))
-    return lo, hi
+    return 0.0, _nice(max(values))
 
 
 def _span(series):
@@ -134,7 +231,42 @@ def _path(coords):
                     for i, (x, y) in enumerate(coords))
 
 
-def line(series, unit="", reference=None, band=None, empty="no data yet"):
+def _slices(rows, t0, t1, unit):
+    """
+    One invisible full-height column per sample, carrying its own readout.
+
+    This is the entire hover mechanism. `data-tip` is already handled globally
+    by `static/app.js` — one tooltip parented to <body>, shown with no delay —
+    so a chart gets a readout without a line of chart-specific JavaScript, and
+    it keeps working after the live poll replaces the markup underneath it,
+    which a listener bound to a chart element would not.
+
+    The slice spans the midpoints to either side, so every pixel of the plot
+    belongs to exactly one sample and there is nowhere to hover that answers
+    nothing.
+    """
+    if not rows:
+        return ""
+    width = W - PAD_L - PAD_R
+    tspan = (t1 - t0) or 1
+    xs = [PAD_L + width * (t - t0) / tspan for t, _ in rows]
+    out = ['<g class="chart-slices">']
+    for index, (stamp, readings) in enumerate(rows):
+        left = PAD_L if index == 0 else (xs[index - 1] + xs[index]) / 2
+        right = (W - PAD_R) if index == len(rows) - 1 \
+            else (xs[index] + xs[index + 1]) / 2
+        tip = ago(stamp, t1)
+        if readings:
+            tip += " · " + ", ".join(f"{n} {fmt(v, unit)}" for n, v in readings)
+        out.append(f'<rect class="chart-slice" x="{left:.1f}" y="{PAD_T}" '
+                   f'width="{max(0.5, right - left):.1f}" '
+                   f'height="{H - PAD_T - PAD_B}" data-tip="{_esc(tip)}"/>')
+    out.append('</g>')
+    return "".join(out)
+
+
+def line(series, unit="", reference=None, band=None, empty="no data yet",
+         y="", x="last hour"):
     """
     One line per series over time.
 
@@ -146,35 +278,51 @@ def line(series, unit="", reference=None, band=None, empty="no data yet"):
     if not series:
         return _empty(empty)
 
-    span = _span(series)
-    t0, t1 = span
+    t0, t1 = _span(series)
     lo, hi = _scale(series)
     if reference is not None:
-        hi = max(hi, reference * 1.15)
+        hi = max(hi, _nice(reference * 1.15))
 
     body = []
     height = H - PAD_T - PAD_B
     if band is not None and hi > lo:
-        y = PAD_T + height * (1 - min(1.0, max(0.0, (band - lo) / (hi - lo))))
+        edge = PAD_T + height * (1 - min(1.0, max(0.0, (band - lo) / (hi - lo))))
         body.append(f'<rect class="chart-band" x="{PAD_L}" y="{PAD_T:.1f}" '
-                    f'width="{W - PAD_L - PAD_R}" height="{max(0.0, y - PAD_T):.1f}"/>')
+                    f'width="{W - PAD_L - PAD_R}" '
+                    f'height="{max(0.0, edge - PAD_T):.1f}"/>')
     if reference is not None and hi > lo:
-        y = PAD_T + height * (1 - min(1.0, max(0.0, (reference - lo) / (hi - lo))))
-        body.append(f'<line class="chart-ref" x1="{PAD_L}" y1="{y:.1f}" '
-                    f'x2="{W - PAD_R}" y2="{y:.1f}"/>')
+        edge = PAD_T + height * (1 - min(1.0, max(0.0, (reference - lo) / (hi - lo))))
+        body.append(f'<line class="chart-ref" x1="{PAD_L}" y1="{edge:.1f}" '
+                    f'x2="{W - PAD_R}" y2="{edge:.1f}"/>')
 
-    for index, (name, points) in enumerate(sorted(series.items())):
+    order = sorted(series.items())
+    for index, (name, points) in enumerate(order):
         coords = _points(points, t0, t1, lo, hi)
         body.append(f'<path class="chart-line" style="stroke:var({series_var(index)})" '
                     f'd="{_path(coords)}"><title>{_esc(name)}</title></path>')
 
+    lookups = {name: dict(points) for name, points in order}
+    stamps = sorted({t for _, points in order for t, _ in points})
+    # A series with no reading at this stamp is LEFT OUT of the readout rather
+    # than carried forward: a line chart draws a straight segment across a gap
+    # because it has to join two points, but the tooltip would be inventing a
+    # measurement that was never taken.
+    body.append(_slices(
+        [(t, [(n, lookups[n][t]) for n, _ in order if t in lookups[n]])
+         for t in stamps], t0, t1, unit))
+
     peak = max(v for points in series.values() for _, v in points)
-    body.append(f'<text class="chart-tick" x="{PAD_L}" y="{H - 2}">'
-                f'{_esc(fmt(peak, unit))} peak</text>')
-    return _frame("".join(body), f"{len(series)} series, peak {fmt(peak, unit)}")
+    hint = f"{fmt(hi, unit)} axis" if reference is None else \
+        f"{fmt(hi, unit)} axis, rule at {fmt(reference, unit)}"
+    return _wrap(
+        _frame("".join(body), f"{len(series)} series, peak {fmt(peak, unit)}"),
+        y_ticks=(fmt(hi, unit), fmt(lo, unit)),
+        x_ticks=(ago(t0, t1), "now"),
+        caption=_caption(y or hint, x),
+        legend=_legend([name for name, _ in order]))
 
 
-def stack(series, unit="", empty="no traffic recorded"):
+def stack(series, unit="", empty="no traffic recorded", y="", x="last hour"):
     """
     Stacked areas — for a total split into parts, where the parts sum to
     something meaningful. Response codes are the case this exists for: the
@@ -184,8 +332,7 @@ def stack(series, unit="", empty="no traffic recorded"):
     if not series:
         return _empty(empty)
 
-    span = _span(series)
-    t0, t1 = span
+    t0, t1 = _span(series)
     order = sorted(series.items())
     # Stack on a shared time axis, so every layer has a point at every stamp
     # the chart draws. Interpolating would invent readings; carrying the last
@@ -193,34 +340,49 @@ def stack(series, unit="", empty="no traffic recorded"):
     stamps = sorted({t for _, points in order for t, _ in points})
     running = {t: 0.0 for t in stamps}
     layers = []
+    own = {}
     for name, points in order:
         lookup = dict(points)
         last = 0.0
         upper = []
         lower = []
+        held = {}
         for t in stamps:
             last = lookup.get(t, last)
+            held[t] = last
             lower.append((t, running[t]))
             running[t] += last
             upper.append((t, running[t]))
+        own[name] = held
         layers.append((name, lower, upper))
 
-    hi = max(running.values()) * 1.08 or 1.0
+    hi = _nice(max(running.values()))
     body = []
     for index, (name, lower, upper) in enumerate(layers):
         top = _points(upper, t0, t1, 0.0, hi)
         bottom = list(reversed(_points(lower, t0, t1, 0.0, hi)))
-        path = _path(top) + " " + " ".join(f"L{x:.1f} {y:.1f}" for x, y in bottom) + " Z"
+        path = _path(top) + " " + " ".join(f"L{x_:.1f} {y_:.1f}"
+                                           for x_, y_ in bottom) + " Z"
         body.append(f'<path class="chart-area" style="fill:var({series_var(index)})" '
                     f'd="{path}"><title>{_esc(name)}</title></path>')
 
+    # The readout names each LAYER's own value, not its stacked height. The
+    # height is what the picture already shows; what it cannot show is which
+    # part of it belongs to which colour.
+    body.append(_slices(
+        [(t, [(name, own[name][t]) for name, _ in order] + [("total", running[t])])
+         for t in stamps], t0, t1, unit))
+
     peak = max(running.values())
-    body.append(f'<text class="chart-tick" x="{PAD_L}" y="{H - 2}">'
-                f'{_esc(fmt(peak, unit))} peak</text>')
-    return _frame("".join(body), f"{len(layers)} layers, peak {fmt(peak, unit)}")
+    return _wrap(
+        _frame("".join(body), f"{len(layers)} layers, peak {fmt(peak, unit)}"),
+        y_ticks=(fmt(hi, unit), fmt(0.0, unit)),
+        x_ticks=(ago(t0, t1), "now"),
+        caption=_caption(y or f"{fmt(hi, unit)} axis, stacked", x),
+        legend=_legend([name for name, _ in order]))
 
 
-def bars(rows, unit="", empty="nothing to compare"):
+def bars(rows, unit="", empty="nothing to compare", y="", x=""):
     """
     Horizontal bars, one per named thing, longest first — not a time series.
 
@@ -238,20 +400,26 @@ def bars(rows, unit="", empty="nothing to compare"):
     ceiling = max([r.get("max") or r["value"] for r in rows] + [1e-9])
     out = ['<div class="bar-rows">']
     for row in sorted(rows, key=lambda r: -r["value"]):
-        share = max(0.0, min(1.0, row["value"] / (row.get("max") or ceiling)))
+        top = row.get("max") or ceiling
+        share = max(0.0, min(1.0, row["value"] / top))
         tone = row.get("tone") or ""
         note = row.get("note") or fmt(row["value"], unit)
+        tip = f'{row["name"]}: {fmt(row["value"], unit)} of {fmt(top, unit)}'
         out.append(
-            f'<div class="bar-row{(" is-" + tone) if tone else ""}">'
+            f'<div class="bar-row{(" is-" + tone) if tone else ""}" '
+            f'data-tip="{_esc(tip)}">'
             f'<span class="bar-name" title="{_esc(row["name"])}">{_esc(row["name"])}</span>'
             f'<span class="bar-track"><i style="width:{share * 100:.1f}%"></i></span>'
             f'<span class="bar-value">{_esc(note)}</span>'
             f'</div>')
     out.append('</div>')
-    return "".join(out)
+    return _wrap("".join(out),
+                 caption=_caption(y or "one row per thing measured",
+                                  x or f"0 → {fmt(ceiling, unit)}"))
 
 
-def columns(rows, unit="", empty="none in this window"):
+def columns(rows, unit="", empty="none in this window", y="",
+            x="one bar per counter"):
     """
     Vertical bars for counts over a window — error tallies, not rates.
 
@@ -262,7 +430,7 @@ def columns(rows, unit="", empty="none in this window"):
     if not rows:
         return _empty(empty)
 
-    hi = max([r["value"] for r in rows] + [1.0])
+    hi = _nice(max([r["value"] for r in rows] + [1.0]))
     slot = (W - PAD_L - PAD_R) / max(1, len(rows))
     bar = min(46.0, slot * 0.62)
     height = H - PAD_T - PAD_B
@@ -270,22 +438,25 @@ def columns(rows, unit="", empty="none in this window"):
     for index, row in enumerate(rows):
         share = row["value"] / hi
         drawn = max(1.5, height * share)          # zero still shows a baseline
-        x = PAD_L + slot * index + (slot - bar) / 2
+        left = PAD_L + slot * index + (slot - bar) / 2
         tone = row.get("tone") or ""
         style = f'style="fill:var({series_var(index)})"' if not tone else ""
+        tip = f'{row["name"]}: {fmt(row["value"], unit)}'
         body.append(f'<rect class="chart-col{(" is-" + tone) if tone else ""}" {style} '
-                    f'x="{x:.1f}" y="{PAD_T + height - drawn:.1f}" '
-                    f'width="{bar:.1f}" height="{drawn:.1f}" rx="2">'
-                    f'<title>{_esc(row["name"])}: {_esc(fmt(row["value"], unit))}</title>'
-                    f'</rect>')
-        body.append(f'<text class="chart-tick" x="{x + bar / 2:.1f}" y="{H - 2}" '
-                    f'text-anchor="middle">{_esc(fmt(row["value"], unit))}</text>')
-    return _frame("".join(body), ", ".join(
-        f"{r['name']} {fmt(r['value'], unit)}" for r in rows))
+                    f'x="{left:.1f}" y="{PAD_T + height - drawn:.1f}" '
+                    f'width="{bar:.1f}" height="{drawn:.1f}" rx="2" '
+                    f'data-tip="{_esc(tip)}"/>')
+    return _wrap(
+        _frame("".join(body), ", ".join(
+            f"{r['name']} {fmt(r['value'], unit)}" for r in rows)),
+        y_ticks=(fmt(hi, unit), fmt(0.0, unit)),
+        x_ticks=[(r["name"], fmt(r["value"], unit)) for r in rows],
+        spread=True,
+        caption=_caption(y or f"count, 0 → {fmt(hi, unit)}", x))
 
 
 def bullet(value, warn=None, danger=None, ceiling=100.0, unit="%",
-           empty="not reporting"):
+           empty="not reporting", label=""):
     """
     One measurement against the thresholds that will act on it.
 
@@ -293,6 +464,10 @@ def bullet(value, warn=None, danger=None, ceiling=100.0, unit="%",
     wrote down. That is the useful form for cluster saturation, where the
     interesting fact is not "58%" but "58%, and 70% is where it starts buying
     machines".
+
+    `label` names WHICH measurement. Two unlabelled bullets stacked in one card
+    are two identical pictures of two different resources, and the reader has
+    only their order to go on.
     """
     if value is None:
         return _empty(empty)
@@ -305,13 +480,25 @@ def bullet(value, warn=None, danger=None, ceiling=100.0, unit="%",
         tone = "warn"
 
     marks = []
-    for threshold, kind in ((warn, "warn"), (danger, "bad")):
+    scale = []
+    # `kind` is a CSS tone; `word` is what the threshold DOES. "bad at 80%" is
+    # the stylesheet talking to itself.
+    for threshold, kind, word in ((warn, "warn", "warn"), (danger, "bad", "act")):
         if threshold is None:
             continue
         marks.append(f'<i class="bullet-mark is-{kind}" '
                      f'style="left:{min(100.0, threshold / ceiling * 100):.1f}%"></i>')
-    return (f'<div class="bullet{(" is-" + tone) if tone else ""}">'
+        scale.append(f"{word} at {fmt(threshold, unit)}")
+    tip = f'{label or "reading"}: {fmt(value, unit)} of {fmt(ceiling, unit)}'
+    if scale:
+        tip += " · " + ", ".join(scale)
+    return (f'<div class="bullet{(" is-" + tone) if tone else ""}" '
+            f'data-tip="{_esc(tip)}">'
+            f'<span class="bullet-label">{_esc(label)}</span>'
             f'<span class="bullet-track">'
             f'<i class="bullet-fill" style="width:{min(100.0, value / ceiling * 100):.1f}%"></i>'
             f'{"".join(marks)}</span>'
-            f'<span class="bullet-value">{_esc(fmt(value, unit))}</span></div>')
+            f'<span class="bullet-value">{_esc(fmt(value, unit))}</span>'
+            f'<span class="bullet-scale">0 → {_esc(fmt(ceiling, unit))}'
+            f'{(" · " + _esc(", ".join(scale))) if scale else ""}</span>'
+            f'</div>')

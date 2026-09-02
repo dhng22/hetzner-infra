@@ -574,6 +574,13 @@ def log_rows(rows):
 OBS_MINUTES = 60
 OBS_STEP = 60
 
+#: How often the panel re-fetches the whole column. It belongs beside the other
+#: two because it is the third half of the same fact: a 60-minute chart redrawn
+#: every 15 seconds and one redrawn every 10 minutes look identical on screen.
+#: One definition, read by the poller's `data-live-ms` and by the words next to
+#: the live pip, so the page cannot claim a freshness it does not have.
+OBS_REFRESH_SECONDS = 15
+
 #: Where cluster CPU and memory stop being comfortable. NOT invented for the
 #: chart — these are the numbers that actually act. `up_cpu` in
 #: `signals/classify.py` is what scales a service out; `NODE_PRESSURE_PCT` in
@@ -638,8 +645,39 @@ NO_TIMER_NOTE = (
     "metric, something to fire on.")
 
 
-def _card(title, note, body, warning=""):
-    return {"title": title, "note": note, "body": body, "warning": warning}
+#: The two shapes of question a card can be asking. A chart of a range and a
+#: single current reading are measured over completely different amounts of
+#: time, and until each card said which, the column read as one instant.
+RANGE_SPAN = f"last {OBS_MINUTES} min · {OBS_STEP}s steps"
+LATEST_SPAN = "latest sample"
+
+_LOOKBACK = re.compile(r"\b(rate|irate|increase|delta)\([^\[]*\[(\d+[smhdw])\]")
+_LOOKBACK_WORD = {"rate": "rate over", "irate": "rate over",
+                  "increase": "totalled over", "delta": "change over"}
+
+
+def _window(span, *exprs):
+    """
+    What span of time a card is actually measuring over.
+
+    READ OUT OF THE EXPRESSIONS, never typed beside them. A card that claims a
+    "5 min rate" next to a query somebody has since widened to [15m] is worse
+    than a card that says nothing, because it is believed. The only part written
+    by hand is whether the card draws a range or one current reading, which is a
+    property of the CARD and not of the query.
+    """
+    parts = [span] if span else []
+    for expr in exprs:
+        for func, length in _LOOKBACK.findall(expr):
+            phrase = f"{_LOOKBACK_WORD[func]} {length}"
+            if phrase not in parts:
+                parts.append(phrase)
+    return " · ".join(parts)
+
+
+def _card(title, note, body, window="", warning=""):
+    return {"title": title, "note": note, "body": body, "window": window,
+            "warning": warning}
 
 
 def _tone_for(value, warn, danger):
@@ -690,14 +728,21 @@ def observability(vm_range, vm_query, charts):
     red = [
         _card("Duration", "p95 per service, against the SLO it is judged by",
               charts.line(latency, "ms", reference=slo, band=slo,
-                          empty="no service is publishing a timer yet")),
+                          y="p95 latency (ms)", x=f"last {OBS_MINUTES} min",
+                          empty="no service is publishing a timer yet"),
+              _window(RANGE_SPAN, Q_LATENCY)),
         _card("Rate", "responses per second, by status class",
-              charts.stack(rng(Q_STATUS_CLASS, "class"), "/s"),
+              charts.stack(rng(Q_STATUS_CLASS, "class"), "/s",
+                           y="responses per second, stacked",
+                           x=f"last {OBS_MINUTES} min"),
+              _window(RANGE_SPAN, Q_STATUS_CLASS),
               warning=NO_TIMER_NOTE),
         _card("Errors", "share of responses that are 5xx",
               charts.line(errors, "%", reference=ERROR_BUDGET_PCT,
-                          band=ERROR_BUDGET_PCT,
-                          empty="no responses recorded in this window")),
+                          band=ERROR_BUDGET_PCT, y="5xx share (%)",
+                          x=f"last {OBS_MINUTES} min",
+                          empty="no responses recorded in this window"),
+              _window(RANGE_SPAN, Q_ERROR_RATIO)),
     ]
 
     utilisation = []
@@ -722,36 +767,50 @@ def observability(vm_range, vm_query, charts):
 
     use = [
         _card("Utilisation", "how much of each machine is in use right now",
-              charts.bars(utilisation, "%", empty="no node is reporting")),
+              charts.bars(utilisation, "%", y="node · resource",
+                          x="0 → 100% of the machine",
+                          empty="no node is reporting"),
+              _window(LATEST_SPAN, *[expr for _, expr in Q_UTILISATION])),
         _card("Saturation",
               "seconds per second of work stalled waiting for a resource — "
               "queueing, which is what utilisation alone cannot tell you",
-              charts.line(pressure, "s/s",
-                          empty="nothing has queued in this window")),
+              charts.line(pressure, "s/s", y="stalled seconds per second",
+                          x=f"last {OBS_MINUTES} min",
+                          empty="nothing has queued in this window"),
+              _window(RANGE_SPAN, *[expr for _, expr in Q_PRESSURE])),
         _card("Errors", "counted over the last hour, not averaged",
-              charts.columns(resource_errors)),
+              charts.columns(resource_errors, y="events counted"),
+              _window("", *[expr for _, expr in Q_RESOURCE_ERRORS])),
     ]
 
     golden = [
         _card("Latency", "the slowest service in the cluster",
               charts.line(_worst_series(latency), "ms", reference=slo, band=slo,
-                          empty="no service is publishing a timer yet")),
+                          y="p95 latency (ms)", x=f"last {OBS_MINUTES} min",
+                          empty="no service is publishing a timer yet"),
+              _window(RANGE_SPAN, Q_LATENCY)),
         _card("Traffic", "everything the tunnel served, per second",
               charts.line(rng(Q_REQUEST_RATE), "/s",
-                          empty="no responses recorded in this window")),
+                          y="responses per second", x=f"last {OBS_MINUTES} min",
+                          empty="no responses recorded in this window"),
+              _window(RANGE_SPAN, Q_REQUEST_RATE)),
         _card("Errors", f"5xx share against the {ERROR_BUDGET_PCT:.0f}% the "
                         f"alert fires at",
               charts.line(errors, "%", reference=ERROR_BUDGET_PCT,
-                          band=ERROR_BUDGET_PCT,
-                          empty="no responses recorded in this window")),
+                          band=ERROR_BUDGET_PCT, y="5xx share (%)",
+                          x=f"last {OBS_MINUTES} min",
+                          empty="no responses recorded in this window"),
+              _window(RANGE_SPAN, Q_ERROR_RATIO)),
         _card("Saturation",
               f"cluster CPU then memory, against {SATURATION_WARN:.0f}% "
               f"(scales a service out) and {SATURATION_DANGER:.0f}% (buys a "
               f"machine)",
               charts.bullet(vm_query("overseer_cluster_cpu_percent"),
-                            SATURATION_WARN, SATURATION_DANGER)
+                            SATURATION_WARN, SATURATION_DANGER, label="CPU")
               + charts.bullet(vm_query("overseer_cluster_mem_percent"),
-                              SATURATION_WARN, SATURATION_DANGER)),
+                              SATURATION_WARN, SATURATION_DANGER,
+                              label="memory"),
+              LATEST_SPAN),
     ]
 
     return [

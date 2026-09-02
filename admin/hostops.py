@@ -68,6 +68,23 @@ def status():
     return ok, out
 
 
+def repo_check():
+    """
+    Can the master still reach the repo it updates itself from?
+
+    Asked of the MASTER rather than answered here, and that is the whole point:
+    the panel has no git binary, and even if it had one it would be the wrong
+    place to answer from. What matters is whether the process that does the
+    pulling, on the machine it pulls from, with the credential as that machine
+    reads it, can reach the repo — and the only honest way to know that is to
+    make it try. `infra-update --check` stops before any change.
+
+    Returns (ok, output). A cluster with no host access gets a truthful "cannot
+    check" rather than a claim either way.
+    """
+    return _ssh("repo-check")
+
+
 def port_is_open(port):
     """Best-effort read of whether ufw currently allows this port."""
     if not port:

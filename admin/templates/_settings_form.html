@@ -19,7 +19,19 @@
         <span class="mono">{{ row.key }}</span>
       </label>
 
-      {% if row.editable %}
+      {% if row.editable and row.masked %}
+        {# Editable AND secret-bearing — the repo URL carries a token in it.
+           A password input rather than a plain one: the value still has to be
+           in the page for the form to round-trip it, exactly as the read-only
+           Reveal below does, so this is about what is on screen and not about
+           what is in the HTML. #}
+        <span class="secret-val">
+          <input id="set-{{ row.key }}" type="password" name="value__{{ row.key }}"
+                 value="{{ row.value }}" autocomplete="off" spellcheck="false" data-secret-input>
+          <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
+        </span>
+        <input type="hidden" name="key" value="{{ row.key }}">
+      {% elif row.editable %}
         <input id="set-{{ row.key }}" type="text" name="value__{{ row.key }}" value="{{ row.value }}">
         <input type="hidden" name="key" value="{{ row.key }}">
       {% elif row.masked %}

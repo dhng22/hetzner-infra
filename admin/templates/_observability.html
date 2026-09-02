@@ -13,7 +13,12 @@
   <div class="obs-head">
     <h2>Signals</h2>
     <span class="spacer"></span>
-    <span class="live" data-topo-live><i></i>live</span>
+    {# Every card names the span it measures over; this names how often the
+       whole column is re-measured. Both are needed: a 60-minute chart redrawn
+       every 15 seconds and one redrawn every 10 minutes look identical. The
+       number comes from the same constant the poller is configured with, so
+       the page cannot claim a freshness it does not have. #}
+    <span class="live" data-topo-live><i></i>live · every {{ obs_refresh }}s</span>
   </div>
 
   {% for section in observability %}
@@ -31,6 +36,11 @@
         <div class="obs-card">
           <div class="obs-card-head">
             <span class="obs-card-title">{{ card.title }}</span>
+            {# The measure window, on every card. Without it the column reads as
+               one instant: a 5-minute rate and an hour's total are drawn the
+               same way, and only this line separates them. `shape._window()`
+               reads it out of the query rather than restating it by hand. #}
+            <span class="obs-window">{{ card.window }}</span>
           </div>
           <p class="obs-note">{{ card.note }}</p>
           {{ card.body|safe }}

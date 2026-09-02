@@ -118,7 +118,7 @@
   </div>
 
   <aside class="split-main-side" data-live-html="{{ live_href('observability') }}"
-         data-live-ms="15000">
+         data-live-ms="{{ obs_refresh * 1000 }}">
     {% include "_observability.html" %}
   </aside>
 </div>

@@ -227,6 +227,22 @@ write_files:
       #
       # Leave it empty and the cluster simply never self-updates; that is a
       # supported state, not a broken one.
+      # A TOKEN IS REQUIRED EVEN WHEN THE REPO IS PUBLIC, and that is not
+      # obvious enough to leave unwritten. GitHub serves the ref advertisement
+      # (`GET /info/refs`) to anyone, then answers the fetch itself
+      # (`POST /git-upload-pack`) with 401 for an unauthenticated request from
+      # a cloud IP — measured from this master against github.com/git/git.git,
+      # so it is a property of where the box is, not of which repo you point
+      # it at. Roughly one attempt in six slips through, which is worse than a
+      # clean failure: the cluster updates just often enough to look alive.
+      #
+      # Put the token in as the PASSWORD, not on its own:
+      #   https://x-access-token:<token>@github.com/you/repo.git
+      # A bare `https://<token>@github.com/...` is userinfo with no password,
+      # which git reads as a username — so it asks for a password that neither
+      # this boot nor the update timer has anywhere to read from, and reports
+      # it as if the network were down. `bin/infra-update` repairs that form on
+      # the way past; the one-time clone below does not, so get it right here.
       INFRA_REPO_URL=https://github.com/dhng22/hetzner-infra.git
       INFRA_REPO_BRANCH=master
       # WHERE THE IMAGES COME FROM — and there is nothing to fill in for it.

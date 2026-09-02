@@ -35,7 +35,14 @@
       </span>
     </div>
     {% if infra.status == 'error' %}
-      <div class="rail-version-row"><span class="pill bad" title="{{ infra.detail }}">update failing</span></div>
+      {# The reason, in full, and NOT only as a `title`. "update failing" on its
+         own sends you to the server to read a journal — which is exactly what
+         happened: an expired repo token and an unreachable network read the
+         same on this pill. `bin/infra-update` now records git's own words in
+         `detail`, with the credential stripped out of them, so the answer is
+         on the page that raised the question. #}
+      <div class="rail-version-row"><span class="pill bad">update failing</span></div>
+      <p class="rail-version-detail">{{ infra.detail or 'no reason recorded' }}</p>
     {% elif infra.behind %}
       <div class="rail-version-row"><span class="pill warn" title="{{ infra.detail }}">update pending</span></div>
     {% endif %}

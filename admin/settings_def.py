@@ -17,6 +17,31 @@ EDIT, BOOT, SECRET = "edit", "boot", "secret"
 
 # key -> (mode, stack to redeploy or None, explanation)
 FIELDS = {
+    # --- panel -------------------------------------------------------------
+    # Where this master updates ITSELF from. No stack to redeploy: nothing
+    # holds a copy of these — `bin/infra-update` re-reads infra.env on every
+    # tick of its timer, so a save takes effect on the next poll and no
+    # container needs to be restarted to notice.
+    "INFRA_REPO_URL": (EDIT, None,
+                       "The repository the master polls, and the GHCR namespace its images "
+                       "are pulled from. A PRIVATE-LOOKING URL IS USUALLY REQUIRED EVEN FOR "
+                       "A PUBLIC REPO: GitHub serves the ref advertisement to anyone but "
+                       "answers the fetch itself with 401 for an unauthenticated request "
+                       "from a cloud IP, and roughly one attempt in six slips through — so "
+                       "the cluster updates just often enough to look alive. Put the token "
+                       "in as the PASSWORD: https://x-access-token:TOKEN@github.com/you/repo"
+                       ".git. A bare https://TOKEN@github.com/... is userinfo with no "
+                       "password, which git reads as a username and then asks for a password "
+                       "no timer job can answer; that form is repaired on the way past, but "
+                       "only once this master is running the commit that repairs it. Leave "
+                       "it empty and the cluster simply stops self-updating, which is a "
+                       "supported state. Whether the last poll worked is on the left rail, "
+                       "under the theme button, on every page."),
+    "INFRA_REPO_BRANCH": (EDIT, None,
+                          "Which branch the master follows. Changing it moves the cluster to "
+                          "that branch's head on the next poll, which is a deploy of "
+                          "everything that differs — not a setting to try out on a whim."),
+
     # --- identity ----------------------------------------------------------
     "APP_NAME": (BOOT, None,
                  "Namespaces the Hetzner label the autoscaler is allowed to delete, the worker "
@@ -158,6 +183,10 @@ FIELDS = {
 }
 
 GROUPS = [
+    # First, because it is the one group that governs whether any of the others
+    # can ever change: everything below is applied by a master that is only as
+    # current as this section lets it be.
+    ("Panel", ["INFRA_REPO_URL", "INFRA_REPO_BRANCH"]),
     ("Identity", ["APP_NAME", "ROOT_DOMAIN"]),
     ("Hetzner", ["HCLOUD_LOCATION", "HCLOUD_NETWORK_NAME", "HCLOUD_SSH_KEY_NAME",
                  "WORKER_IMAGE", "HCLOUD_TOKEN"]),
@@ -260,7 +289,14 @@ def autoscaler_env(values):
     return out
 
 
-MASK_HINT = ("TOKEN", "PASSWORD", "SECRET", "KEY", "URI")
+# Which keys are hidden behind a Reveal rather than printed on the page.
+#
+# Name-based, and "URL" earns its place the same way "URI" did: a URL that
+# reaches this file is nearly always one carrying a credential inside it — a
+# repo token, a webhook secret, a connection string. Masking one that does not
+# costs a click; printing one that does puts a credential on a screen somebody
+# is sharing.
+MASK_HINT = ("TOKEN", "PASSWORD", "SECRET", "KEY", "URI", "URL")
 
 
 def describe(key):

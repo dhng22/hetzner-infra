@@ -435,6 +435,10 @@ ul.tight li { margin-bottom: 2px; }
 .hint { color: var(--text-mute); font-size: var(--t-sm); margin-top: var(--s-2); max-width: 68ch; }
 
 .secret-val { display: flex; gap: 6px; align-items: center; }
+/* An editable secret still has to fill its column; the flex row is only
+   there to park the Reveal button beside it. */
+.secret-val > input { flex: 1 1 auto; min-width: 0; }
+.secret-val > .btn { flex: none; }
 .masked { letter-spacing: .12em; }
 
 /* --- logs ----------------------------------------------------------------- */
@@ -587,6 +591,8 @@ ul.tight li { margin-bottom: 2px; }
 .rail-version-row .k { color: var(--text-mute); text-transform: uppercase;
   letter-spacing: .06em; }
 .rail-version-row .v { color: var(--text); text-align: right; overflow-wrap: anywhere; }
+.rail-version-detail { margin: 0; color: var(--bad); overflow-wrap: anywhere;
+  font-size: var(--t-xs); line-height: 1.45; }
 
 .panel-intro { margin: 0 16px 12px; color: var(--text-mute); font-size: 13px; max-width: 74ch; }
 
@@ -968,7 +974,14 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
 .obs-section h3 { font-size: var(--t-md); margin: 0; }
 .obs-scope { margin: 0 var(--s-4) var(--s-3); color: var(--text-mute); font-size: var(--t-xs); }
 .obs-card { padding: var(--s-3) var(--s-4); border-top: 1px solid var(--line); }
+.obs-card-head { display: flex; align-items: baseline; gap: var(--s-2);
+  justify-content: space-between; }
 .obs-card-title { font-weight: var(--w-bold); font-size: var(--t-sm); }
+/* The span of time the card is measuring over. Two cards drawn the same
+   way over 5 minutes and over an hour are not the same reading, and the
+   picture cannot say which it is. */
+.obs-window { color: var(--text-mute); font-size: var(--t-xs);
+  text-align: right; font-family: var(--mono); }
 .obs-note { margin: 2px 0 var(--s-2); color: var(--text-mute); font-size: var(--t-xs); line-height: 1.5; }
 /* A named gap rather than a blank chart. `charts.py` refuses to draw an empty
    series as a flat line at zero, because "nothing matched" and "the value is
@@ -985,13 +998,45 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
    only where a chart is genuinely reporting against a threshold.
    -------------------------------------------------------------------------- */
 .chart { display: block; width: 100%; height: 96px; overflow: visible; }
+
+/* Axis furniture is HTML AROUND the SVG, never <text> inside it. The plot is
+   stretched to whatever width the column gives it (preserveAspectRatio="none"),
+   which stretches any text inside the viewBox by the same factor. Out here the
+   labels keep the page's own type, and the SVG is left holding geometry. */
+.chart-wrap { display: grid; margin: 0; column-gap: 6px;
+  grid-template-columns: 34px minmax(0, 1fr);
+  grid-template-rows: auto auto auto auto; }
+.chart-wrap.is-plain { grid-template-columns: minmax(0, 1fr); }
+.chart-wrap.is-plain > * { grid-column: 1 / -1; }
+.chart-wrap > .chart { grid-column: 2; grid-row: 1; }
+.chart-y { grid-column: 1; grid-row: 1; height: 96px; display: flex;
+  flex-direction: column; justify-content: space-between; text-align: right;
+  color: var(--text-mute); font: 400 9px var(--mono); }
+.chart-x { grid-column: 2; grid-row: 2; display: flex; gap: 4px; margin-top: 2px;
+  justify-content: space-between;
+  color: var(--text-mute); font: 400 9px var(--mono); }
+.chart-x.is-spread > span { flex: 1 1 0; min-width: 0; text-align: center;
+  overflow: hidden; text-overflow: ellipsis; }
+.chart-x b { display: block; color: var(--text); font-weight: var(--w-bold); }
+.chart-legend { grid-column: 1 / -1; grid-row: 3; display: flex; flex-wrap: wrap;
+  gap: 4px 10px; margin-top: 6px; font-size: var(--t-xs); color: var(--text-mute); }
+.chart-key { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+.chart-key > i { flex: none; width: 9px; height: 3px; border-radius: 2px; }
+.chart-axes { grid-column: 1 / -1; grid-row: 4; margin-top: 4px;
+  color: var(--text-mute); font-size: var(--t-xs); }
+
+/* One hover target per sample, invisible until pointed at. It carries
+   `data-tip`, which app.js already handles globally with no delay and by
+   delegation — so a chart gets a readout with no chart-specific JavaScript,
+   and it keeps working after the live poll replaces the markup. */
+.chart-slice { fill: var(--text); fill-opacity: 0; }
+.chart-slice:hover { fill-opacity: .07; }
 /* The SVG is stretched to whatever width the column has, so a scaled stroke
    would be thicker horizontally than vertically. This keeps it one pixel. */
 .chart-line { fill: none; stroke-width: 1.6; vector-effect: non-scaling-stroke; }
 .chart-area { stroke: none; opacity: .55; }
 .chart-band { fill: var(--bad); opacity: .07; }
 .chart-ref { stroke: var(--bad); stroke-width: 1; stroke-dasharray: 3 3; opacity: .55; vector-effect: non-scaling-stroke; }
-.chart-tick { fill: var(--text-mute); font: 400 9px var(--mono); }
 .chart-col { fill: var(--s-platform); }
 .chart-col.is-bad { fill: var(--bad); }
 .chart-col.is-warn { fill: var(--warn); }
@@ -1012,7 +1057,13 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
 
 /* A bullet, not a gauge: the number matters far less than where it sits
    relative to the line that will act on it. */
-.bullet { display: grid; grid-template-columns: minmax(0, 1fr) 52px; gap: 8px; align-items: center; margin-bottom: 6px; }
+.bullet { display: grid; grid-template-columns: 58px minmax(0, 1fr) 52px;
+  gap: 4px 8px; align-items: center; margin-bottom: 8px; }
+.bullet-label { color: var(--text-mute); font-size: var(--t-xs);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Where the scale ends and where the marks sit — a bullet without them
+   is a bar of unknown length against a line of unknown meaning. */
+.bullet-scale { grid-column: 2 / -1; color: var(--text-mute); font-size: var(--t-xs); }
 .bullet-track { position: relative; background: var(--surface-2); border-radius: 999px; height: 10px; }
 .bullet-fill { display: block; height: 100%; background: var(--s-prod); border-radius: 999px; }
 .bullet.is-warn .bullet-fill { background: var(--warn); }

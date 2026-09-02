@@ -26,7 +26,7 @@ log() { logger -t panel-hostops -- "$*" 2>/dev/null || true; echo "$*"; }
 
 deny() {
   log "REFUSED: ${SSH_ORIGINAL_COMMAND:-<empty>}"
-  echo "refused: the admin panel may only run: ufw-allow <port>, ufw-deny <port>, ufw-status" >&2
+  echo "refused: the admin panel may only run: ufw-allow <port>, ufw-deny <port>, ufw-status, repo-check" >&2
   exit 2
 }
 
@@ -55,6 +55,20 @@ case "$verb" in
     ;;
   ufw-status)
     ufw status numbered
+    ;;
+  # Ask the updater whether it can still reach the repo, and change nothing.
+  #
+  # NO ARGUMENT — the URL comes from /etc/infra/infra.env, which the panel
+  # already writes through its own bind mount, so this verb smuggles nothing in
+  # and widens a compromised panel's reach by exactly one `git ls-remote`.
+  #
+  # It exists because the panel has no git binary and, more to the point, must
+  # not be the thing that decides whether a credential works: the answer has to
+  # come from the process that will actually be doing the pulling, in the
+  # environment it will be doing it in. `--check` stops before any change.
+  repo-check)
+    [ -x /opt/infra/bin/infra-update ] || { echo "infra-update is not installed" >&2; exit 3; }
+    /opt/infra/bin/infra-update --check
     ;;
   *)
     deny
