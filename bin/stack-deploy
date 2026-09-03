@@ -68,6 +68,13 @@ case "$stack" in
   ingress)
     . "$INFRA_DIR/bin/cloudflared-version"
     cloudflared_version
+    # The stack names ${CLOUDFLARED_VERSION} plainly, so an empty value would
+    # deploy `cloudflare/cloudflared:` and fail with `invalid reference format`,
+    # which names nothing you can act on. Say it here instead, where a sentence
+    # is just a sentence. cloudflared_version always exports something valid, so
+    # reaching this means the resolver itself is broken or was not sourced.
+    [ -n "${CLOUDFLARED_VERSION:-}" ] \
+      || die "the connector version did not resolve — bin/cloudflared-version is missing or broken"
     echo "connector pinned to $(cloudflared_image)"
     ;;
 esac

@@ -1415,8 +1415,57 @@ class PanelTest(unittest.TestCase):
         text = (root / "stacks" / "ingress.yml").read_text()
         image = re.search(r"^\s*image:\s*(\S+)", text, re.M)
         self.assertIsNotNone(image, "cloudflared has no image line")
-        self.assertIn("${CLOUDFLARED_VERSION:?", image.group(1),
-                      "the connector version must be required, not literal or defaulted")
+        self.assertEqual(image.group(1), "cloudflare/cloudflared:${CLOUDFLARED_VERSION}",
+                         "the connector version must be the resolved variable, "
+                         "with no literal tag and no default beside it")
+
+    def test_no_stack_defaults_a_variable_with_a_dash_in_the_message(self):
+        """
+        `docker stack deploy` reads the FIRST `-` inside a `${VAR:?message}` as
+        the `${VAR-default}` separator, so the message becomes the value:
+        `${PV:?has-a-dash}` resolves to `a-dash` with PV set. Measured on
+        docker 29.7.2.
+
+        It cost an ingress deploy: a message mentioning `bin/stack-deploy` made
+        the connector image `cloudflare/cloudflared:deploy ingress ...` and the
+        failure said `invalid reference format`, naming nothing. The form is not
+        worth using at all here — a shell script can hold a sentence — so this
+        catches the next person who reaches for it.
+        """
+        import pathlib
+        import re
+
+        root = pathlib.Path(__file__).resolve().parents[2]
+        for stack in sorted((root / "stacks").glob("*.yml")):
+            # Values only. Interpolation happens after the YAML is parsed, so a
+            # comment may say `${PV:?has-a-dash}` — this one does — without
+            # anything ever substituting it.
+            body = "\n".join(line for line in stack.read_text().splitlines()
+                              if not line.lstrip().startswith("#"))
+            for message in re.findall(r"\$\{[A-Za-z_][A-Za-z0-9_]*:?[?]([^}]*)\}",
+                                      body):
+                self.assertNotIn(
+                    "-", message,
+                    f"{stack.name}: '{message}' contains a dash, which docker's "
+                    f"interpolation will treat as a default separator")
+
+    def test_the_connector_hands_over_rather_than_stopping_first(self):
+        """
+        At the free floor there is exactly ONE connector — the master's — and
+        Swarm's default update order is stop-first, which makes every connector
+        bump a real outage on the one service all inbound traffic arrives
+        through. With workers it is invisible, which is worse: it would be found
+        the first time somebody updated a cluster that had scaled to zero.
+        """
+        import pathlib
+        import yaml
+
+        root = pathlib.Path(__file__).resolve().parents[2]
+        deploy = yaml.safe_load((root / "stacks" / "ingress.yml").read_text())
+        deploy = deploy["services"]["cloudflared"]["deploy"]
+        self.assertEqual(deploy["update_config"]["order"], "start-first")
+        self.assertEqual(deploy["update_config"]["failure_action"], "rollback")
+        self.assertEqual(deploy["mode"], "global")
 
     def test_every_path_that_deploys_the_tunnel_resolves_the_version(self):
         """

@@ -49,10 +49,18 @@ services:
     # TUNNEL_TOKEN_FILE below does not exist under it and an older connector
     # starts with NO token, reports healthy, and never registers.
     #
-    # REQUIRED rather than defaulted: a default here would name the floor a
-    # second time, and two spellings of "which connector" is how the last one
-    # went wrong. `bin/stack-deploy ingress` exports it.
-    image: cloudflare/cloudflared:${CLOUDFLARED_VERSION:?resolved by bin/stack-deploy ingress — deploy this stack through that script}
+    # A PLAIN VARIABLE, and the explaining is done in bin/stack-deploy rather
+    # than here. `${VAR:?message}` looked like the right way to say "this must
+    # be resolved" and is a trap: `docker stack deploy` reads the first `-` in
+    # the MESSAGE as the `${VAR-default}` separator, so a message mentioning
+    # `bin/stack-deploy` silently became the image tag —
+    # `cloudflare/cloudflared:deploy ingress ...` — and the deploy failed with
+    # `invalid reference format` naming nothing that would help. Verified:
+    # `${PV:?has-a-dash}` resolves to `a-dash` with PV set.
+    #
+    # So the guard lives where a sentence survives being written: stack-deploy
+    # refuses to deploy this file with the variable empty.
+    image: cloudflare/cloudflared:${CLOUDFLARED_VERSION}
     command: tunnel --no-autoupdate --metrics 0.0.0.0:2000 run
     environment:
       TUNNEL_TOKEN_FILE: /run/secrets/CF_TUNNEL_TOKEN
@@ -69,6 +77,27 @@ services:
       # connector is already registered with Cloudflare, so the tunnel never
       # goes dark mid-handover. Do not add a constraint here.
       mode: global
+      # HANDOVER, NOT A GAP. Swarm's default is stop-first with parallelism 1,
+      # which is invisible on a cluster with workers — the other nodes' connectors
+      # stay registered and Cloudflare routes to them — and is a real outage at
+      # the free floor, where the master's connector is the only one there is.
+      # start-first registers the new connector before the old one is asked to
+      # go, and the old one then drains for up to the stop_grace_period above.
+      # Nothing is published on a host port here, so two connectors on one node
+      # for a few seconds cost nothing.
+      #
+      # A connector is not our software and now updates itself on Cloudflare's
+      # schedule, so failure_action matters more than it used to: a release that
+      # cannot start puts the previous one back rather than leaving the node
+      # without a front door.
+      update_config:
+        order: start-first
+        parallelism: 1
+        failure_action: rollback
+        monitor: 30s
+      rollback_config:
+        order: start-first
+        parallelism: 1
       resources:
         # Global, so this is the per-node tax the autoscaler subtracts from a
         # new worker's advertised size before counting application capacity.
