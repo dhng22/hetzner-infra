@@ -22,5 +22,6 @@ bin/stack-deploy
 bin/infra-update
 bin/render-fleet-env
 bin/infra-images
+bin/cloudflared-version
 pki/__init__.py
 signals/workloads.py

@@ -54,14 +54,21 @@ set -a; . "$INFRA_ENV"; set +a
 # path, saving a setting would quietly move the cluster to another version of
 # the autoscaler.
 #
-# `ingress` is deliberately not in this list — it runs cloudflared's published
-# image and nothing this repository builds, so a cluster with no recorded
-# commit can still redeploy its tunnel.
+# `ingress` runs cloudflared's published image and nothing this repository
+# builds, so it needs no commit — a cluster that has never updated can still
+# redeploy its tunnel. It resolves a version instead, from what the cluster last
+# recorded, offline and unable to fail: the box whose outbound path is broken is
+# exactly the box that needs to be able to redeploy its own connector.
 case "$stack" in
   monitoring|admin)
     . "$INFRA_DIR/bin/infra-images"
     infra_images || die "cannot resolve the infrastructure image references (see above)"
     echo "images pinned to ${INFRA_IMAGE_COMMIT:0:12}"
+    ;;
+  ingress)
+    . "$INFRA_DIR/bin/cloudflared-version"
+    cloudflared_version
+    echo "connector pinned to $(cloudflared_image)"
     ;;
 esac
 

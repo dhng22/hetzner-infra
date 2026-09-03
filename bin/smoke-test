@@ -69,6 +69,37 @@ for stack in monitoring ingress admin; do
   if docker stack ls --format '{{.Name}}' | grep -qx "$stack"; then ok "stack deployed: $stack"; else bad "stack deployed: $stack"; fi
 done
 
+# THE CONNECTOR IS THE FRONT DOOR AND IT IS NOT OUR SOFTWARE. Its version is
+# resolved rather than typed into the stack file, and the update timer moves it
+# forward once a day — so the thing worth proving is that what is RUNNING is
+# what this cluster resolved, not merely that something is running. A connector
+# left behind by a deploy that failed halfway looks perfectly healthy from here
+# and is exactly what this catches.
+if [ -r "$INFRA_DIR/bin/cloudflared-version" ]; then
+  . "$INFRA_DIR/bin/cloudflared-version"
+  want="$(cloudflared_image)"
+  running="$(docker service inspect ingress_cloudflared \
+             --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' 2>/dev/null || true)"
+  running="${running%%@*}"
+  if [ -z "$running" ]; then
+    bad "connector runs $want" "ingress_cloudflared does not exist; there is no tunnel"
+  elif [ "$running" = "$want" ]; then
+    ok "connector runs $want"
+  else
+    bad "connector runs $want" \
+        "it is on $running. The last ingress deploy did not take: bin/stack-deploy ingress"
+  fi
+  age="$(_cf_age_seconds)"
+  if [ -n "${CLOUDFLARED_PIN:-}" ]; then
+    skip "connector version was checked recently" "pinned to $CLOUDFLARED_PIN in infra.env"
+  elif [ "$age" -lt 172800 ]; then
+    ok "connector version was checked recently"
+  else
+    bad "connector version was checked recently" \
+        "last asked $((age / 86400))d ago; the update timer should ask daily. Check: systemctl status infra-update.timer"
+  fi
+fi
+
 # A RENAMED infrastructure service does not go away on its own. `bin/stack-deploy`
 # deploys without `--prune` on purpose — an operator who added a service to an
 # infra stack by hand should not lose it to an unrelated update — so the old name

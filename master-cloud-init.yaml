@@ -95,7 +95,7 @@ write_files:
       #   https://x-access-token:<token>@github.com/you/repo.git
       # A token is needed even for a PUBLIC repo: GitHub answers an anonymous
       # fetch from a cloud IP with 401 often enough to look like a dead network.
-      INFRA_REPO_URL=https://x-access-token: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@github.com/dhng22/hetzner-infra.git
+      INFRA_REPO_URL=https://x-access-token:REPLACE_ME@github.com/dhng22/hetzner-infra.git
       INFRA_REPO_BRANCH=master
       # How often to ask whether the branch moved. One `git ls-remote` a tick,
       # which transfers nothing when nothing has changed.
@@ -474,6 +474,11 @@ write_files:
         chmod +x /opt/infra/bin/*
         ln -sf /opt/infra/bin/component /usr/local/bin/component
       fi
+      # Ask once, here, so a cluster created today comes up on today's connector
+      # rather than on the baseline compiled into bin/cloudflared-version. From
+      # now on the update timer asks, once a day.
+      . /opt/infra/bin/cloudflared-version
+      cloudflared_check || true
       /opt/infra/bin/stack-deploy ingress
 
       # --- self-update timer ---------------------------------------------------

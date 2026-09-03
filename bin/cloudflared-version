@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+# =============================================================================
+# cloudflared-version — which connector image this cluster should be running.
+# SOURCED, never executed.
+# =============================================================================
+#   . /opt/infra/bin/cloudflared-version
+#   cloudflared_version   # export CLOUDFLARED_VERSION. No network, cannot fail.
+#   cloudflared_check     # ask upstream, at most once a day. Best effort.
+#
+# WHY THE VERSION IS RESOLVED RATHER THAN WRITTEN IN THE STACK FILE.
+#
+# The connector is not ours and does not move with our commits. Cloudflare ages
+# old connectors out, so a number typed into stacks/ingress.yml is correct on
+# the day it is typed and quietly rots afterwards — on the one service that IS
+# the front door.
+#
+# `:latest` is not the answer either. `docker stack deploy` resolves a tag to a
+# digest at deploy time, so `:latest` would not keep a RUNNING connector
+# current: it would change the version on some unrelated redeploy months later,
+# which is the same staleness with the timing made unpredictable.
+#
+# So the version is a fact this cluster records, refreshed by the update timer
+# at most once a day, and adopted only after the image has been proven to pull.
+#
+# THE FLOOR IS LOAD-BEARING. TUNNEL_TOKEN_FILE did not exist before 2025.4.0
+# (cloudflare/cloudflared#1316, closing #645). An older image ignores the
+# variable, starts with NO token and never registers — and the failure is
+# invisible from this side: the stack deploys, the service reports running, and
+# only the Cloudflare dashboard knows, where it says "No connection detected
+# yet". Nothing here may resolve below it. If you ever pin below it on purpose,
+# move the token handling back with it.
+#
+# RESOLUTION NEVER TOUCHES THE NETWORK. `stack-deploy ingress` calls it — from
+# the panel, from bootstrap, from the updater — and a box whose outbound path is
+# the broken thing must still be able to redeploy its own tunnel.
+# =============================================================================
+
+#: Never resolve below this, whoever says otherwise — upstream, a pin, or a
+#: state file somebody edited. See above; this is not a style preference.
+CLOUDFLARED_FLOOR="2025.4.0"
+
+#: What to run before the first successful check: the newest connector this
+#: commit knew about. It is allowed to rot, and it does not rot dangerously —
+#: the daily check moves off it within a day of the cluster existing. Its only
+#: job is that a fresh master, or one that cannot reach the release feed, comes
+#: up on a recent connector rather than on the floor.
+CLOUDFLARED_BASELINE="2026.8.2"
+CLOUDFLARED_IMAGE_REPO="cloudflare/cloudflared"
+CLOUDFLARED_RELEASES_API="https://api.github.com/repos/cloudflare/cloudflared/releases/latest"
+
+_cf_log() { printf 'cloudflared: %s\n' "$*" >&2; }
+_cf_state_file() { printf '%s/state/cloudflared.json' "${INFRA_DIR:-/opt/infra}"; }
+
+#: Cloudflare's calendar versioning: 2026.8.2. Anything else is not a version we
+#: are willing to put in front of the cluster, whoever said it.
+_cf_valid() {
+    case "$1" in
+        [0-9][0-9][0-9][0-9].*.*) ;;
+        *) return 1 ;;
+    esac
+    [[ "$1" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}$ ]]
+}
+
+#: $1 >= $2, field by field. Not `sort -V`: BSD sort has no -V, and the tests
+#: for this run on a laptop.
+#: Written with plain `if` rather than `[ ] && return`, because this file is
+#: sourced into scripts running under `set -e`, where a failing test at the head
+#: of an AND-list is a shell-specific coin toss.
+_cf_ge() {
+    local a b i x y
+    IFS='.' read -r -a a <<<"$1" || true
+    IFS='.' read -r -a b <<<"$2" || true
+    for i in 0 1 2; do
+        x=$((10#${a[$i]:-0}))
+        y=$((10#${b[$i]:-0}))
+        if [ "$x" -gt "$y" ]; then return 0; fi
+        if [ "$x" -lt "$y" ]; then return 1; fi
+    done
+    return 0
+}
+
+_cf_read() {
+    python3 - "$(_cf_state_file)" "$1" <<'PYEOF' 2>/dev/null || printf ''
+import json, sys
+try:
+    print(json.load(open(sys.argv[1])).get(sys.argv[2]) or "")
+except Exception:
+    print("")
+PYEOF
+}
+
+#: version, source, detail. Stamps checked_at whatever the outcome, so an
+#: upstream that is down is asked once a day rather than on every tick.
+_cf_record() {
+    python3 - "$(_cf_state_file)" "$1" "$2" "$3" <<'PYEOF'
+import datetime, json, os, sys, tempfile
+path, version, source, detail = sys.argv[1:5]
+os.makedirs(os.path.dirname(path), exist_ok=True)
+data = {"version": version, "source": source, "detail": detail,
+        "checked_at": datetime.datetime.now(datetime.timezone.utc)
+                              .replace(microsecond=0).isoformat()}
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+with os.fdopen(fd, "w") as fh:
+    json.dump(data, fh, indent=2)
+os.chmod(tmp, 0o600)
+os.replace(tmp, path)
+PYEOF
+}
+
+#: Seconds since the last check, or a very large number if there has not been
+#: one. Unparseable is treated as never, because the fallback is one extra
+#: request a day and the alternative is never asking again.
+_cf_age_seconds() {
+    python3 - "$(_cf_state_file)" <<'PYEOF' 2>/dev/null || printf '999999999'
+import datetime, json, sys
+try:
+    stamp = json.load(open(sys.argv[1]))["checked_at"]
+    when = datetime.datetime.fromisoformat(stamp)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=datetime.timezone.utc)
+    print(int((datetime.datetime.now(datetime.timezone.utc) - when).total_seconds()))
+except Exception:
+    print(999999999)
+PYEOF
+}
+
+#: The version to deploy. CLOUDFLARED_PIN in infra.env wins outright — it is the
+#: escape hatch for the morning a new connector is the problem — then what was
+#: last recorded, then the baseline. Always exports something valid, so
+#: stacks/ingress.yml can require the variable rather than defaulting it and
+#: naming a version a second time.
+cloudflared_version() {
+    local want="${CLOUDFLARED_PIN:-}"
+    [ -n "$want" ] || want="$(_cf_read version)"
+    _cf_valid "$want" || want="$CLOUDFLARED_BASELINE"
+    _cf_ge "$want" "$CLOUDFLARED_FLOOR" || want="$CLOUDFLARED_FLOOR"
+    export CLOUDFLARED_VERSION="$want"
+}
+
+#: Ask Cloudflare what the newest connector is, and adopt it if it is real.
+#:
+#: Best effort by design: this runs on the update timer, and no failure to reach
+#: a release feed is worth failing an update over. Every branch ends with the
+#: cluster on a version it has proven, and every one that is not "adopted" says
+#: why in the state file.
+cloudflared_check() {
+    local hours interval age current latest pull_err
+    cloudflared_version
+    current="$CLOUDFLARED_VERSION"
+
+    if [ -n "${CLOUDFLARED_PIN:-}" ]; then
+        _cf_log "pinned to $CLOUDFLARED_PIN in infra.env; not asking upstream"
+        return 0
+    fi
+
+    hours="${CLOUDFLARED_CHECK_HOURS:-24}"
+    case "$hours" in ''|*[!0-9]*) hours=24 ;; esac
+    if [ "$hours" -eq 0 ]; then
+        _cf_log "CLOUDFLARED_CHECK_HOURS=0; upstream checks are off"
+        return 0
+    fi
+    interval=$((hours * 3600))
+    age="$(_cf_age_seconds)"
+    if [ "$age" -lt "$interval" ]; then
+        return 0
+    fi
+
+    latest="$(curl -fsS --max-time 20 "$CLOUDFLARED_RELEASES_API" 2>/dev/null \
+              | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+              | head -1)"
+    if ! _cf_valid "$latest"; then
+        _cf_log "could not read a version from the release feed; staying on $current"
+        _cf_record "$current" "kept" "the release feed gave no usable version"
+        return 0
+    fi
+    if ! _cf_ge "$latest" "$CLOUDFLARED_FLOOR"; then
+        # Cannot happen from Cloudflare, and that is exactly why it is checked:
+        # the one thing a wrong answer here can do is take the tunnel down.
+        _cf_log "upstream says $latest, which is below the $CLOUDFLARED_FLOOR floor; ignoring"
+        _cf_record "$current" "kept" "upstream $latest is below the $CLOUDFLARED_FLOOR floor"
+        return 0
+    fi
+    if [ "$latest" = "$current" ]; then
+        _cf_record "$current" "github-release" ""
+        return 0
+    fi
+    if ! _cf_ge "$latest" "$current"; then
+        _cf_log "upstream says $latest, older than the $current already recorded; keeping it"
+        _cf_record "$current" "kept" "upstream $latest is older than $current"
+        return 0
+    fi
+
+    # PULLING IS THE CHECK, the same as it is for our own images. A GitHub
+    # release exists before its Docker tag does, and adopting a tag that has not
+    # been published yet would fail the ingress deploy — on the connector, which
+    # is the whole front door.
+    if ! pull_err="$(docker pull --quiet "$CLOUDFLARED_IMAGE_REPO:$latest" 2>&1)"; then
+        _cf_log "$latest is released but not pullable yet; staying on $current"
+        _cf_record "$current" "kept" "$latest did not pull: $(printf '%s' "$pull_err" | tr '\n' ' ' | cut -c1-160)"
+        return 0
+    fi
+
+    _cf_log "connector $current -> $latest"
+    _cf_record "$latest" "github-release" ""
+    cloudflared_version
+}
+
+#: The image reference a caller should expect to be running, so the updater and
+#: smoke-test compare against one spelling rather than two.
+cloudflared_image() {
+    cloudflared_version
+    printf '%s:%s' "$CLOUDFLARED_IMAGE_REPO" "$CLOUDFLARED_VERSION"
+}

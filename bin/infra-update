@@ -230,8 +230,39 @@ if [ "$last_status" = "error" ] && [ "$last_stage" = "reach" ]; then
   last_status=""
 fi
 
+# --- the tunnel connector ----------------------------------------------------
+# cloudflared is not ours and does not arrive with our commits, so a tick that
+# finds nothing new still has something to do. Cloudflare ages old connectors
+# out, and the front door should not be running whatever it happened to boot on
+# a year ago. bin/cloudflared-version does the deciding — one upstream question
+# a day, never a version it has not pulled, never below the floor.
+#
+# Deploying is conditional on the RUNNING image, not on whether the check found
+# something: a resolution that did not move must not roll the tunnel, and the
+# apply path below redeploys ingress anyway.
+connector_sync() {
+  local running want
+  [ -r "$INFRA_DIR/bin/cloudflared-version" ] || return 0
+  . "$INFRA_DIR/bin/cloudflared-version"
+  cloudflared_check
+  want="$(cloudflared_image)"
+  running="$(docker service inspect ingress_cloudflared \
+             --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' 2>/dev/null || true)"
+  # No ingress stack yet: bootstrap creates it, and this is not the place.
+  [ -n "$running" ] || return 0
+  case "$running" in
+    "$want"|"$want"@*) return 0 ;;
+  esac
+  log "connector: $running -> $want"
+  "$INFRA_DIR/bin/stack-deploy" ingress >/dev/null \
+    || log "WARNING: could not deploy $want; the tunnel is still on $running"
+}
+
 if [ "$MODE" != "force" ] && [ "$running" = "$remote" ] && [ "$last_status" != "error" ]; then
   [ "$MODE" = "check" ] && log "up to date at ${remote:0:12}"
+  # Nothing of ours moved, which is the common tick and the only one where the
+  # connector would otherwise never be looked at.
+  [ "$MODE" = "check" ] || connector_sync
   exit 0
 fi
 [ "$last_status" = "error" ] && [ "$running" = "$remote" ] \
@@ -460,7 +491,11 @@ for retired in monitoring_dispatcher; do
   fi
 done
 
-log "deploying ingress"
+# The connector version is resolved before the deploy, not after, so a tick that
+# carries both a new commit and a new connector rolls ingress once.
+. "$INFRA_DIR/bin/cloudflared-version"
+cloudflared_check
+log "deploying ingress on $(cloudflared_image)"
 "$INFRA_DIR/bin/stack-deploy" ingress >/dev/null || apply_fail "ingress deploy failed"
 
 log "deploying admin"

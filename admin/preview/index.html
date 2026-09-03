@@ -2110,6 +2110,11 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
         <span class="row-title">Cloudflare Tunnel</span>
         <span class="row-sub">One connector per node, master included. All inbound traffic arrives here. Routes are configured in the Cloudflare dashboard, not here.</span>
       </span>
+      
+      <span class="row-metric hide-sm mono">
+        <span class="k">Image</span>
+        <span class="v">cloudflared:2024.10.1</span>
+      </span>
       <span class="row-metric hide-sm">
         <span class="k">Tasks</span>
         <span class="v num">4/4</span>
@@ -2136,6 +2141,11 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
         <span class="row-title">Grafana</span>
         <span class="row-sub">Dashboards over VictoriaMetrics and Loki.</span>
       </span>
+      
+      <span class="row-metric hide-sm mono">
+        <span class="k">Image</span>
+        <span class="v">grafana:11.3.0</span>
+      </span>
       <span class="row-metric hide-sm">
         <span class="k">Tasks</span>
         <span class="v num">1/1</span>
@@ -2152,6 +2162,11 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
       <span>
         <span class="row-title">VictoriaMetrics</span>
         <span class="row-sub">Metric storage. Every scaling decision is read from here.</span>
+      </span>
+      
+      <span class="row-metric hide-sm mono">
+        <span class="k">Image</span>
+        <span class="v">victoria-metrics:v1.106.1</span>
       </span>
       <span class="row-metric hide-sm">
         <span class="k">Tasks</span>
@@ -2170,6 +2185,11 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
         <span class="row-title">vmagent</span>
         <span class="row-sub">Scrapes anything carrying the prometheus.* deploy labels. Components get them automatically.</span>
       </span>
+      
+      <span class="row-metric hide-sm mono">
+        <span class="k">Image</span>
+        <span class="v">vmagent:v1.106.1</span>
+      </span>
       <span class="row-metric hide-sm">
         <span class="k">Tasks</span>
         <span class="v num">1/1</span>
@@ -2186,6 +2206,11 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
       <span>
         <span class="row-title">vmalert</span>
         <span class="row-sub">Evaluates config/alerts.yml against VictoriaMetrics.</span>
+      </span>
+      
+      <span class="row-metric hide-sm mono">
+        <span class="k">Image</span>
+        <span class="v">vmalert:v1.106.1</span>
       </span>
       <span class="row-metric hide-sm">
         <span class="k">Tasks</span>
@@ -2204,6 +2229,11 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
         <span class="row-title">Alertmanager</span>
         <span class="row-sub">Groups and dispatches alerts to your webhook.</span>
       </span>
+      
+      <span class="row-metric hide-sm mono">
+        <span class="k">Image</span>
+        <span class="v">alertmanager:v0.27.0</span>
+      </span>
       <span class="row-metric hide-sm">
         <span class="k">Tasks</span>
         <span class="v num">1/1</span>
@@ -2220,6 +2250,11 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
       <span>
         <span class="row-title">Loki</span>
         <span class="row-sub">Log storage. Every container ships to it directly through the log driver.</span>
+      </span>
+      
+      <span class="row-metric hide-sm mono">
+        <span class="k">Image</span>
+        <span class="v">loki:3.1.1</span>
       </span>
       <span class="row-metric hide-sm">
         <span class="k">Tasks</span>
@@ -2247,6 +2282,11 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
         <span class="row-title">Overseer</span>
         <span class="row-sub">Decides everything: which services are slow and why, how many machines the cluster needs, and which of them may be deleted. It holds the Hetzner token; the other two only apply what it decides.</span>
       </span>
+      
+      <span class="row-metric hide-sm mono">
+        <span class="k">Image</span>
+        <span class="v">overseer:73887dec9c22</span>
+      </span>
       <span class="row-metric hide-sm">
         <span class="k">Tasks</span>
         <span class="v num">1/1</span>
@@ -2261,6 +2301,11 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
       <span>
         <span class="row-title">Autoscaler</span>
         <span class="row-sub">Applies the overseer&#39;s decisions to application services: replica counts, placement constraints, and reservations measured from real usage.</span>
+      </span>
+      
+      <span class="row-metric hide-sm mono">
+        <span class="k">Image</span>
+        <span class="v">autoscaler:73887dec9c22</span>
       </span>
       <span class="row-metric hide-sm">
         <span class="k">Tasks</span>
@@ -2277,6 +2322,11 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
         <span class="row-title">Dataguard</span>
         <span class="row-sub">The counterpart for stateful components: replica sets, sentinel quorums, failover, backups and restores.</span>
       </span>
+      
+      <span class="row-metric hide-sm mono">
+        <span class="k">Image</span>
+        <span class="v">dataguard:73887dec9c22</span>
+      </span>
       <span class="row-metric hide-sm">
         <span class="k">Tasks</span>
         <span class="v num">1/1</span>
@@ -2292,6 +2342,11 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
         <span class="row-title">Node exporters</span>
         <span class="row-sub">node-exporter and cadvisor, one of each per node.</span>
       </span>
+      
+      <span class="row-metric hide-sm mono">
+        <span class="k">Image</span>
+        <span class="v">node-exporter:v1.8.2</span>
+      </span>
       <span class="row-metric hide-sm">
         <span class="k">Tasks</span>
         <span class="v num">1/1</span>
@@ -2306,6 +2361,11 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
       <span>
         <span class="row-title">Admin panel</span>
         <span class="row-sub">This console. It holds the docker socket, so its password is the cluster.</span>
+      </span>
+      
+      <span class="row-metric hide-sm mono">
+        <span class="k">Image</span>
+        <span class="v">admin:73887dec9c22</span>
       </span>
       <span class="row-metric hide-sm">
         <span class="k">Tasks</span>
@@ -2455,7 +2515,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-03T03:54:02Z" data-localtime>2026-09-03T03:54:02Z</time>
+          <time datetime="2026-09-03T04:44:58Z" data-localtime>2026-09-03T04:44:58Z</time>
           
         </div>
       </div>
@@ -3870,7 +3930,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-03T03:54:02Z" data-localtime>2026-09-03T03:54:02Z</time>
+          <time datetime="2026-09-03T04:44:58Z" data-localtime>2026-09-03T04:44:58Z</time>
           
         </div>
       </div>
@@ -5198,7 +5258,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-03T03:54:02Z" data-localtime>2026-09-03T03:54:02Z</time>
+          <time datetime="2026-09-03T04:44:58Z" data-localtime>2026-09-03T04:44:58Z</time>
           
         </div>
       </div>
@@ -5395,9 +5455,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis+sentinel://default:e1fe5f4defc73f6fd8f3a3600b59d9fa72558a2ee2dff509@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
+              <code>redis+sentinel://default:8231c5e46c6255ca2bddc62d3215b37caa1e86f00d35f91a@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis+sentinel://default:e1fe5f4defc73f6fd8f3a3600b59d9fa72558a2ee2dff509@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
+                      data-copy-text="redis+sentinel://default:8231c5e46c6255ca2bddc62d3215b37caa1e86f00d35f91a@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -5408,7 +5468,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="e1fe5f4defc73f6fd8f3a3600b59d9fa72558a2ee2dff509">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="8231c5e46c6255ca2bddc62d3215b37caa1e86f00d35f91a">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -5434,9 +5494,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="panel-body stack">
           
           <div class="conn">
-            <code>redis://default:e1fe5f4defc73f6fd8f3a3600b59d9fa72558a2ee2dff509@10.0.0.2:46379</code>
+            <code>redis://default:8231c5e46c6255ca2bddc62d3215b37caa1e86f00d35f91a@10.0.0.2:46379</code>
             <button class="btn btn-sm" type="button" data-copy
-                    data-copy-text="redis://default:e1fe5f4defc73f6fd8f3a3600b59d9fa72558a2ee2dff509@10.0.0.2:46379">Copy</button>
+                    data-copy-text="redis://default:8231c5e46c6255ca2bddc62d3215b37caa1e86f00d35f91a@10.0.0.2:46379">Copy</button>
           </div>
           <div class="table-wrap">
             <table>
@@ -6341,7 +6401,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-03T03:54:02Z" data-localtime>2026-09-03T03:54:02Z</time>
+          <time datetime="2026-09-03T04:44:58Z" data-localtime>2026-09-03T04:44:58Z</time>
           
         </div>
       </div>
@@ -6526,9 +6586,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>mongodb://root:d2a06a2e431687e9e6297e6a6fdcaead45c9f70c1903be05@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
+              <code>mongodb://root:a3f4ae398ea737b8f96f9d55535023d8166e2b2f1de219ae@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:d2a06a2e431687e9e6297e6a6fdcaead45c9f70c1903be05@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
+                      data-copy-text="mongodb://root:a3f4ae398ea737b8f96f9d55535023d8166e2b2f1de219ae@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -6539,7 +6599,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="d2a06a2e431687e9e6297e6a6fdcaead45c9f70c1903be05">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="a3f4ae398ea737b8f96f9d55535023d8166e2b2f1de219ae">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -10831,7 +10891,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788404042.170421" data-localtime-epoch>1788404042</time>
+              <time datetime="1788407098.514087" data-localtime-epoch>1788407098</time>
             
           </td>
           <td>
@@ -11523,7 +11583,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788404042.170421" data-localtime-epoch>1788404042</time>
+              <time datetime="1788407098.514087" data-localtime-epoch>1788407098</time>
             
           </td>
           <td>

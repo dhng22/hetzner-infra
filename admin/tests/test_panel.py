@@ -1289,6 +1289,180 @@ class PanelTest(unittest.TestCase):
             self.assertNotIn(key, settings_def.DEFAULTS,
                              f"{key} must have no invented default")
 
+    # --- the tunnel connector ---------------------------------------------
+    #
+    # cloudflared is the only image this cluster runs that nobody here builds
+    # and no commit of ours moves. Its version is therefore RESOLVED —
+    # bin/cloudflared-version decides, the update timer refreshes it once a day
+    # — and these pin the two things that resolution must never get wrong: it
+    # must not go backwards past the release that made the tunnel work at all,
+    # and it must not leave a fresh cluster a year behind.
+
+    def _resolve(self, state=None, pin=None):
+        """CLOUDFLARED_VERSION as bin/cloudflared-version resolves it."""
+        import json
+        import pathlib
+        import subprocess
+        import tempfile
+
+        root = pathlib.Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as home:
+            (pathlib.Path(home) / "state").mkdir()
+            if state is not None:
+                (pathlib.Path(home) / "state" / "cloudflared.json").write_text(
+                    json.dumps(state))
+            script = (f'set -euo pipefail\n'
+                      f'INFRA_DIR={home}\n'
+                      f'{"CLOUDFLARED_PIN=" + pin if pin else ""}\n'
+                      f'. {root}/bin/cloudflared-version\n'
+                      f'cloudflared_version\n'
+                      f'printf "%s" "$CLOUDFLARED_VERSION"\n')
+            done = subprocess.run(["bash", "-c", script],
+                                  capture_output=True, text=True)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            return done.stdout.strip()
+
+    def _constant(self, name):
+        import pathlib
+        import re
+
+        root = pathlib.Path(__file__).resolve().parents[2]
+        text = (root / "bin" / "cloudflared-version").read_text()
+        found = re.search(rf'^{name}="([^"]+)"', text, re.M)
+        self.assertIsNotNone(found, f"{name} is not defined any more")
+        return found.group(1)
+
+    def test_a_fresh_cluster_gets_a_recent_connector_not_the_floor(self):
+        """
+        A master created today, before its first upstream check — or one that
+        cannot reach the release feed at all — must come up on something recent.
+        Resolving to the FLOOR instead would be technically working and a year
+        out of date on the one service that is the front door, which is the
+        state this whole mechanism exists to end.
+        """
+        baseline = self._constant("CLOUDFLARED_BASELINE")
+        self.assertEqual(self._resolve(state=None), baseline)
+        self.assertNotEqual(baseline, self._constant("CLOUDFLARED_FLOOR"))
+
+    def test_nothing_resolves_below_the_release_that_reads_the_token_file(self):
+        """
+        TUNNEL_TOKEN_FILE did not exist before 2025.4.0. Under it the connector
+        ignores the variable, starts with NO token and never registers — and
+        reports as perfectly healthy while doing it, because the only party that
+        knows is Cloudflare. So the floor holds against every input: a state
+        file somebody edited, and a pin somebody typed.
+        """
+        floor = self._constant("CLOUDFLARED_FLOOR")
+        self.assertEqual(self._resolve(state={"version": "2024.10.1"}), floor)
+        self.assertEqual(self._resolve(pin="2024.10.1"), floor)
+
+    def test_an_unreadable_version_falls_back_instead_of_deploying_a_broken_tag(self):
+        """
+        `image: cloudflare/cloudflared:` is a compose error at deploy time, and
+        an empty or malformed version is the only way to produce one. Garbage in
+        either input resolves to the baseline rather than being passed through.
+        """
+        baseline = self._constant("CLOUDFLARED_BASELINE")
+        self.assertEqual(self._resolve(state={"version": "latest"}), baseline)
+        self.assertEqual(self._resolve(state={}), baseline)
+        self.assertEqual(self._resolve(pin="not-a-version"), baseline)
+
+    def test_a_pin_beats_what_upstream_last_said(self):
+        """
+        The escape hatch has to actually win: the morning a new connector is the
+        problem, CLOUDFLARED_PIN in infra.env is how you stop the timer moving
+        you onto it, and it is worthless if the recorded version outranks it.
+        """
+        self.assertEqual(
+            self._resolve(state={"version": "2026.9.9"}, pin="2026.7.0"),
+            "2026.7.0")
+
+    def test_versions_compare_as_numbers_and_not_as_text(self):
+        """
+        Cloudflare's calendar versioning reaches double digits every year:
+        2026.8.10 comes AFTER 2026.8.2, and string comparison says the
+        opposite. Getting this backwards would make the daily check quietly
+        refuse every release for a month.
+        """
+        import pathlib
+        import subprocess
+
+        root = pathlib.Path(__file__).resolve().parents[2]
+        table = [("2026.8.10", "2026.8.2", True),
+                 ("2026.8.2", "2026.8.10", False),
+                 ("2026.1.0", "2025.12.9", True),
+                 ("2025.4.0", "2025.4.0", True)]
+        for left, right, expected in table:
+            script = (f'. {root}/bin/cloudflared-version\n'
+                      f'if _cf_ge "{left}" "{right}"; then echo yes; else echo no; fi\n')
+            done = subprocess.run(["bash", "-c", script],
+                                  capture_output=True, text=True)
+            self.assertEqual(done.stdout.strip(),
+                             "yes" if expected else "no",
+                             f"{left} >= {right}")
+
+    def test_the_stack_file_names_no_connector_version_of_its_own(self):
+        """
+        A number typed into stacks/ingress.yml is a second answer to "which
+        connector", and the second answer is the one that rots. The stack
+        REQUIRES the variable rather than defaulting it, so a deploy that
+        skipped resolution fails loudly instead of silently picking a version.
+        """
+        import pathlib
+        import re
+
+        root = pathlib.Path(__file__).resolve().parents[2]
+        text = (root / "stacks" / "ingress.yml").read_text()
+        image = re.search(r"^\s*image:\s*(\S+)", text, re.M)
+        self.assertIsNotNone(image, "cloudflared has no image line")
+        self.assertIn("${CLOUDFLARED_VERSION:?", image.group(1),
+                      "the connector version must be required, not literal or defaulted")
+
+    def test_every_path_that_deploys_the_tunnel_resolves_the_version(self):
+        """
+        Four callers deploy ingress — bootstrap, the updater, the panel's
+        redeploy button and an operator at a prompt — and they all go through
+        bin/stack-deploy, so that is where resolution belongs. If it moved into
+        the updater instead, the panel's button would deploy an unset variable.
+        """
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parents[2]
+        deploy = (root / "bin" / "stack-deploy").read_text()
+        self.assertIn("bin/cloudflared-version", deploy)
+        self.assertIn("cloudflared_version", deploy)
+        self.assertIn("bin/cloudflared-version",
+                      (root / "config" / "required-files").read_text(),
+                      "a tree without the resolver deploys ingress with an unset "
+                      "variable, and required-files is what refuses it first")
+
+    def test_the_updater_looks_at_the_connector_on_a_tick_that_changes_nothing(self):
+        """
+        The whole point: cloudflared does not arrive with our commits, so a
+        cluster whose code is current still needs its connector looked at. If
+        the check only ran on the apply path, a repo that had not moved in three
+        months would mean a connector three months stale.
+        """
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parents[2]
+        text = (root / "bin" / "infra-update").read_text()
+
+        # The up-to-date path is everything before the line that announces an
+        # apply. The connector has to be dealt with on that side of it.
+        head, sep, tail = text.partition('log "running ${running:0:12}')
+        self.assertTrue(sep, "infra-update no longer has an up-to-date path")
+        self.assertIn("connector_sync", head,
+                      "nothing looks at the connector before the up-to-date exit, "
+                      "so a repo that has not moved leaves the tunnel stale")
+
+        # And on the apply side, the version is refreshed BEFORE ingress is
+        # deployed — refreshing it afterwards would need a second deploy to take
+        # effect, which is a rolled tunnel for no reason.
+        deploy_at = tail.index("stack-deploy\" ingress")
+        self.assertIn("cloudflared_check", tail[:deploy_at],
+                      "ingress is deployed before the connector version is refreshed")
+
     def test_both_copies_of_the_credential_repair_agree(self):
         """
         The rule that moves a pasted token into the password position is

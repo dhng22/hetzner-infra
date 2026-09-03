@@ -41,20 +41,18 @@ x-loki-logging: &loki-logging
 services:
 
   cloudflared:
-    # PINNED, and >= 2025.4.0 is load-bearing. TUNNEL_TOKEN_FILE below did not
-    # exist until 2025.4.0 (cloudflare/cloudflared#1316, closing #645); this was
-    # pinned to 2024.10.1, so the variable was silently ignored, the connector
-    # started with NO token, and it never registered. The failure is invisible
-    # from this side: the stack deploys, the service reports as running, and
-    # only the Cloudflare dashboard knows, where it reads "No connection
-    # detected yet". If you ever roll this image BACK, roll the token handling
-    # back with it.
+    # RESOLVED, not typed here, and never `:latest` — the reasoning is in
+    # bin/cloudflared-version, which is the one place that decides. Short
+    # version: this is the front door and it is not our software, so the number
+    # is a fact the cluster records and the update timer refreshes once a day,
+    # after proving the image pulls. It never resolves below 2025.4.0, because
+    # TUNNEL_TOKEN_FILE below does not exist under it and an older connector
+    # starts with NO token, reports healthy, and never registers.
     #
-    # Do not change this to `:latest`. `docker stack deploy` resolves the tag to
-    # a digest at deploy time, so `:latest` would not keep a running connector
-    # current — it would only mean that an unrelated redeploy, months from now,
-    # silently swaps the version that ingress depends on. Bump it deliberately.
-    image: cloudflare/cloudflared:2026.8.2
+    # REQUIRED rather than defaulted: a default here would name the floor a
+    # second time, and two spellings of "which connector" is how the last one
+    # went wrong. `bin/stack-deploy ingress` exports it.
+    image: cloudflare/cloudflared:${CLOUDFLARED_VERSION:?resolved by bin/stack-deploy ingress — deploy this stack through that script}
     command: tunnel --no-autoupdate --metrics 0.0.0.0:2000 run
     environment:
       TUNNEL_TOKEN_FILE: /run/secrets/CF_TUNNEL_TOKEN

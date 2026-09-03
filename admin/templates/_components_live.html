@@ -120,6 +120,14 @@
         <span class="row-title">{{ entry.display }}</span>
         <span class="row-sub">{{ entry.blurb }}</span>
       </span>
+      {# The version is worth a column here and not on a component, because
+         these are images nobody in this repo builds — cloudflared moves on
+         Cloudflare's schedule, refreshed daily by the update timer, and a
+         connector that silently stayed behind is invisible otherwise. #}
+      <span class="row-metric hide-sm mono">
+        <span class="k">Image</span>
+        <span class="v">{{ entry.svc.image_short or "—" }}</span>
+      </span>
       <span class="row-metric hide-sm">
         <span class="k">Tasks</span>
         <span class="v num">{{ entry.svc.running }}/{{ entry.svc.desired }}</span>
