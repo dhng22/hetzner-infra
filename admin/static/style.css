@@ -983,14 +983,16 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
 .obs-window { color: var(--text-mute); font-size: var(--t-xs);
   text-align: right; font-family: var(--mono); }
 .obs-note { margin: 2px 0 var(--s-2); color: var(--text-mute); font-size: var(--t-xs); line-height: 1.5; }
-/* Where the card IS, under the picture of where it has been. Boxed, because
-   this is the line somebody scanning the column actually stops on and a chart
-   caption in muted 11px is not something you stop on. One position and one
-   treatment for every card, including the Golden ones that draw no chart. */
+/* Where the card IS, under the picture of where it has been. It stands out by
+   sitting in a box — a filled panel against the card's own background — and
+   NOT by being louder type: same size and same muted colour as every other
+   line in the column, because a summary that shouts on ten cards in a row is
+   ten cards shouting. One position and one treatment for all of them,
+   including the Golden ones that draw no chart. */
 .obs-summary {
   margin: var(--s-2) 0 0; padding: 8px 10px; border-radius: var(--r-sm);
   background: var(--surface-2); border: 1px solid var(--line);
-  color: var(--text); font-size: var(--t-xs); line-height: 1.5;
+  color: var(--text-mute); font-size: var(--t-xs); line-height: 1.5;
 }
 
 /* --- charts ------------------------------------------------------------------

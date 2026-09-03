@@ -1023,14 +1023,16 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
 .obs-window { color: var(--text-mute); font-size: var(--t-xs);
   text-align: right; font-family: var(--mono); }
 .obs-note { margin: 2px 0 var(--s-2); color: var(--text-mute); font-size: var(--t-xs); line-height: 1.5; }
-/* Where the card IS, under the picture of where it has been. Boxed, because
-   this is the line somebody scanning the column actually stops on and a chart
-   caption in muted 11px is not something you stop on. One position and one
-   treatment for every card, including the Golden ones that draw no chart. */
+/* Where the card IS, under the picture of where it has been. It stands out by
+   sitting in a box — a filled panel against the card's own background — and
+   NOT by being louder type: same size and same muted colour as every other
+   line in the column, because a summary that shouts on ten cards in a row is
+   ten cards shouting. One position and one treatment for all of them,
+   including the Golden ones that draw no chart. */
 .obs-summary {
   margin: var(--s-2) 0 0; padding: 8px 10px; border-radius: var(--r-sm);
   background: var(--surface-2); border: 1px solid var(--line);
-  color: var(--text); font-size: var(--t-xs); line-height: 1.5;
+  color: var(--text-mute); font-size: var(--t-xs); line-height: 1.5;
 }
 
 /* --- charts ------------------------------------------------------------------
@@ -2539,7 +2541,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-03T11:22:16Z" data-localtime>2026-09-03T11:22:16Z</time>
+          <time datetime="2026-09-03T16:06:33Z" data-localtime>2026-09-03T16:06:33Z</time>
           
         </div>
       </div>
@@ -3954,7 +3956,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-03T11:22:16Z" data-localtime>2026-09-03T11:22:16Z</time>
+          <time datetime="2026-09-03T16:06:33Z" data-localtime>2026-09-03T16:06:33Z</time>
           
         </div>
       </div>
@@ -5282,7 +5284,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-03T11:22:16Z" data-localtime>2026-09-03T11:22:16Z</time>
+          <time datetime="2026-09-03T16:06:33Z" data-localtime>2026-09-03T16:06:33Z</time>
           
         </div>
       </div>
@@ -5479,9 +5481,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis+sentinel://default:cbf99ce8aa36dab8024e64e0edb125ecc2df1e26dc658da3@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
+              <code>redis+sentinel://default:e869646b3d4027a21470dc587dae91acf0e7df7cafe62629@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis+sentinel://default:cbf99ce8aa36dab8024e64e0edb125ecc2df1e26dc658da3@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
+                      data-copy-text="redis+sentinel://default:e869646b3d4027a21470dc587dae91acf0e7df7cafe62629@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -5492,7 +5494,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="cbf99ce8aa36dab8024e64e0edb125ecc2df1e26dc658da3">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="e869646b3d4027a21470dc587dae91acf0e7df7cafe62629">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -5518,9 +5520,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="panel-body stack">
           
           <div class="conn">
-            <code>redis://default:cbf99ce8aa36dab8024e64e0edb125ecc2df1e26dc658da3@10.0.0.2:46379</code>
+            <code>redis://default:e869646b3d4027a21470dc587dae91acf0e7df7cafe62629@10.0.0.2:46379</code>
             <button class="btn btn-sm" type="button" data-copy
-                    data-copy-text="redis://default:cbf99ce8aa36dab8024e64e0edb125ecc2df1e26dc658da3@10.0.0.2:46379">Copy</button>
+                    data-copy-text="redis://default:e869646b3d4027a21470dc587dae91acf0e7df7cafe62629@10.0.0.2:46379">Copy</button>
           </div>
           <div class="table-wrap">
             <table>
@@ -6425,7 +6427,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-03T11:22:16Z" data-localtime>2026-09-03T11:22:16Z</time>
+          <time datetime="2026-09-03T16:06:33Z" data-localtime>2026-09-03T16:06:33Z</time>
           
         </div>
       </div>
@@ -6610,9 +6612,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>mongodb://root:2c5027f32d140541b58046de916fe9739da435eeb18a9dfb@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
+              <code>mongodb://root:f32f0aec3c8e505fc01f52608b6498cf3bb0b961822e1098@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:2c5027f32d140541b58046de916fe9739da435eeb18a9dfb@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
+                      data-copy-text="mongodb://root:f32f0aec3c8e505fc01f52608b6498cf3bb0b961822e1098@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -6623,7 +6625,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="2c5027f32d140541b58046de916fe9739da435eeb18a9dfb">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="f32f0aec3c8e505fc01f52608b6498cf3bb0b961822e1098">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -10915,7 +10917,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788430937.043539" data-localtime-epoch>1788430937</time>
+              <time datetime="1788447993.615642" data-localtime-epoch>1788447993</time>
             
           </td>
           <td>
@@ -11607,7 +11609,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788430937.043539" data-localtime-epoch>1788430937</time>
+              <time datetime="1788447993.615642" data-localtime-epoch>1788447993</time>
             
           </td>
           <td>
