@@ -49,7 +49,6 @@ write_files:
       # services are separated by a dash rather than another dot:
       #   aichat.mydomain.com           production
       #   staging-aichat.mydomain.com   staging
-      #   grafana-aichat.mydomain.com   dashboards
       #   admin-aichat.mydomain.com     admin panel
 
       # --- Hetzner ------------------------------------------------------------
@@ -84,26 +83,6 @@ write_files:
       ADMIN_USER=admin
       ADMIN_PASSWORD=REPLACE_ME_LONG_RANDOM
 
-      # --- Alerting (OPTIONAL, but you want it) ---------------------------------
-      # Where alerts actually land. Telegram: create a bot with @BotFather, add
-      # it to a group, and read the chat id from
-      #   curl https://api.telegram.org/bot<TOKEN>/getUpdates
-      # after sending one message there. Group ids are negative.
-      #
-      # Leave both blank and the cluster still boots — it just has nowhere to
-      # send alerts, which every `stack-deploy monitoring` warns about, which
-      # `smoke-test` reports as a failure rather than a skip, and which the
-      # panel's Alerts page says outright. The generating, grouping and
-      # dispatching all still work; only the last hop is missing, and that is
-      # the one state of this pipeline that looks healthy from the inside.
-      #
-      # THERE IS NOTHING TO SET HERE ANY MORE. A destination used to be two keys
-      # in this file, which made "who gets alerted" a property of the cluster
-      # rather than a thing you have any of: no second channel, no deliberate
-      # none, and a second KIND of destination meant hand-editing YAML. Add them
-      # in the panel under Alerts > Targets instead; the config is generated from
-      # that list on every monitoring deploy, and every alert goes to all of them.
-
       # --- deploy access (OPTIONAL) -------------------------------------------
       # Your CI is your business, but whatever you build needs a way in that is
       # not root. Put a public key here and this script creates a `deploy` user
@@ -115,17 +94,6 @@ write_files:
       CI_SSH_PUBLIC_KEY=
 
       # --- Fleet -------------------------------------------------------------
-      # NOTHING ABOUT YOUR APPLICATIONS LIVES IN THIS FILE.
-      #
-      # No image, no port, no SLO, no replica counts, no service names. Those
-      # are properties of a component, and components are created after the
-      # cluster is up — from the admin panel, or with `component create` on the
-      # master. Each one gets its own Docker stack, its own env file and its own
-      # scaling policy, carried as deploy labels on its own service. The
-      # autoscaler discovers them; it is never told about them.
-      #
-      # What is left here is the fleet: how many machines may exist, of what
-      # kind, and how eagerly they come and go.
 
       # HETZNER WORKERS. The master is NOT one of them — it is the control
       # plane, and it carries the load itself while no worker exists.
@@ -216,25 +184,6 @@ write_files:
       # commit it last applied against the branch head, and re-applies the
       # bundle when they differ — so changing infrastructure means pushing a
       # commit, not copying files onto a box.
-      #
-      # Without it the only way to change a running cluster was by hand, and the
-      # master drifted away from the repo silently: "what is actually running"
-      # stopped being a question git could answer.
-      #
-      # It carries a token, which is why infra.env is 0600. Use a fine-grained
-      # PAT with read-only contents access to this ONE repo — it is on every
-      # master you build, so its blast radius is every master you build.
-      #
-      # Leave it empty and the cluster simply never self-updates; that is a
-      # supported state, not a broken one.
-      # A TOKEN IS REQUIRED EVEN WHEN THE REPO IS PUBLIC, and that is not
-      # obvious enough to leave unwritten. GitHub serves the ref advertisement
-      # (`GET /info/refs`) to anyone, then answers the fetch itself
-      # (`POST /git-upload-pack`) with 401 for an unauthenticated request from
-      # a cloud IP — measured from this master against github.com/git/git.git,
-      # so it is a property of where the box is, not of which repo you point
-      # it at. Roughly one attempt in six slips through, which is worse than a
-      # clean failure: the cluster updates just often enough to look alive.
       #
       # Put the token in as the PASSWORD, not on its own:
       #   https://x-access-token:<token>@github.com/you/repo.git
