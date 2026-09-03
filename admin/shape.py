@@ -561,14 +561,21 @@ def log_rows(rows):
 # each section says so on the page:
 #
 #   RED     per service    what a request meets
-#   USE     per node       what a machine is doing with itself
 #   GOLDEN  cluster-wide   the four numbers you wake somebody for
+#   USE     per node       what a machine is doing with itself
+#
+# In that order: the detail somebody came for, the rollup that says whether it
+# matters, then the machines underneath. And NO PICTURE IS DRAWN TWICE. Golden
+# is the same latency, the same error ratio and the same tunnel traffic as RED,
+# and redrawing them was three charts saying what three charts above already
+# said. It states each one against the line that acts on it instead — a number
+# and a verdict, which is the form the question "do I get up" actually takes.
 #
 # Every expression below was run against this cluster's VictoriaMetrics before
-# it was written down. The one real gap is named on the card rather than drawn
-# as a mysteriously empty chart: no application here publishes an HTTP timer,
-# so per-service rate and errors have no source, and the card says which metric
-# would give it one.
+# it was written down. One gap is real and stays visible in the wording rather
+# than in a box of its own: no application here publishes an HTTP timer, so
+# rate and errors are measured at the tunnel for the whole edge, which is what
+# the RED scope line says.
 
 #: How much history the column draws, and how coarsely.
 OBS_MINUTES = 60
@@ -637,14 +644,6 @@ Q_RESOURCE_ERRORS = (
     ("tx drops", "sum(increase(node_network_transmit_drop_total[1h]))"),
 )
 
-NO_TIMER_NOTE = (
-    "Measured at the tunnel, not per service: no application in this cluster "
-    "publishes an HTTP timer. A Ktor MicrometerMetrics plugin exporting "
-    "http_server_requests_seconds would split this per service — and would give "
-    "the HighErrorRate rule in config/alerts.yml, which already reads that "
-    "metric, something to fire on.")
-
-
 #: The two shapes of question a card can be asking. A chart of a range and a
 #: single current reading are measured over completely different amounts of
 #: time, and until each card said which, the column read as one instant.
@@ -675,9 +674,17 @@ def _window(span, *exprs):
     return " · ".join(parts)
 
 
-def _card(title, note, body, window="", warning=""):
+def _card(title, note, body, window="", summary=""):
+    """
+    One card: what it is, what it draws, and the one line under it.
+
+    `summary` is the reading, and it is assembled HERE rather than inside the
+    chart because the card is what prints it — one bordered box in one position
+    under every picture. That also lets a card with no chart at all carry one,
+    which is what the Golden rollups are made of.
+    """
     return {"title": title, "note": note, "body": body, "window": window,
-            "warning": warning}
+            "summary": summary}
 
 
 def _tone_for(value, warn, danger):
@@ -696,13 +703,18 @@ def _as_percent(series):
             for name, points in series.items()}
 
 
-def _worst_series(series):
-    """The single series with the highest peak — a cluster-level rollup."""
-    if not series:
-        return {}
-    name, points = max(series.items(),
-                       key=lambda kv: max(v for _, v in kv[1]))
-    return {f"worst: {name}": points}
+def _latest(series):
+    """(name, value) of whichever series is highest at its newest sample."""
+    live = {k: v for k, v in (series or {}).items() if v}
+    if not live:
+        return "", None
+    name = max(live, key=lambda k: live[k][-1][1])
+    return name, live[name][-1][1]
+
+
+def _points(series):
+    """The one series a cluster-wide query answers with, or an empty list."""
+    return next((v for v in (series or {}).values() if v), [])
 
 
 def observability(vm_range, vm_query, charts):
@@ -725,20 +737,130 @@ def observability(vm_range, vm_query, charts):
     slo = vm_query(Q_SLO)
     errors = _as_percent(rng(Q_ERROR_RATIO))
 
+    status = rng(Q_STATUS_CLASS, "class")
+    traffic = _points(rng(Q_REQUEST_RATE))
+    error_points = _points(errors)
+
     red = [
         _card("Duration", "p95 per service, against the SLO it is judged by",
               charts.line(latency, "ms", reference=slo, band=slo,
                           empty="no service is publishing a timer yet"),
-              _window(RANGE_SPAN, Q_LATENCY)),
-        _card("Rate", "responses per second, by status class",
-              charts.stack(rng(Q_STATUS_CLASS, "class"), "/s"),
+              _window(RANGE_SPAN, Q_LATENCY),
+              charts.reading(latency, "ms", reference=slo)),
+        _card("Rate", "responses per second, split by status class",
+              charts.stack(status, "/s"),
               _window(RANGE_SPAN, Q_STATUS_CLASS),
-              warning=NO_TIMER_NOTE),
+              charts.mix(status, "/s")),
         _card("Errors", "share of responses that are 5xx",
               charts.line(errors, "%", reference=ERROR_BUDGET_PCT,
                           band=ERROR_BUDGET_PCT,
                           empty="no responses recorded in this window"),
-              _window(RANGE_SPAN, Q_ERROR_RATIO)),
+              _window(RANGE_SPAN, Q_ERROR_RATIO),
+              charts.reading(errors, "%", reference=ERROR_BUDGET_PCT)),
+    ]
+
+    # --- Golden: the same measurements, rolled up, drawn as VERDICTS ---------
+    # These four used to be four more charts, and three of them were the charts
+    # directly above redrawn — the same latency, the same error ratio, the same
+    # tunnel traffic. A rollup that repeats the picture adds nothing, so it
+    # states the number against the line that acts on it instead, and its
+    # summary answers the question the chart above cannot: not "where is this
+    # now" but "how many, for how long, and how much room is left".
+    slowest, slowest_now = _latest(latency)
+    # With no SLO published there is no line to judge against, so the bullet
+    # falls back to the same idiom Traffic uses: this reading against the
+    # highest one in the window. A ceiling equal to the value itself would draw
+    # a full bar and read as an alarm nobody set.
+    slowest_ceiling = slo or max((v for _, v in latency.get(slowest, [])),
+                                 default=0.0)
+    over_slo = [name for name, points in latency.items()
+                if slo and points and points[-1][1] >= slo]
+    if not latency:
+        latency_summary = ""
+    elif not slo:
+        latency_summary = f"{len(latency)} services reporting · no SLO published"
+    elif over_slo:
+        latency_summary = (f"{len(over_slo)} of {len(latency)} services over the "
+                           f"{charts.fmt(slo, 'ms')} SLO: "
+                           + ", ".join(sorted(over_slo)))
+    else:
+        latency_summary = (f"all {len(latency)} services under the "
+                           f"{charts.fmt(slo, 'ms')} SLO")
+
+    traffic_now = traffic[-1][1] if traffic else None
+    traffic_peak = max((v for _, v in traffic), default=0.0)
+    # A rate integrated over the step it was sampled at. Approximate on
+    # purpose — it is the size of the hour, not a billing figure.
+    traffic_total = sum(v for _, v in traffic) * OBS_STEP
+    traffic_summary = ""
+    if traffic:
+        share = 100.0 * traffic_now / traffic_peak if traffic_peak else 0.0
+        traffic_summary = (f"≈{charts.fmt(traffic_total)} responses in the last "
+                           f"{OBS_MINUTES} min · now at {share:.0f}% of the "
+                           f"window's peak")
+
+    error_now = error_points[-1][1] if error_points else None
+    over_budget = [v for _, v in error_points if v >= ERROR_BUDGET_PCT]
+    if not error_points:
+        error_summary = ""
+    elif over_budget:
+        error_summary = (f"over the {ERROR_BUDGET_PCT:.0f}% budget in "
+                         f"{len(over_budget)} of {len(error_points)} samples "
+                         f"this window")
+    else:
+        error_summary = (f"inside the {ERROR_BUDGET_PCT:.0f}% budget for the "
+                         f"whole window")
+
+    cpu = vm_query("overseer_cluster_cpu_percent")
+    mem = vm_query("overseer_cluster_mem_percent")
+    reporting = [(name, value) for name, value in (("CPU", cpu), ("memory", mem))
+                 if value is not None]
+    past = [name for name, value in reporting if value >= SATURATION_DANGER]
+    if not reporting:
+        saturation_summary = ""
+    elif past:
+        saturation_summary = (f"{' and '.join(past)} past "
+                              f"{SATURATION_DANGER:.0f}% — the fleet buys a "
+                              f"machine")
+    else:
+        saturation_summary = (
+            "headroom: "
+            + ", ".join(f"{name} {SATURATION_DANGER - value:.0f} points"
+                        for name, value in reporting)
+            + f" before the {SATURATION_DANGER:.0f}% that buys one")
+
+    golden = [
+        _card("Latency", "the slowest service right now, against its SLO",
+              charts.bullet(slowest_now, danger=slo,
+                            ceiling=slowest_ceiling or 1.0, unit="ms",
+                            label=slowest or "slowest service",
+                            empty="no service is publishing a timer yet"),
+              _window(LATEST_SPAN, Q_LATENCY),
+              latency_summary),
+        _card("Traffic", "everything the tunnel served, against this window's "
+                         "own peak",
+              charts.bullet(traffic_now, ceiling=traffic_peak or 1.0, unit="/s",
+                            label="responses",
+                            empty="no responses recorded in this window"),
+              _window(LATEST_SPAN, Q_REQUEST_RATE),
+              traffic_summary),
+        _card("Errors", f"5xx share against the {ERROR_BUDGET_PCT:.0f}% the "
+                        f"alert fires at",
+              charts.bullet(error_now, danger=ERROR_BUDGET_PCT,
+                            ceiling=ERROR_BUDGET_PCT * 2, unit="%",
+                            label="5xx share",
+                            empty="no responses recorded in this window"),
+              _window(LATEST_SPAN, Q_ERROR_RATIO),
+              error_summary),
+        _card("Saturation",
+              f"cluster CPU then memory, against {SATURATION_WARN:.0f}% "
+              f"(scales a service out) and {SATURATION_DANGER:.0f}% (buys a "
+              f"machine)",
+              charts.bullet(cpu, SATURATION_WARN, SATURATION_DANGER, label="CPU")
+              + charts.bullet(mem, SATURATION_WARN, SATURATION_DANGER,
+                              label="memory"),
+              LATEST_SPAN,
+              saturation_summary),
     ]
 
     utilisation = []
@@ -764,50 +886,31 @@ def observability(vm_range, vm_query, charts):
     use = [
         _card("Utilisation", "how much of each machine is in use right now",
               charts.bars(utilisation, "%", empty="no node is reporting"),
-              _window(LATEST_SPAN, *[expr for _, expr in Q_UTILISATION])),
+              _window(LATEST_SPAN, *[expr for _, expr in Q_UTILISATION]),
+              charts.busiest(utilisation, "%")),
         _card("Saturation",
               "seconds per second of work stalled waiting for a resource — "
               "queueing, which is what utilisation alone cannot tell you",
               charts.line(pressure, "s/s",
                           empty="nothing has queued in this window"),
-              _window(RANGE_SPAN, *[expr for _, expr in Q_PRESSURE])),
+              _window(RANGE_SPAN, *[expr for _, expr in Q_PRESSURE]),
+              charts.reading(pressure, "s/s")),
         _card("Errors", "counted over the last hour, not averaged",
               charts.columns(resource_errors),
-              _window("", *[expr for _, expr in Q_RESOURCE_ERRORS])),
-    ]
-
-    golden = [
-        _card("Latency", "the slowest service in the cluster",
-              charts.line(_worst_series(latency), "ms", reference=slo, band=slo,
-                          empty="no service is publishing a timer yet"),
-              _window(RANGE_SPAN, Q_LATENCY)),
-        _card("Traffic", "everything the tunnel served, per second",
-              charts.line(rng(Q_REQUEST_RATE), "/s",
-                          empty="no responses recorded in this window"),
-              _window(RANGE_SPAN, Q_REQUEST_RATE)),
-        _card("Errors", f"5xx share against the {ERROR_BUDGET_PCT:.0f}% the "
-                        f"alert fires at",
-              charts.line(errors, "%", reference=ERROR_BUDGET_PCT,
-                          band=ERROR_BUDGET_PCT,
-                          empty="no responses recorded in this window"),
-              _window(RANGE_SPAN, Q_ERROR_RATIO)),
-        _card("Saturation",
-              f"cluster CPU then memory, against {SATURATION_WARN:.0f}% "
-              f"(scales a service out) and {SATURATION_DANGER:.0f}% (buys a "
-              f"machine)",
-              charts.bullet(vm_query("overseer_cluster_cpu_percent"),
-                            SATURATION_WARN, SATURATION_DANGER, label="CPU")
-              + charts.bullet(vm_query("overseer_cluster_mem_percent"),
-                              SATURATION_WARN, SATURATION_DANGER,
-                              label="memory"),
-              LATEST_SPAN),
+              _window("", *[expr for _, expr in Q_RESOURCE_ERRORS]),
+              charts.tally(resource_errors)),
     ]
 
     return [
         {"key": "red", "title": "RED",
-         "scope": "per service — what a request meets", "cards": red},
-        {"key": "use", "title": "USE",
-         "scope": "per node — what a machine is doing with itself", "cards": use},
+         "scope": "per service — what a request meets, measured at the tunnel "
+                  "where a service publishes no timer of its own",
+         "cards": red},
         {"key": "golden", "title": "Golden signals",
-         "scope": "cluster-wide — the four you wake somebody for", "cards": golden},
+         "scope": "cluster-wide — the four you wake somebody for, as verdicts "
+                  "rather than shapes",
+         "cards": golden},
+        {"key": "use", "title": "USE",
+         "scope": "per node — what a machine is doing with itself",
+         "cards": use},
     ]

@@ -44,8 +44,13 @@
           </div>
           <p class="obs-note">{{ card.note }}</p>
           {{ card.body|safe }}
-          {% if card.warning %}
-            <p class="obs-warning">{{ card.warning }}</p>
+          {# The reading, in one box in one place under every card. The charts
+             used to caption themselves, which left the summaries scattered at
+             four different indents and made a card without a chart — the whole
+             Golden section — unable to carry one at all. `shape.observability`
+             writes them now; this prints them. #}
+          {% if card.summary %}
+            <p class="obs-summary">{{ card.summary }}</p>
           {% endif %}
         </div>
       {% endfor %}

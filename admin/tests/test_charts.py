@@ -138,12 +138,11 @@ class AxisTest(unittest.TestCase):
     be stretched with it.
     """
 
-    def test_every_chart_says_where_it_is_now_rather_than_naming_its_axes(self):
+    def test_no_chart_captions_itself(self):
         """
-        The line under a chart used to read "y: p95 latency (ms) · x: last 60
-        min", which restated the tick labels sitting on both edges. It says
-        where the chart IS instead — the number a shape cannot show and the one
-        somebody scanning a column of them is after.
+        Every summary in the column is printed by the CARD, in one box in one
+        position. A chart that captioned itself put the same sentence at four
+        different indents and left a card with no chart unable to carry one.
         """
         for label, body in (
                 ("line", charts.line({"api": series(1.0, 2.0)}, "ms")),
@@ -152,14 +151,14 @@ class AxisTest(unittest.TestCase):
                 ("bars", charts.bars([{"name": "wkr-1", "value": 2.0,
                                        "max": 4.0}], "%"))):
             with self.subTest(chart=label):
-                self.assertIn("chart-note", body)
+                self.assertNotIn("figcaption", body)
                 self.assertNotIn("y:", body)
                 self.assertNotIn("x:", body)
 
     def test_a_reading_names_the_series_only_when_there_is_a_choice(self):
-        one = charts.line({"api": series(300.0, 412.0)}, "ms")
-        many = charts.line({"api": series(300.0, 412.0),
-                            "web": series(90.0, 91.0)}, "ms")
+        one = charts.reading({"api": series(300.0, 412.0)}, "ms")
+        many = charts.reading({"api": series(300.0, 412.0),
+                               "web": series(90.0, 91.0)}, "ms")
         self.assertIn("now 412ms", one)
         self.assertNotIn("highest", one)
         self.assertIn("api highest", many)
@@ -169,27 +168,48 @@ class AxisTest(unittest.TestCase):
         The dashed line is already drawn; whether today's number is above it is
         the fact worth reading, and a glance at a 96px chart does not settle it.
         """
-        under = charts.line({"api": series(300.0, 412.0)}, "ms", reference=500.0)
-        over = charts.line({"api": series(300.0, 620.0)}, "ms", reference=500.0)
-        self.assertIn("under the 500ms line", under)
-        self.assertIn("OVER the 500ms line", over)
+        self.assertIn("under the 500ms line",
+                      charts.reading({"api": series(300.0, 412.0)}, "ms",
+                                     reference=500.0))
+        self.assertIn("OVER the 500ms line",
+                      charts.reading({"api": series(300.0, 620.0)}, "ms",
+                                     reference=500.0))
 
-    def test_a_stack_names_the_layer_the_total_is_mostly_made_of(self):
-        note = charts.stack({"2xx": series(10.0, 12.0),
-                             "5xx": series(0.2, 0.3)}, "/s")
+    def test_a_stack_reading_names_the_layer_the_total_is_mostly_made_of(self):
+        note = charts.mix({"2xx": series(10.0, 12.0),
+                           "5xx": series(0.2, 0.3)}, "/s")
+        self.assertIn("now 12.3/s", note)
         self.assertIn("mostly 2xx", note)
+
+    def test_a_stack_reading_totals_the_same_layers_the_stack_draws(self):
+        """
+        A layer with no sample at a stamp is carried forward in the picture, so
+        the reading has to carry it forward too — one table, read twice.
+        """
+        gappy = {"2xx": [(0, 10.0), (60, 10.0)], "5xx": [(0, 2.0)]}
+        self.assertIn("now 12.0/s", charts.mix(gappy, "/s"))
 
     def test_a_tally_of_nothing_says_so_in_words(self):
         """
         A row of baselines looks identical to a chart that failed to load, and
         "we counted and it was none" is the answer here most of the time.
         """
-        self.assertIn("nothing counted in this window",
-                      charts.columns([{"name": "OOM kills", "value": 0.0},
-                                      {"name": "tx errors", "value": 0.0}]))
-        self.assertIn("counted: tx errors 11.0, OOM kills 3.0",
-                      charts.columns([{"name": "OOM kills", "value": 3.0},
-                                      {"name": "tx errors", "value": 11.0}]))
+        self.assertEqual("nothing counted in this window",
+                         charts.tally([{"name": "OOM kills", "value": 0.0},
+                                       {"name": "tx errors", "value": 0.0}]))
+        self.assertEqual("counted: tx errors 11.0, OOM kills 3.0",
+                         charts.tally([{"name": "OOM kills", "value": 3.0},
+                                       {"name": "tx errors", "value": 11.0}]))
+
+    def test_the_busiest_row_is_judged_against_its_own_ceiling(self):
+        """
+        A bigger number is not a busier machine: 40 of 50 is fuller than 90 of
+        1000, and utilisation rows carry different ceilings.
+        """
+        self.assertIn("wkr-1",
+                      charts.busiest([{"name": "wkr-1", "value": 40.0, "max": 50.0},
+                                      {"name": "wkr-2", "value": 90.0, "max": 1000.0}],
+                                     "%"))
 
     def test_the_axis_ends_are_printed_not_only_implied(self):
         svg = charts.line({"api": series(10.0, 5407.0)}, "ms")
@@ -343,9 +363,23 @@ class ColumnTest(unittest.TestCase):
             lambda expr: instants.get(expr),
             charts)
 
+    def populated(self):
+        """Every range query answered, so no two cards are empty alike."""
+        ranges = {shape.Q_LATENCY: {"api": series(300.0, 412.0),
+                                    "web": series(90.0, 91.0)},
+                  shape.Q_STATUS_CLASS: {"2xx": series(10.0, 12.0),
+                                         "5xx": series(0.2, 0.3)},
+                  shape.Q_ERROR_RATIO: {"5xx": series(0.01, 0.02)},
+                  shape.Q_REQUEST_RATE: {"": series(10.2, 12.3)}}
+        for index, (_, expr) in enumerate(shape.Q_UTILISATION):
+            ranges[expr] = {"wkr-1": series(10.0 + index)}
+        for index, (_, expr) in enumerate(shape.Q_PRESSURE):
+            ranges[expr] = {"wkr-1": series(0.1 + index)}
+        return ranges
+
     def test_the_three_frameworks_are_separated_by_scope(self):
         sections = self.build()
-        self.assertEqual([s["key"] for s in sections], ["red", "use", "golden"])
+        self.assertEqual([s["key"] for s in sections], ["red", "golden", "use"])
         for section in sections:
             with self.subTest(section=section["key"]):
                 # They overlap by construction — RED is a subset of the golden
@@ -360,20 +394,48 @@ class ColumnTest(unittest.TestCase):
                     self.assertTrue(card["body"])
                     self.assertTrue(card["note"])
 
-    def test_the_missing_http_timer_is_named_rather_than_left_blank(self):
+    def test_no_picture_is_drawn_twice_in_the_column(self):
         """
-        No application in this cluster publishes an HTTP timer, so per-service
-        rate and errors have no source. The card says which metric would give
-        it one instead of drawing an unexplained empty box.
+        Golden rolls up the SAME latency, error ratio and tunnel traffic RED
+        draws. Redrawing them was three charts repeating three charts directly
+        above; Golden states each against the line that acts on it instead.
         """
-        red = self.build()[0]
-        warned = [c for c in red["cards"] if c["warning"]]
-        self.assertEqual([c["title"] for c in warned], ["Rate"])
-        self.assertIn("http_server_requests_seconds", warned[0]["warning"])
+        sections = self.build(ranges=self.populated())
+        bodies = [c["body"] for s in sections for c in s["cards"]]
+        self.assertEqual(len(bodies), len(set(bodies)))
+
+    def test_the_rollup_summarises_differently_from_the_chart_it_rolls_up(self):
+        """
+        A summary that repeats "now X · peak Y" under a number that already
+        says X is the same duplication in words. Golden answers how many, for
+        how long, and how much room is left.
+        """
+        sections = self.build(ranges=self.populated(),
+                              instants={shape.Q_SLO: 500.0,
+                                        "overseer_cluster_cpu_percent": 40.0,
+                                        "overseer_cluster_mem_percent": 20.0})
+        summaries = {(s["key"], c["title"]): c["summary"]
+                     for s in sections for c in s["cards"]}
+        self.assertEqual(len(set(summaries.values())), len(summaries))
+        self.assertIn("services under the 500ms SLO",
+                      summaries[("golden", "Latency")])
+        self.assertIn("responses in the last 60 min",
+                      summaries[("golden", "Traffic")])
+        self.assertIn("budget", summaries[("golden", "Errors")])
+        self.assertIn("headroom", summaries[("golden", "Saturation")])
+
+    def test_a_service_past_its_slo_is_named_not_just_counted(self):
+        sections = self.build(ranges={shape.Q_LATENCY: {"api": series(900.0),
+                                                        "web": series(10.0)}},
+                              instants={shape.Q_SLO: 500.0})
+        golden = next(s for s in sections if s["key"] == "golden")
+        card = next(c for c in golden["cards"] if c["title"] == "Latency")
+        self.assertIn("1 of 2 services over the 500ms SLO", card["summary"])
+        self.assertIn("api", card["summary"])
 
     def test_saturation_is_drawn_against_the_thresholds_that_spend_money(self):
         golden = self.build(instants={"overseer_cluster_cpu_percent": 85.0,
-                                      "overseer_cluster_mem_percent": 20.0})[2]
+                                      "overseer_cluster_mem_percent": 20.0})[1]
         card = next(c for c in golden["cards"] if c["title"] == "Saturation")
         self.assertIn("bullet is-bad", card["body"])       # cpu over danger
         self.assertIn(f"{shape.SATURATION_WARN:.0f}%", card["note"])
@@ -391,7 +453,7 @@ class ColumnTest(unittest.TestCase):
 
     def test_utilisation_rows_are_toned_by_the_same_thresholds(self):
         ranges = {expr: {"wkr-1": series(95.0)} for _, expr in shape.Q_UTILISATION}
-        use = self.build(ranges=ranges)[1]
+        use = self.build(ranges=ranges)[2]
         card = next(c for c in use["cards"] if c["title"] == "Utilisation")
         self.assertIn("bar-row is-bad", card["body"])
         self.assertIn("wkr-1 · cpu", card["body"])

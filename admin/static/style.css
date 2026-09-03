@@ -983,13 +983,14 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
 .obs-window { color: var(--text-mute); font-size: var(--t-xs);
   text-align: right; font-family: var(--mono); }
 .obs-note { margin: 2px 0 var(--s-2); color: var(--text-mute); font-size: var(--t-xs); line-height: 1.5; }
-/* A named gap rather than a blank chart. `charts.py` refuses to draw an empty
-   series as a flat line at zero, because "nothing matched" and "the value is
-   zero" are different facts and only one of them is good news. */
-.obs-warning {
+/* Where the card IS, under the picture of where it has been. Boxed, because
+   this is the line somebody scanning the column actually stops on and a chart
+   caption in muted 11px is not something you stop on. One position and one
+   treatment for every card, including the Golden ones that draw no chart. */
+.obs-summary {
   margin: var(--s-2) 0 0; padding: 8px 10px; border-radius: var(--r-sm);
   background: var(--surface-2); border: 1px solid var(--line);
-  color: var(--text-mute); font-size: var(--t-xs); line-height: 1.5;
+  color: var(--text); font-size: var(--t-xs); line-height: 1.5;
 }
 
 /* --- charts ------------------------------------------------------------------
@@ -1005,7 +1006,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
    labels keep the page's own type, and the SVG is left holding geometry. */
 .chart-wrap { display: grid; margin: 0; column-gap: 6px;
   grid-template-columns: 34px minmax(0, 1fr);
-  grid-template-rows: auto auto auto auto; }
+  grid-template-rows: auto auto auto; }
 .chart-wrap.is-plain { grid-template-columns: minmax(0, 1fr); }
 .chart-wrap.is-plain > * { grid-column: 1 / -1; }
 .chart-wrap > .chart { grid-column: 2; grid-row: 1; }
@@ -1022,11 +1023,6 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
   gap: 4px 10px; margin-top: 6px; font-size: var(--t-xs); color: var(--text-mute); }
 .chart-key { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
 .chart-key > i { flex: none; width: 9px; height: 3px; border-radius: 2px; }
-/* Not an axis caption — the tick labels on both edges already say what the
-   planes are. This is where the chart is NOW against its own peak and against
-   the rule it is judged by, which is what a shape cannot show. */
-.chart-note { grid-column: 1 / -1; grid-row: 4; margin-top: 4px;
-  color: var(--text-mute); font-size: var(--t-xs); }
 
 /* One hover target per sample, invisible until pointed at. It carries
    `data-tip`, which app.js already handles globally with no delay and by

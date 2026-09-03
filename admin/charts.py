@@ -16,8 +16,10 @@ because two identical readings produce two identical strings.
 AXES ARE HTML, THE PLOT IS SVG. The plot carries `preserveAspectRatio="none"`
 so it stretches to whatever width the column gives it, which stretches any
 `<text>` inside it by the same factor. So the SVG holds geometry only and every
-label — the value axis, the time axis, the legend, the caption naming what each
-axis is — is HTML laid out around it, in the page's own type.
+label — the value axis, the time axis, the legend — is HTML laid out around it,
+in the page's own type. The one-line READING that says where a chart is now is
+handed to the card instead of drawn here, so the whole column's summaries share
+one box and one position.
 
 HOVER COSTS NO JAVASCRIPT. Each sample gets an invisible full-height slice
 carrying `data-tip`, and `static/app.js` already owns a delegated, no-delay
@@ -148,15 +150,22 @@ def _worst(series):
     return name, series[name]
 
 
-def _reading(series, unit, reference=None, named=True):
-    """
-    The one line worth reading under a time chart.
+# --- readings ----------------------------------------------------------------
+# The one line worth reading under a chart. These RETURN it rather than drawing
+# it: every summary in the column is printed by the card, in one bordered box
+# under the picture, so the reader has a single place to look and a card with no
+# chart at all (a bullet, a rollup) can carry one too. Phrasing stays here
+# because it is the same phrasing question as an axis label; WHICH summary a
+# card gets is decided in `shape.observability`, beside the card.
 
-    It replaced a caption naming the axes, which restated what the tick labels
-    on both edges already say. The space is better spent on where the chart is
-    NOW and how that compares to its own peak and to the rule it is judged by —
-    the numbers somebody scanning a column of charts is actually after, and the
-    only ones a shape cannot show.
+
+def reading(series, unit="", reference=None, named=True):
+    """
+    Where a time chart IS — now, against its own peak and against its rule.
+
+    Not a caption naming the axes: the tick labels on both edges already say
+    what the planes are. These are the numbers a shape cannot show, and the ones
+    somebody scanning a column of charts is actually after.
     """
     name, points = _worst(series)
     if not points:
@@ -175,20 +184,94 @@ def _reading(series, unit, reference=None, named=True):
     return " · ".join(parts)
 
 
+def mix(series, unit=""):
+    """
+    What a stacked total is now, and which layer it is mostly made of.
+
+    The stacked height IS the total, which the picture already shows. What it
+    cannot say is which colour that total belongs to, and for status codes that
+    is the whole question.
+    """
+    series = {k: v for k, v in (series or {}).items() if v}
+    if not series:
+        return ""
+    stamps, held = _carried(series)
+    totals = {t: sum(row[t] for row in held.values()) for t in stamps}
+    newest = stamps[-1]
+    peak = max(totals.values())
+    parts = [f"now {fmt(totals[newest], unit)}"]
+    if peak > totals[newest]:
+        parts.append(f"peak {fmt(peak, unit)}")
+    biggest = max(held, key=lambda n: held[n][newest])
+    if held[biggest][newest] > 0:
+        parts.append(f"mostly {biggest}")
+    return " · ".join(parts)
+
+
+def busiest(rows, unit=""):
+    """Which row of a bar chart is closest to its own ceiling."""
+    rows = [r for r in (rows or []) if r.get("value") is not None]
+    if not rows:
+        return ""
+    ceiling = max([r.get("max") or r["value"] for r in rows] + [1e-9])
+    worst = max(rows, key=lambda r: r["value"] / (r.get("max") or ceiling))
+    return f'busiest: {worst["name"]} at {fmt(worst["value"], unit)}'
+
+
+def tally(rows, unit=""):
+    """
+    What a column chart counted, in words.
+
+    "We counted and it was none" is the answer most of the time on an error
+    tally, and it is worth saying: a row of baselines looks identical to a chart
+    that failed to load.
+    """
+    rows = [r for r in (rows or []) if r.get("value") is not None]
+    if not rows:
+        return ""
+    hits = sorted((r for r in rows if r["value"] > 0), key=lambda r: -r["value"])
+    if not hits:
+        return "nothing counted in this window"
+    return "counted: " + ", ".join(f'{r["name"]} {fmt(r["value"], unit)}'
+                                   for r in hits)
+
+
+def _carried(series):
+    """
+    Every series sampled at every stamp any of them has, last value carried.
+
+    Stacking needs a value for each layer at each stamp. Interpolating would
+    invent readings; carrying the last known one states plainly that nothing new
+    arrived. `mix()` reads the same table the picture is built from, so the
+    summary and the stack cannot disagree about what the total is.
+    """
+    stamps = sorted({t for points in series.values() for t, _ in points})
+    held = {}
+    for name, points in series.items():
+        lookup = dict(points)
+        last = 0.0
+        held[name] = {}
+        for t in stamps:
+            last = lookup.get(t, last)
+            held[name][t] = last
+    return stamps, held
+
+
 def _ticks(values):
     return "".join(
         f"<span>{_esc(v[0])}<b>{_esc(v[1])}</b></span>" if isinstance(v, tuple)
         else f"<span>{_esc(v)}</span>" for v in values)
 
 
-def _wrap(plot, y_ticks=(), x_ticks=(), caption="", legend=(), spread=False):
+def _wrap(plot, y_ticks=(), x_ticks=(), legend=(), spread=False):
     """
     The plot, plus the furniture that says what it is measuring.
 
     A picture of a line with no scale on either edge is a shape, not a
-    measurement. Everything that makes it a measurement lives out here: the two
-    ends of the value axis, the two ends of the time axis, which colour is which
-    series, and one caption naming both planes.
+    measurement. Everything that makes it one lives out here: the two ends of
+    the value axis, the two ends of the time axis, and which colour is which
+    series. The reading itself does NOT — it is printed by the card, so every
+    summary in the column sits in one box in one place.
     """
     plain = "" if y_ticks else " is-plain"
     out = [f'<figure class="chart-wrap{plain}">']
@@ -202,8 +285,6 @@ def _wrap(plot, y_ticks=(), x_ticks=(), caption="", legend=(), spread=False):
         out.append('<div class="chart-legend">' + "".join(
             f'<span class="chart-key"><i style="background:var({var})"></i>'
             f'{_esc(name)}</span>' for name, var in legend) + '</div>')
-    if caption:
-        out.append(f'<figcaption class="chart-note">{_esc(caption)}</figcaption>')
     out.append('</figure>')
     return "".join(out)
 
@@ -340,7 +421,6 @@ def line(series, unit="", reference=None, band=None, empty="no data yet"):
         _frame("".join(body), f"{len(series)} series, peak {fmt(peak, unit)}"),
         y_ticks=(fmt(hi, unit), fmt(lo, unit)),
         x_ticks=(ago(t0, t1), "now"),
-        caption=_reading(series, unit, reference),
         legend=_legend([name for name, _ in order]))
 
 
@@ -356,26 +436,16 @@ def stack(series, unit="", empty="no traffic recorded"):
 
     t0, t1 = _span(series)
     order = sorted(series.items())
-    # Stack on a shared time axis, so every layer has a point at every stamp
-    # the chart draws. Interpolating would invent readings; carrying the last
-    # known value forward states plainly that nothing new arrived.
-    stamps = sorted({t for _, points in order for t, _ in points})
+    stamps, own = _carried(series)
     running = {t: 0.0 for t in stamps}
     layers = []
-    own = {}
-    for name, points in order:
-        lookup = dict(points)
-        last = 0.0
+    for name, _ in order:
         upper = []
         lower = []
-        held = {}
         for t in stamps:
-            last = lookup.get(t, last)
-            held[t] = last
             lower.append((t, running[t]))
-            running[t] += last
+            running[t] += own[name][t]
             upper.append((t, running[t]))
-        own[name] = held
         layers.append((name, lower, upper))
 
     hi = _nice(max(running.values()))
@@ -396,21 +466,10 @@ def stack(series, unit="", empty="no traffic recorded"):
          for t in stamps], t0, t1, unit))
 
     peak = max(running.values())
-    # The stacked height is the total; what the picture cannot say is which
-    # layer that total is mostly made of, which for status codes is the whole
-    # question.
-    newest = stamps[-1]
-    biggest = max(own, key=lambda n: own[n][newest]) if own else ""
-    note = f"now {fmt(running[newest], unit)}"
-    if peak > running[newest]:
-        note += f" · peak {fmt(peak, unit)}"
-    if biggest and own[biggest][newest] > 0:
-        note += f" · mostly {biggest}"
     return _wrap(
         _frame("".join(body), f"{len(layers)} layers, peak {fmt(peak, unit)}"),
         y_ticks=(fmt(hi, unit), fmt(0.0, unit)),
         x_ticks=(ago(t0, t1), "now"),
-        caption=note,
         legend=_legend([name for name, _ in order]))
 
 
@@ -445,10 +504,7 @@ def bars(rows, unit="", empty="nothing to compare"):
             f'<span class="bar-value">{_esc(note)}</span>'
             f'</div>')
     out.append('</div>')
-    worst = max(rows, key=lambda r: r["value"] / (r.get("max") or ceiling))
-    return _wrap("".join(out),
-                 caption=f'busiest: {worst["name"]} at '
-                         f'{fmt(worst["value"], unit)}')
+    return _wrap("".join(out))
 
 
 def columns(rows, unit="", empty="none in this window"):
@@ -478,20 +534,12 @@ def columns(rows, unit="", empty="none in this window"):
                     f'x="{left:.1f}" y="{PAD_T + height - drawn:.1f}" '
                     f'width="{bar:.1f}" height="{drawn:.1f}" rx="2" '
                     f'data-tip="{_esc(tip)}"/>')
-    # "We counted and it was none" is the answer most of the time here, and it
-    # is worth saying in words — a row of baselines looks identical to a chart
-    # that failed to load.
-    hits = [r for r in rows if r["value"] > 0]
-    note = ("nothing counted in this window" if not hits else
-            "counted: " + ", ".join(f'{r["name"]} {fmt(r["value"], unit)}'
-                                    for r in sorted(hits, key=lambda r: -r["value"])))
     return _wrap(
         _frame("".join(body), ", ".join(
             f"{r['name']} {fmt(r['value'], unit)}" for r in rows)),
         y_ticks=(fmt(hi, unit), fmt(0.0, unit)),
         x_ticks=[(r["name"], fmt(r["value"], unit)) for r in rows],
-        spread=True,
-        caption=note)
+        spread=True)
 
 
 def bullet(value, warn=None, danger=None, ceiling=100.0, unit="%",
