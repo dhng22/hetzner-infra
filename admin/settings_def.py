@@ -163,17 +163,17 @@ FIELDS = {
                 "`true` makes the autoscaler log every action without taking it."),
 
     # --- access ------------------------------------------------------------
-    "GRAFANA_ADMIN_USER": (EDIT, "monitoring", "Grafana only applies this on first start."),
     "ADMIN_USER": (SECRET, "admin", "Stored as a docker secret alongside the password."),
-    "ADMIN_PASSWORD": (SECRET, "admin", "The key to this panel."),
-    "GRAFANA_ADMIN_PASSWORD": (SECRET, "monitoring", ""),
+    "ADMIN_PASSWORD": (SECRET, "admin",
+                       "The key to this panel, and to Grafana: the dashboards are served "
+                       "through this panel behind this login, so they no longer keep an "
+                       "admin password of their own."),
     # Editable, not a docker secret: the destination has to be changeable, and a
     # Swarm secret cannot be. Saving either of these re-renders
     # config/alertmanager.yml and redeploys monitoring, which is the whole
     # reason bin/stack-deploy does the rendering rather than bootstrap.
     "CF_TUNNEL_TOKEN": (SECRET, "ingress", "Rotating this means re-issuing the connector token in Cloudflare."),
     "HCLOUD_TOKEN": (SECRET, "monitoring", "Lets the autoscaler create and delete servers."),
-    "CI_SSH_PUBLIC_KEY": (BOOT, None, "The deploy user is created at boot. Edit authorized_keys on the master."),
     # MONGO_URI_* and REDIS_PASSWORD_* used to live here too, for the same reason
     # and with the same problem. They are gone from infra.env: config/app-<env>.env
     # is created at first boot with an empty MONGO_URI and a generated
@@ -198,8 +198,7 @@ GROUPS = [
                    "DB_MAX_STORAGE", "TOPOLOGY_COOLDOWN_SECONDS",
                    "PRESSURE_SUSTAIN_SECONDS", "BACKUP_MAX_AGE_SECONDS",
                    "VIEWER_IDLE_SECONDS"]),
-    ("Access", ["ADMIN_USER", "ADMIN_PASSWORD", "GRAFANA_ADMIN_USER", "GRAFANA_ADMIN_PASSWORD",
-                "CF_TUNNEL_TOKEN", "CI_SSH_PUBLIC_KEY"]),
+    ("Access", ["ADMIN_USER", "ADMIN_PASSWORD", "CF_TUNNEL_TOKEN"]),
     # Not shown, on purpose: GHCR_USER and GHCR_TOKEN.
     #
     # Both are read once by bootstrap and never again, so the value here stops

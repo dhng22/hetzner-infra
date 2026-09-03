@@ -618,38 +618,65 @@ class PanelTest(unittest.TestCase):
 
     def test_preview_infra_matches_the_shipped_defaults(self):
         """
-        The preview's dummy infra.env must agree with the one the cloud-init
-        actually writes — for the values that ARE defaults.
+        The preview's dummy infra.env must not document a product that does not
+        exist. `ROOT_DOMAIN=mydomain.com` is an example you replace, so the
+        preview inventing `acme.dev` is correct — but a value that HAS a default
+        must agree with it, and `MIN_WORKERS=1` in a fixture is a lie about a
+        decision this project has made.
 
-        Scoped to the Fleet group on purpose. `ROOT_DOMAIN=mydomain.com` is an
-        example you replace, so the preview inventing `acme.dev` is correct.
-        `MIN_WORKERS=0` is a decision this project has made, so a preview
-        showing 1 is documenting a product that does not exist — which is what
-        it did, and is the third time a fixture has quietly disagreed with
-        reality during this refactor.
+        It is checked against DEFAULTS rather than against the cloud-init now,
+        because the cloud-init no longer carries fleet or database policy at
+        all: those rows come from DEFAULTS on a real cluster too, which is the
+        path this fixture is supposed to stand in for.
+        """
+        import settings_def
+
+        for key, value in self.panel.PREVIEW_INFRA.items():
+            if key in settings_def.DEFAULTS:
+                self.assertEqual(
+                    value, settings_def.DEFAULTS[key],
+                    f"the preview shows {key}={value!r} but the default is "
+                    f"{settings_def.DEFAULTS[key]!r}")
+
+    def test_the_cloud_init_ships_no_setting_that_already_has_a_default(self):
+        """
+        ONE HOME PER DEFAULT. The cloud-init is pasted into Hetzner by hand,
+        never revised afterwards, and capped at 32 KB — so a scaling or database
+        number written there is both a second copy that drifts from the repo's
+        and a line of a budget better spent on the things only you can supply.
+        infra.env carries this cluster's ANSWERS; settings_def carries the
+        defaults, `_settings_groups` falls back to them, and Manager > Fleet and
+        Manager > Databases are where they are changed.
         """
         import pathlib
         import re
         import settings_def
 
         root = pathlib.Path(__file__).resolve().parents[2]
-        block = (root / "master-cloud-init.yaml").read_text()
-        block = block[block.index("/etc/infra/infra.env"):block.index("bootstrap.sh")]
-        shipped = {}
-        for line in block.splitlines():
-            match = re.match(r"^\s{6}([A-Z][A-Z0-9_]*)=(.*)$", line)
-            if match:
-                key, raw = match.groups()
-                shipped[key] = raw.split("#")[0].strip()
+        text = (root / "master-cloud-init.yaml").read_text()
+        block = text[text.index("/etc/infra/infra.env"):text.index("bootstrap.sh")]
+        shipped = {m.group(1) for m in
+                   re.finditer(r"^\s{6}([A-Z][A-Z0-9_]*)=", block, re.M)}
 
-        self.assertIn("MIN_WORKERS", shipped, "the infra.env block did not parse")
-        policy = next(keys for title, keys in settings_def.GROUPS if title == "Fleet")
-        for key in policy:
-            self.assertIn(key, shipped, f"{key} is offered by the panel but not shipped")
-            self.assertEqual(
-                self.panel.PREVIEW_INFRA.get(key), shipped[key],
-                f"the preview shows {key}={self.panel.PREVIEW_INFRA.get(key)!r} but "
-                f"the cloud-init ships {shipped[key]!r}")
+        self.assertIn("APP_NAME", shipped, "the infra.env block did not parse")
+        for key in settings_def.DEFAULTS:
+            self.assertNotIn(
+                key, shipped,
+                f"{key} has a default in settings_def and is shipped in the "
+                f"cloud-init as well — two copies of one number")
+
+    def test_the_cloud_init_stays_under_the_hetzner_paste_limit(self):
+        """
+        Hetzner refuses user-data over 32 KB, and the failure is at server
+        creation: no boot, no log, nothing to read. It grew to 38 KB by
+        accretion, which is why the fleet and database blocks now live in
+        DEFAULTS instead. The headroom is worth keeping.
+        """
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parents[2]
+        size = len((root / "master-cloud-init.yaml").read_bytes())
+        self.assertLess(size, 32768, f"master-cloud-init.yaml is {size} bytes")
 
     def test_every_setting_the_panel_offers_reaches_the_process_that_reads_it(self):
         """
@@ -703,8 +730,7 @@ class PanelTest(unittest.TestCase):
         for key in delivered:
             self.assertNotEqual(settings_def.describe(key)[0], settings_def.SECRET, key)
         for key in ("HCLOUD_TOKEN", "ADMIN_PASSWORD", "ADMIN_USER",
-                    "GRAFANA_ADMIN_PASSWORD", "CF_TUNNEL_TOKEN",
-                    "ALERT_TELEGRAM_BOT_TOKEN", "GHCR_TOKEN"):
+                    "CF_TUNNEL_TOKEN", "ALERT_TELEGRAM_BOT_TOKEN", "GHCR_TOKEN"):
             self.assertNotIn(key, delivered, f"{key} would reach the autoscaler's environment")
 
     def test_the_autoscaler_env_is_free_of_the_documentation(self):
@@ -1030,8 +1056,6 @@ class PanelTest(unittest.TestCase):
             self.assertEqual(reader[key], default,
                              f"{key}: panel defaults to {default!r}, the reader to "
                              f"{reader[key]!r}")
-            self.assertEqual(shipped.get(key), default,
-                             f"{key}: panel defaults to {default!r}, cloud-init ships {shipped.get(key)!r}")
 
     def test_dataguard_labels_agree_across_the_wire(self):
         """
@@ -1256,7 +1280,7 @@ class PanelTest(unittest.TestCase):
         shipped = {m.group(1) for m in
                    re.finditer(r"^\s{6}([A-Z][A-Z0-9_]*)=", block, re.M)}
 
-        self.assertIn("MIN_WORKERS", shipped, "the infra.env block did not parse")
+        self.assertIn("APP_NAME", shipped, "the infra.env block did not parse")
         panel = next(keys for title, keys in settings_def.GROUPS if title == "Panel")
         for key in panel:
             self.assertIn(key, shipped,

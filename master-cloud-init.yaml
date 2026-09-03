@@ -1,13 +1,15 @@
 #cloud-config
 # =============================================================================
-# MASTER NODE CLOUD-INIT  —  paste this into Hetzner "Cloud config" on create
-# =============================================================================
-# EDIT ONLY THE BLOCK MARKED "VARIABLES". Everything below it is generic.
+# MASTER NODE CLOUD-INIT — paste into Hetzner "Cloud config" on create.
 #
-# Server: CPX31 (4 vCPU / 8 GB). The master runs the admin panel, both Redis
-# instances, VictoriaMetrics, Loki, Grafana and the autoscaler. It runs
-# NO application tasks and NO cloudflared — ingress lives entirely on the
-# workers, so losing this box costs you monitoring and scaling, not uptime.
+# EDIT ONLY THE VARIABLES BLOCK. Everything else is generic, and every scaling,
+# database and alerting knob ships with a working default you change afterwards
+# in the panel (Manager > Fleet / Databases) rather than here.
+#
+# CPX31 (4 vCPU / 8 GB). The master runs the panel, both Redis instances,
+# VictoriaMetrics, Loki, Grafana and the autoscaler. It runs NO application
+# tasks and NO cloudflared — ingress lives on the workers, so losing this box
+# costs you monitoring and scaling, not uptime.
 #
 # Attach the server to a Hetzner private network BEFORE creating it.
 # =============================================================================
@@ -24,32 +26,30 @@ packages:
   - gettext-base
   - ca-certificates
   - gnupg
-  # bin/component renders component stacks with it, on the host, outside the
-  # panel's container. Ubuntu's python3 does not ship PyYAML.
+  # bin/component renders component stacks on the host, outside the panel's
+  # container, and Ubuntu's python3 does not ship PyYAML.
   - python3-yaml
 
 write_files:
   # ---------------------------------------------------------------------------
-  # VARIABLES  — the only section you need to touch
+  # VARIABLES — the only section you need to touch
   # ---------------------------------------------------------------------------
   - path: /etc/infra/infra.env
     permissions: "0600"
     owner: root:root
     content: |
       # --- identity -----------------------------------------------------------
-      # APP_NAME does three jobs: the Hetzner label namespace the autoscaler is
-      # allowed to touch, the worker hostname prefix, and the third-level
-      # domain. If you run anything else in this Hetzner project, that label is
-      # the only thing stopping the autoscaler from deleting it.
+      # APP_NAME is the Hetzner label namespace the autoscaler is allowed to
+      # touch, the worker hostname prefix and the third-level domain. If you run
+      # anything else in this Hetzner project, that label is the only thing
+      # stopping the autoscaler from deleting it.
       APP_NAME=aichat
       ROOT_DOMAIN=mydomain.com
 
-      # Cloudflare's free Universal SSL certificate covers *.mydomain.com and
-      # nothing deeper, so every hostname stays at the third level and extra
-      # services are separated by a dash rather than another dot:
-      #   aichat.mydomain.com           production
-      #   staging-aichat.mydomain.com   staging
-      #   admin-aichat.mydomain.com     admin panel
+      # Cloudflare's free Universal SSL covers *.mydomain.com and nothing
+      # deeper, so every hostname stays at the third level and extra services
+      # are separated by a dash rather than another dot:
+      #   aichat.mydomain.com / staging-aichat.mydomain.com / admin-aichat...
 
       # --- Hetzner ------------------------------------------------------------
       HCLOUD_TOKEN=REPLACE_ME
@@ -59,9 +59,8 @@ write_files:
       WORKER_IMAGE=ubuntu-24.04
 
       # --- container registry: FIRST BOOT ONLY --------------------------------
-      # Used once, for the initial `docker login` so the very first deploy can
-      # pull. After that the panel owns registry auth (Apps > API > Deployments),
-      # which is per-registry and can be changed without touching this file.
+      # One `docker login` so the very first deploy can pull. After that the
+      # panel owns registry auth (Apps > API > Deployments), per registry.
       GHCR_USER=your-github-username
       GHCR_TOKEN=REPLACE_ME          # PAT with read:packages
 
@@ -71,139 +70,35 @@ write_files:
       #   staging-${APP_NAME}.${ROOT_DOMAIN}  -> http://api-staging:8080
       CF_TUNNEL_TOKEN=REPLACE_ME
 
-      # --- Grafana ------------------------------------------------------------
-      GRAFANA_ADMIN_USER=admin
-      GRAFANA_ADMIN_PASSWORD=REPLACE_ME_LONG_RANDOM
-
       # --- Admin panel --------------------------------------------------------
       # The web console at admin-${APP_NAME}.${ROOT_DOMAIN}. It can deploy
       # anything in the cluster and read every credential in it, so this
-      # password is the key to the whole thing: make it long and unique, and put the hostname
-      # behind Cloudflare Access as a second factor.
+      # password is the key to the whole thing: make it long and unique, and put
+      # the hostname behind Cloudflare Access as a second factor.
+      #
+      # Grafana reuses it. Grafana is served through this panel, behind this
+      # login, so a second admin password was a second thing to rotate and
+      # nothing extra to breach.
       ADMIN_USER=admin
       ADMIN_PASSWORD=REPLACE_ME_LONG_RANDOM
 
-      # --- deploy access (OPTIONAL) -------------------------------------------
-      # Your CI is your business, but whatever you build needs a way in that is
-      # not root. Put a public key here and this script creates a `deploy` user
-      # in the docker group with that key installed. Its CI then runs one
-      # command per deploy:
-      #   docker service update --with-registry-auth --image <img> <component>_app
-      # Leave blank to skip entirely — the admin panel's deploy webhook is the
-      # path most people want, and it needs nothing here.
-      CI_SSH_PUBLIC_KEY=
-
-      # --- Fleet -------------------------------------------------------------
-
-      # HETZNER WORKERS. The master is NOT one of them — it is the control
-      # plane, and it carries the load itself while no worker exists.
-      #
-      #   MIN_WORKERS=0  ->  nothing is billed; the master runs your components
-      #   MIN_WORKERS=1  ->  one worker always up, so the master runs no
-      #                      application traffic at all
-      #   MAX_WORKERS=5  ->  at most five workers
-      #
-      # An idle cluster is therefore one box and no invoice.
-      #
-      # How much fits on a node is NOT configured. It is measured: each node's
-      # real CPU and memory, minus what Swarm has already reserved there,
-      # against the reservations of the replicas that have to be placed. A new
-      # machine's size comes from the Hetzner catalogue, and WHICH plan that is
-      # is not configured either: it is the smallest shared x86 type this
-      # location sells with at least 2 cores, 4 GB and 80 GB of disk. Resize the
-      # master or create another component and the arithmetic just follows.
-      # Existing workers are filled before another one is bought.
-      MIN_WORKERS=0
-      MAX_WORKERS=5                  # a BUDGET cap, not a capacity plan
-
-      # Vertical scaling: grow ONE worker onto the next plan up instead of
-      # buying a second one. It sits between "more replicas" and "more workers".
-      #
-      # Set to 0 to turn OFF. Both are required — MAX_WORKERS counts
-      # servers, so it cannot cap a change that raises the bill without changing
-      # the count, and half a ceiling is no ceiling.
-      #
-      # A CAPACITY, never a plan name — and the floor is not a plan name either
-      # any more. Hetzner adds and retires plans and does not sell the same
-      # family everywhere, so BOTH ends are read from the API: the floor is the
-      # smallest type meeting the base requirement, and the ladder above it is
-      # the same family, architecture and CPU type, cut off here.
-      #
-      #   8 cores / 16 GB from a 2-core floor allows two rungs up before another
-      #   machine is bought instead. Naming the plans would date this comment.
-      WORKER_MAX_CORES=8
-      WORKER_MAX_MEMORY_GB=16
-      # A resize power-cycles the machine, so it corrects the SHAPE of the fleet
-      # slowly. The replica count is what tracks traffic.
-      NODE_RESIZE_COOLDOWN_SECONDS=900
-
-      # Placement guard, not a trigger: if a node is this loaded on CPU or
-      # memory, another replica physically will not fit, so ask for a node.
-      NODE_PRESSURE_PCT=80
-
-      # Node cooldowns. Up must exceed node boot + image pull + app warmup or
-      # you will overshoot; down is slow on purpose, because a deleted node
-      # costs a full boot to get back.
-      COOLDOWN_UP_SECONDS=300
-      COOLDOWN_DOWN_SECONDS=900
-
-      # Blank on purpose. A floor here overrides MIN_WORKERS for the hours it
-      # covers, so `08:00-20:00=1` would keep one worker alive all day and the
-      # free floor would only ever happen overnight. Set it only if you have a
-      # known traffic window worth pre-warming for.
-      SCHEDULE_FLOOR=                # UTC; "HH:MM-HH:MM=N" comma separated
-      DRY_RUN=false
-
-      # --- databases ----------------------------------------------------------
-      # Dataguard's cluster-wide policy. Everything per component — how many
-      # members, the lag budget, whether reads may go to secondaries, where the
-      # backups go — lives on that component's own services as deploy labels and
-      # is edited on its page. Nothing about a specific database is here.
-      DATAGUARD_DRY_RUN=false
-      # THE CEILING ON A DATABASE'S MACHINE. A member is never resized in place:
-      # under sustained write or capacity pressure a member is started on the
-      # next plan up, synced, promoted, and the old one dropped. This is where
-      # that stops. Separate from WORKER_MAX_* because the mechanisms differ,
-      # and a capacity rather than a plan name because Hetzner retires plans.
-      DB_MAX_CORES=16
-      DB_MAX_MEMORY_GB=32
-      DB_MAX_STORAGE=655360
-      # HOURS. An initial sync reads the whole dataset off a live member, so a
-      # loop that reacts faster than the thing it controls simply oscillates.
-      TOPOLOGY_COOLDOWN_SECONDS=14400
-      PRESSURE_SUSTAIN_SECONDS=3600
-      # A topology change can lose data, so it is refused without a backup that
-      # has been proven to RESTORE — not merely taken — inside this window.
-      BACKUP_MAX_AGE_SECONDS=86400
-      # A data visualiser is full access to a database with no password of its
-      # own. The shorter it exists, the smaller that surface is.
-      VIEWER_IDLE_SECONDS=900
-
       # --- self-update --------------------------------------------------------
-      # THE REPO IS THE SOURCE OF TRUTH. A timer polls this URL, compares the
-      # commit it last applied against the branch head, and re-applies the
-      # bundle when they differ — so changing infrastructure means pushing a
-      # commit, not copying files onto a box.
+      # THE REPO IS THE SOURCE OF TRUTH. A timer compares the commit last
+      # applied against this branch's head and re-applies the bundle when they
+      # differ. It is also the GHCR namespace the panel, overseer, autoscaler
+      # and dataguard images are pulled from, tagged with that commit — so
+      # nothing is built on this box and there is no image setting to get wrong.
       #
-      # Put the token in as the PASSWORD, not on its own:
+      # Put the token in as the PASSWORD. A bare https://<token>@github.com/...
+      # is userinfo with no password, which git reads as a username and then
+      # asks for a password no timer job can answer:
       #   https://x-access-token:<token>@github.com/you/repo.git
-      # A bare `https://<token>@github.com/...` is userinfo with no password,
-      # which git reads as a username — so it asks for a password that neither
-      # this boot nor the update timer has anywhere to read from, and reports
-      # it as if the network were down. `bin/infra-update` repairs that form on
-      # the way past; the one-time clone below does not, so get it right here.
+      # A token is needed even for a PUBLIC repo: GitHub answers an anonymous
+      # fetch from a cloud IP with 401 often enough to look like a dead network.
       INFRA_REPO_URL=https://github.com/dhng22/hetzner-infra.git
       INFRA_REPO_BRANCH=master
-      # WHERE THE IMAGES COME FROM — and there is nothing to fill in for it.
-      # Nothing is built on this master: the repository above builds the
-      # autoscaler, the overseer and the panel on every push and publishes
-      # them to its own GHCR namespace tagged with the commit. Both halves of
-      # every image name are therefore derived from things already on this
-      # line — the path from INFRA_REPO_URL, the tag from the commit applied —
-      # so there is no setting to get wrong.
-      # How often to ask whether the branch has moved. One `git ls-remote` per
-      # tick, which is a single request that transfers nothing when nothing has
-      # changed.
+      # How often to ask whether the branch moved. One `git ls-remote` a tick,
+      # which transfers nothing when nothing has changed.
       INFRA_UPDATE_INTERVAL=5min
 
   # ---------------------------------------------------------------------------
@@ -218,16 +113,13 @@ write_files:
       echo "=== bootstrap started $(date -Is) ==="
 
       # --- fetch the bundle, and remember exactly which commit it is ----------
-      # THE COMMIT IS THE VERSION. Every infrastructure image this cluster runs is
-      # published by GitHub Actions and tagged with the commit it was built from,
-      # so the master pulls one exact reference per service instead of building
-      # three images on the box whose actual job is running the cluster. Recording
+      # THE COMMIT IS THE VERSION: every infrastructure image is published by
+      # GitHub Actions tagged with the commit it was built from, so recording
       # the SHA here is what lets the very first boot name them.
       #
-      # Skipped if /opt/infra/stacks already exists, so re-running this script
-      # does not re-clone. A tree put there by hand rather than cloned has no
-      # commit recorded, and the images are named by commit — so that case stops
-      # a few lines further down with an explanation rather than guessing.
+      # Skipped if /opt/infra/stacks exists, so re-running does not re-clone. A
+      # tree put there by hand has no commit recorded, and the images are named
+      # by commit — that case stops below with an explanation, not a guess.
       mkdir -p /opt/infra/state && chmod 700 /opt/infra/state
       if [ ! -e /opt/infra/stacks ]; then
         case "${INFRA_REPO_URL:-}" in
@@ -238,12 +130,9 @@ write_files:
             exit 1
             ;;
         esac
-        # The same credential repair bin/infra-update does, repeated here
-        # because this is the boot that INSTALLS bin/infra-update: a token
-        # pasted as https://TOKEN@host is userinfo with no password, which git
-        # reads as a username and then asks for a password that a cloud-init
-        # boot has no terminal to answer. Anything already carrying a colon is
-        # somebody's deliberate user:secret and is left exactly as it is.
+        # The same credential repair bin/infra-update does, repeated because
+        # this is the boot that INSTALLS bin/infra-update and cannot source it.
+        # Anything already carrying a colon is a deliberate user:secret.
         clone_url="$INFRA_REPO_URL"
         case "$clone_url" in
           http://*|https://*)
@@ -258,8 +147,8 @@ write_files:
             esac
             ;;
         esac
-        # Redacted in both places it is printed. The URL carries the token, and
-        # a cloud-init log is read by anyone who can reach the console.
+        # The URL carries the token and a cloud-init log is readable by anyone
+        # who can reach the console, so it is redacted everywhere it is printed.
         redact() { sed -e 's#://[^/@[:space:]]*@#://***@#g' \
                        -e 's#gh[pousr]_[A-Za-z0-9]\{16,\}#***#g' \
                        -e 's#github_pat_[A-Za-z0-9_]\{16,\}#***#g'; }
@@ -275,23 +164,20 @@ write_files:
           exit 1
         fi
         git -C /tmp/infra-bundle rev-parse HEAD > /opt/infra/state/commit
-        # The working files, not a checkout: bin/infra-update compares /opt/infra
-        # against a freshly fetched tree, and a .git directory here would be one
-        # more thing for it to have to skip.
+        # The working files, not a checkout: bin/infra-update compares
+        # /opt/infra against a freshly fetched tree, and a .git directory here
+        # would be one more thing for it to skip.
         rm -rf /tmp/infra-bundle/.git
         cp -a /tmp/infra-bundle/. /opt/infra/
         rm -rf /tmp/infra-bundle
       fi
 
       # --- preflight ----------------------------------------------------------
-      # This script is written by cloud-init, but the rest of the bundle is not.
-      # Say so plainly instead of failing later on a missing stack file.
-      # From config/required-files in the bundle, so this list lives in ONE
-      # place. It was a second copy, and a second copy of "what must exist" goes
-      # stale in the same way the updater's did: this file is baked into the VM
-      # at creation and never revised, so a master built from an old cloud-init
-      # against a newer repo would refuse to boot over a file the repo had
-      # deliberately dropped.
+      # This script is written by cloud-init; the rest of the bundle is not. Say
+      # so plainly instead of failing later on a missing stack file. The list
+      # comes FROM the bundle, because this file is baked into the VM at
+      # creation and never revised — a second copy of "what must exist" would
+      # refuse to boot over a file the repo had deliberately dropped.
       manifest=/opt/infra/config/required-files
       if [ -f "$manifest" ]; then
         required_list="$(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$manifest")"
@@ -314,13 +200,12 @@ write_files:
       # Every REPLACE_ME is checked here, before anything is installed or
       # created. Discovering a missing token after swarm init and two stack
       # deploys leaves you reconciling half a cluster by hand.
+      #
+      # Infrastructure only: nothing about an application is in this file — no
+      # image, no port, no service name, no SLO. Those arrive with a component.
       missing=()
-      # Infrastructure only. Nothing about an application is checked here
-      # because nothing about an application is in this file — no image, no
-      # port, no service name, no SLO. Those arrive with the component.
       for v in APP_NAME ROOT_DOMAIN HCLOUD_TOKEN HCLOUD_NETWORK_NAME \
-               GHCR_USER GHCR_TOKEN CF_TUNNEL_TOKEN \
-               GRAFANA_ADMIN_PASSWORD ADMIN_USER ADMIN_PASSWORD; do
+               GHCR_USER GHCR_TOKEN CF_TUNNEL_TOKEN ADMIN_USER ADMIN_PASSWORD; do
         case "${!v:-}" in
           ""|REPLACE_ME*) missing+=("$v") ;;
         esac
@@ -331,41 +216,24 @@ write_files:
         exit 1
       fi
 
-      # Alerting is NOT in that list. It used to be, and refusing to boot over
-      # it was too blunt: you cannot always have the destination ready at the
-      # moment you create the server, and a cluster you cannot bring up is worse
-      # than one that tells you what is missing. So it warns here, installs a
-      # receiver that visibly drops everything, and `smoke-test` fails on it
-      # until you fix it. The property worth keeping was never "refuse to boot"
-      # — it was "never look like it is working when it is not".
+      # Alerting is NOT in that list. Refusing to boot over it was too blunt —
+      # you cannot always have the destination ready when you create the server,
+      # and a cluster you cannot bring up is worse than one that tells you what
+      # is missing. So it warns, installs a receiver that visibly drops
+      # everything, and `smoke-test` fails until you fix it. The property worth
+      # keeping was never "refuse to boot" but "never look like it is working".
       if [ ! -s /opt/infra/state/alert_targets.json ]; then
         echo "WARNING: no alert destination is configured." >&2
         echo "Alerts will be generated, grouped — and dropped. Add one in the" >&2
         echo "panel under Alerts > Targets; nothing needs editing on this box." >&2
       fi
 
-      # Scaling numbers that have to agree with each other. The autoscaler
-      # clamps rather than crashing, so without this the cluster would run
-      # quietly on numbers you did not choose.
-      : "${MIN_WORKERS:=0}" "${MAX_WORKERS:=5}"
-
-      if [ "$MIN_WORKERS" -lt 0 ]; then
-        echo "FATAL: MIN_WORKERS cannot be negative. 0 means 'no Hetzner workers'," >&2
-        echo "which is the free floor — the master carries the load itself." >&2
-        exit 1
-      fi
-      if [ "$MAX_WORKERS" -lt "$MIN_WORKERS" ]; then
-        echo "FATAL: MAX_WORKERS ($MAX_WORKERS) is below MIN_WORKERS ($MIN_WORKERS)." >&2
-        exit 1
-      fi
-
       # Whether the master can hold the replica floor is measured at runtime
-      # from live Swarm reservations, which this script cannot see before the
-      # stacks are deployed. It is only advisory here: a master this small still
-      # works, it just never returns to the free single-host state and always
-      # keeps at least one worker running. The autoscaler says so in its log.
+      # from live Swarm reservations, which this script cannot see. Advisory
+      # only: a small master still works, it just never returns to the free
+      # single-host state and always keeps a worker running.
       MASTER_CPUS="$(nproc)"
-      if [ "$MIN_WORKERS" -eq 0 ] && [ "$MASTER_CPUS" -lt 4 ]; then
+      if [ "$MASTER_CPUS" -lt 4 ]; then
         echo "NOTE: this master has ${MASTER_CPUS} vCPU. After the monitoring stack" >&2
         echo "and the panel reserve theirs, there may be no room left for your" >&2
         echo "components — in which case a worker always stays up and the free" >&2
@@ -390,33 +258,24 @@ write_files:
       ufw allow from 10.0.0.0/8
 
       # Containers on this host reaching this host's own published ports, which
-      # `from 10.0.0.0/8` above does NOT cover: a container's packets leave
-      # through docker_gwbridge and arrive with a 172.x source, not a 10.x one.
-      # Host-mode publishing installs no DNAT rule, so unlike an ingress-mode
-      # port this is real INPUT traffic that ufw evaluates — and drops.
+      # `from 10.0.0.0/8` does NOT cover: a container's packets leave through
+      # docker_gwbridge and arrive with a 172.x source. Host-mode publishing
+      # installs no DNAT rule, so unlike an ingress-mode port this is real INPUT
+      # traffic that ufw evaluates — and drops.
       #
-      # The whole interface, deliberately, rather than a list of ports. Every
-      # host-mode port here is one a container has to reach — the panel on 3000,
-      # cadvisor on 8081, node-exporter on 9100, Loki on 3100 — and the
-      # port-by-port version of this rule shipped covering only 3000, which left
-      # vmagent unable to scrape the master at all. `up` was 0 for both of the
-      # master's exporters, so the box running everything was the one box with
-      # no metrics: no CPU-per-replica signal for the autoscaler, and a manager
-      # whose CPU and memory read "unknown" in the panel.
-      #
-      # docker_gwbridge is reachable only from containers already running on
-      # this host, and every one of those is ours.
+      # The whole interface, deliberately. The port-by-port version of this rule
+      # shipped covering only the panel's 3000, which left vmagent unable to
+      # scrape the master at all: no CPU-per-replica signal for the autoscaler,
+      # and a manager reading "unknown" in the panel. docker_gwbridge is
+      # reachable only from containers on this host, and all of those are ours.
       ufw allow in on docker_gwbridge
 
       ufw --force enable
 
       # --- docker -------------------------------------------------------------
-      # get.docker.com is NOT used here. It runs apt behind `-qq >/dev/null`, so
-      # every way this step can fail — a held dpkg lock, a package the mirror
-      # does not carry — produces no error at all, and the first symptom is
-      # `docker: command not found` a hundred lines later with nothing above it
-      # to explain why. The install is done inline so apt's output reaches the
-      # bootstrap log.
+      # get.docker.com is NOT used: it runs apt behind `-qq >/dev/null`, so a
+      # held dpkg lock or a missing package produces no error at all and the
+      # first symptom is `docker: command not found` a hundred lines later.
 
       # cloud-init's own package_upgrade and unattended-upgrades both run at
       # boot and both hold the dpkg lock. apt does not queue; it exits.
@@ -437,18 +296,16 @@ write_files:
       apt-get update
 
       # Named explicitly, and deliberately WITHOUT docker-model-plugin, which
-      # the install script adds to the same transaction. apt fails a whole
-      # transaction atomically, so one package the mirror has not published yet
-      # leaves the box with no docker whatsoever.
+      # the install script adds to the same transaction. apt fails a transaction
+      # atomically, so one unpublished package leaves the box with no docker.
       DEBIAN_FRONTEND=noninteractive apt-get install -y \
         docker-ce docker-ce-cli containerd.io \
         docker-buildx-plugin docker-compose-plugin
 
       systemctl enable --now docker
 
-      # Everything below this line assumes a working daemon. Stop here rather
-      # than at `docker swarm init`, with the firewall already reconfigured and
-      # half the preconditions met.
+      # Everything below assumes a working daemon. Stop here rather than at
+      # `docker swarm init`, with the firewall already reconfigured.
       if ! docker version >/dev/null 2>&1; then
         echo "FATAL: docker did not install, or the daemon is not running." >&2
         echo "See the apt output above, and: systemctl status docker" >&2
@@ -459,21 +316,20 @@ write_files:
       echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 
       # --- swarm, on the private interface ------------------------------------
-      # --default-addr-pool is not optional here, and it cannot be changed after
-      # init. Swarm's own default pool is 10.0.0.0/8, so `ingress` is allocated
-      # 10.0.0.0/24 — and a Hetzner private network is 10.0.0.0/16, handing this
-      # master 10.0.0.2 and every worker 10.0.0.3, .4, .5. The overlay subnet
-      # therefore contains the host addresses of the nodes carrying it.
+      # --default-addr-pool is not optional and cannot be changed after init.
+      # Swarm's own default pool is 10.0.0.0/8, so `ingress` takes 10.0.0.0/24 —
+      # and a Hetzner private network is 10.0.0.0/16, handing this master
+      # 10.0.0.2 and the workers .3, .4, .5. The overlay subnet would contain
+      # the host addresses of the nodes carrying it.
       #
-      # Nothing complains at init. It surfaces later as workers that join the
-      # swarm and then cannot be reached, which reads like a Hetzner networking
-      # fault rather than an address the cluster assigned to itself. Moving
-      # Docker off 10/8 entirely is the fix; 172.20/16 gives 256 overlay
-      # networks, well past what this cluster can create.
+      # Nothing complains at init. It surfaces later as workers that join and
+      # then cannot be reached, which reads like a Hetzner fault rather than an
+      # address the cluster assigned itself. 172.20/16 gives 256 overlays, well
+      # past what this cluster can create.
       #
-      # If you are re-running this on a swarm that was initialised WITHOUT the
-      # flag, the pool is baked in — `docker swarm leave --force` first, then
-      # re-run. That destroys the secrets too, which this script recreates.
+      # Re-running this on a swarm initialised WITHOUT the flag: the pool is
+      # baked in, so `docker swarm leave --force` first. That destroys the
+      # secrets too, which this script recreates.
       docker swarm init --advertise-addr "$PRIVATE_IP" --listen-addr "$PRIVATE_IP:2377" \
         --default-addr-pool 172.20.0.0/16 --default-addr-pool-mask-length 24 || true
       MASTER_ID="$(docker info -f '{{.Swarm.NodeID}}')"
@@ -485,16 +341,17 @@ write_files:
       # --- secrets -------------------------------------------------------------
       # Infrastructure credentials only. Application credentials (MONGO_URI,
       # REDIS_PASSWORD) are deliberately NOT secrets: they are plain env vars in
-      # config/app-<env>.env so the admin panel can edit them. See the tradeoff
-      # note in the README.
+      # config/app-<env>.env so the admin panel can edit them.
+      #
+      # The Telegram bot token is deliberately absent. It has to be optional (a
+      # stack cannot reference a secret that may not exist) and editable in the
+      # panel (Swarm secrets are immutable), so bin/stack-deploy renders it into
+      # config/alertmanager.yml at 0600 instead.
       mk_secret() { printf '%s' "$2" | docker secret create "$1" - 2>/dev/null || true; }
       mk_secret CF_TUNNEL_TOKEN           "$CF_TUNNEL_TOKEN"
       mk_secret HCLOUD_TOKEN              "$HCLOUD_TOKEN"
-      mk_secret GRAFANA_ADMIN_PASSWORD    "$GRAFANA_ADMIN_PASSWORD"
-      # The Telegram bot token is deliberately NOT here. It has to be optional
-      # (a stack cannot reference a secret that may not exist) and editable in
-      # the panel (Swarm secrets are immutable), so it is rendered into
-      # config/alertmanager.yml at 0600 by bin/stack-deploy instead.
+      # Grafana mounts ADMIN_PASSWORD as well as the panel: one login for the
+      # console and the dashboards it serves.
       mk_secret ADMIN_USER                "$ADMIN_USER"
       mk_secret ADMIN_PASSWORD            "$ADMIN_PASSWORD"
       # Signs admin session cookies. Generated here, never in infra.env: it is
@@ -505,8 +362,8 @@ write_files:
       # The panel manages the firewall, which lives on the host and is not
       # reachable through the docker socket. It gets one key, and that key's
       # authorized_keys entry FORCES bin/panel-hostops — so the panel cannot run
-      # an arbitrary command as root, only the handful of verbs that script
-      # implements. `restrict` also disables port/agent/X11 forwarding and PTYs.
+      # an arbitrary command as root, only the verbs that script implements.
+      # `restrict` also disables port/agent/X11 forwarding and PTYs.
       PANEL_KEY=/opt/infra/state/panel_ssh
       mkdir -p /opt/infra/state && chmod 700 /opt/infra/state
       if [ ! -f "$PANEL_KEY" ]; then
@@ -520,46 +377,41 @@ write_files:
           >> /root/.ssh/authorized_keys
         echo "installed forced-command key for the admin panel"
       fi
-      # Created FROM THE FILE, not through mk_secret. `$(cat key)` strips every
-      # trailing newline and mk_secret's `printf '%s'` does not put one back, so
-      # the secret arrived one byte short of the file — and OpenSSH rejects a
-      # private key that does not end in a newline with "error in libcrypto".
-      # Every host operation the panel performs (opening a database's external
-      # port, reading the firewall) then failed with a key that looks perfectly
-      # fine in `docker secret ls` and diffs clean against the original except
-      # for its last byte. Reading the path preserves the bytes exactly.
+      # Created FROM THE FILE, not through mk_secret. `$(cat key)` strips the
+      # trailing newline and `printf '%s'` does not put one back, so the secret
+      # arrived one byte short — and OpenSSH rejects a private key that does not
+      # end in a newline with "error in libcrypto". Every host operation then
+      # failed with a key that diffs clean except for its last byte.
       docker secret create PANEL_SSH_KEY "$PANEL_KEY" >/dev/null 2>&1 || true
 
       # --- component storage ---------------------------------------------------
       # Applications and databases live here, one directory each, created by the
-      # admin panel or by `component create`. Nothing is seeded: an empty
-      # cluster has no components, which is a valid and expected state.
+      # panel or by `component create`. Nothing is seeded: an empty cluster has
+      # no components, which is a valid state.
       mkdir -p /opt/infra/components
       chmod 700 /opt/infra/components
 
       # --- render templates ---------------------------------------------------
       # vmagent.yml and alertmanager.yml are rendered by bin/stack-deploy, not
-      # here, so that editing the alert destination in the panel and redeploying
-      # monitoring actually rebuilds the config it mounts.
+      # here, so editing the alert destination in the panel and redeploying
+      # monitoring rebuilds the config it mounts.
       cp /opt/infra/config/worker-cloud-init.yaml.tpl \
          /opt/infra/config/worker-cloud-init.yaml
 
       # --- infrastructure images: PULLED, never built --------------------------
-      # These used to be built right here, which cost a fresh master several
-      # minutes of its boot and left the cluster running images that existed
-      # nowhere else — so `docker stack deploy` could not resolve them to a digest,
-      # and every later update had to work around a service spec that never
-      # changed no matter what was rebuilt. They are built, tested and published by
-      # .github/workflows/publish.yml now, one immutable tag per commit, and this
-      # pulls the exact commit this master was cloned from.
+      # Building them here cost a fresh master minutes of its boot and left the
+      # cluster running images that existed nowhere else, so `docker stack
+      # deploy` could not resolve them to a digest. They are built, tested and
+      # published by .github/workflows/publish.yml, one immutable tag per
+      # commit, and this pulls the exact commit this master was cloned from.
       . /opt/infra/bin/infra-images
       infra_images "$(cat /opt/infra/state/commit 2>/dev/null || true)" || exit 1
       echo "infrastructure images: $(infra_image_repo) at ${INFRA_IMAGE_COMMIT:0:12}"
 
       # A master created moments after a push gets here before the build has
-      # finished, so it waits rather than failing — up to twenty minutes, saying
-      # what it is waiting for. A build that FAILED looks identical until the
-      # deadline, and then this stops with the registry's own reason.
+      # finished, so it waits — up to twenty minutes, saying what for. A build
+      # that FAILED looks identical until the deadline, then stops with the
+      # registry's own reason.
       for ref in $(infra_image_refs); do
         pulled=0
         for attempt in $(seq 1 40); do
@@ -578,9 +430,8 @@ write_files:
       done
 
       # What bin/stack-deploy reads to know which image tag to deploy, and what
-      # bin/infra-update reads on its very first tick. Written only once the
-      # images are actually here, so a master that could not pull them does not
-      # claim to be running the commit.
+      # bin/infra-update reads on its first tick. Written only once the images
+      # are here, so a master that could not pull them does not claim the commit.
       cat > /opt/infra/state/version.json <<JSON
       {
         "commit": "${INFRA_IMAGE_COMMIT}",
@@ -598,20 +449,14 @@ write_files:
       # --- networks -------------------------------------------------------------
       # `edge` is created here rather than by a stack, because every component
       # declares it external and no component may own it. When it belonged to
-      # the app stack, removing that stack took the network — and therefore the
-      # tunnel's route to everything else — with it.
+      # the app stack, removing that stack took the network — and the tunnel's
+      # route to everything else — with it.
       #
-      # `--opt encrypted` is defence in depth and NOT the mechanism. Once a
-      # database has members on more than one machine, replication — every write
-      # you have ever made — crosses this network, and the thing that protects it
-      # is TLS inside mongod, because an overlay's IPsec stops at the container
-      # boundary and proves nothing about who the peer is. This is the second
-      # layer under that one.
-      #
-      # It cannot be added to an existing network: changing it means recreating
-      # `edge`, which means removing every stack that declares it. So a cluster
-      # built before this line stays unencrypted at the overlay until it is
-      # rebuilt, and its databases are still TLS end to end.
+      # `--opt encrypted` is defence in depth, NOT the mechanism: replication
+      # crosses this network, and what protects it is TLS inside mongod, because
+      # an overlay's IPsec stops at the container boundary. It cannot be added to
+      # an existing network, so a cluster built before this line stays
+      # unencrypted at the overlay until rebuilt — and is still TLS end to end.
       docker network inspect edge >/dev/null 2>&1 \
         || docker network create --driver overlay --attachable --opt encrypted edge
 
@@ -620,9 +465,9 @@ write_files:
       /opt/infra/bin/stack-deploy monitoring
 
       # --- ingress -------------------------------------------------------------
-      # The tunnel connector, on its own, depending on nothing. It comes up with
-      # no routes to serve and that is correct: you add a hostname in Cloudflare
-      # when you create the component it points at.
+      # The tunnel connector, depending on nothing. It comes up with no routes
+      # to serve and that is correct: you add a hostname in Cloudflare when you
+      # create the component it points at.
       if [ -d /opt/infra/bin ]; then
         chmod +x /opt/infra/bin/*
         ln -sf /opt/infra/bin/component /usr/local/bin/component
@@ -630,10 +475,6 @@ write_files:
       /opt/infra/bin/stack-deploy ingress
 
       # --- self-update timer ---------------------------------------------------
-      # The repo is the source of truth from here on: this asks whether the
-      # branch has moved and re-applies the bundle when it has. One
-      # `git ls-remote` per tick, which transfers nothing when nothing changed.
-      #
       # A timer rather than anything inside the panel, because an update
       # redeploys the panel — a container cannot restart itself and still be
       # around to report how it went.
@@ -646,9 +487,8 @@ write_files:
       [Service]
       Type=oneshot
       ExecStart=/opt/infra/bin/infra-update
-      # Nothing else may run while it does: a second copy mid-rebuild would race
-      # two `docker stack deploy`s against the same stack. The script also takes
-      # its own flock, so an operator running it by hand cannot collide either.
+      # The script takes its own flock, so an operator running it by hand cannot
+      # race the timer against the same `docker stack deploy`.
       TimeoutStartSec=1800
       UNIT
 
@@ -679,24 +519,11 @@ write_files:
           ;;
       esac
 
-      # --- optional deploy user, so CI never needs root -----------------------
-      if [ -n "${CI_SSH_PUBLIC_KEY:-}" ]; then
-        id -u deploy >/dev/null 2>&1 || useradd -m -s /bin/bash deploy
-        usermod -aG docker deploy
-        mkdir -p /home/deploy/.ssh && chmod 700 /home/deploy/.ssh
-        printf '%s\n' "$CI_SSH_PUBLIC_KEY" > /home/deploy/.ssh/authorized_keys
-        chmod 600 /home/deploy/.ssh/authorized_keys
-        chown -R deploy:deploy /home/deploy/.ssh
-        echo "deploy user ready"
-      else
-        echo "CI_SSH_PUBLIC_KEY empty — skipping deploy user"
-      fi
-
       # --- admin panel ---------------------------------------------------------
       # Deployed last: it is the console for a cluster that must already be up.
       # It is the ONLY thing here with both the docker socket and a login form,
-      # so it is deliberately the smallest surface we can get away with.
-      # Through stack-deploy rather than envsubst, because the stack names
+      # so it is deliberately the smallest surface we can get away with. Through
+      # stack-deploy rather than envsubst, because the stack names
       # ${INFRA_IMAGE_ADMIN} and there is exactly one place that resolves it.
       /opt/infra/bin/stack-deploy admin
 
@@ -705,13 +532,16 @@ write_files:
       echo "Workers do not exist yet — the autoscaler creates the first one on"
       echo "its first loop. Watch:  docker service logs -f monitoring_autoscaler"
       echo
-      echo "Cloudflare tunnel hostnames to add now (ONE tunnel):"
-      echo "  grafana-${APP_NAME}.${ROOT_DOMAIN}  -> http://grafana:3000"
-      echo "  admin-${APP_NAME}.${ROOT_DOMAIN}    -> http://${PRIVATE_IP}:3000"
+      echo "Cloudflare tunnel hostname to add now:"
+      echo "  admin-${APP_NAME}.${ROOT_DOMAIN}  -> http://${PRIVATE_IP}:3000"
       echo
-      echo "Put both behind Cloudflare Access. The admin panel holds the docker"
+      echo "Put it behind Cloudflare Access. The admin panel holds the docker"
       echo "socket and can redeploy anything — its password is the cluster."
-      echo "Access in front of it is your second factor."
+      echo "Access in front of it is your second factor. Grafana is served"
+      echo "through the panel at /grafana/ and needs no hostname of its own."
+      echo
+      echo "Scaling, database and alerting policy all have working defaults."
+      echo "Change them in the panel: Manager > Fleet, Manager > Databases."
       echo
       echo "There are no applications yet, on purpose. Create one in the panel"
       echo "(Components -> New app), or on this box:"
@@ -720,10 +550,9 @@ write_files:
       echo "the panel shows you."
 
 runcmd:
-  # The clone moved INTO bootstrap.sh, so it reads INFRA_REPO_URL from the file
-  # you edited above instead of from a URL repeated down here. Two spellings of
-  # "which repo is this cluster" is a master built from one branch and updated
-  # from another.
+  # The clone lives INSIDE bootstrap.sh so it reads INFRA_REPO_URL from the file
+  # you edited above. Two spellings of "which repo is this cluster" is a master
+  # built from one branch and updated from another.
   - [ bash, -lc, "mkdir -p /opt/infra" ]
   - [ bash, -lc, "/opt/infra/bootstrap.sh" ]
 

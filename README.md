@@ -143,7 +143,9 @@ name stays at the third level and extra services take a dash:
 Grafana is not on that list. It is served through the panel at `/grafana/`,
 behind the session you are already signed in to, the same way the database
 consoles are — so it needs no hostname, no second login page on the public
-internet, and no Access policy of its own.
+internet, and no Access policy of its own. It signs you in with `ADMIN_USER`
+and `ADMIN_PASSWORD` too: one credential for the console and the dashboards it
+serves, asked for once per browser.
 
 Put the panel behind Cloudflare Access. It controls your cluster.
 
@@ -273,10 +275,15 @@ Where each setting lives now — and the split is the point:
 | `autoscale.sustain_up_seconds` | 90 | the component | Up fast |
 | `autoscale.sustain_down_seconds` | 900 | the component | Down slow. Never symmetric. |
 | `autoscale.up_factor` | 0.5 | the component | +50% of current, min +1. One at a time cannot track a spike. |
-| `MIN_WORKERS` | 0 | `infra.env` | Hetzner workers; the master is not one. `0` = nothing billed. |
-| `MAX_WORKERS` | 5 | `infra.env` | The most workers that may exist. A **budget** cap. |
-| `NODE_PRESSURE_PCT` | 80 | `infra.env` | Placement guard: another replica will not fit |
-| `COOLDOWN_UP_SECONDS` | 300 | `infra.env` | Must exceed boot + pull + app warmup, or you overshoot |
+| `MIN_WORKERS` | 0 | Manager → Fleet | Hetzner workers; the master is not one. `0` = nothing billed. |
+| `MAX_WORKERS` | 5 | Manager → Fleet | The most workers that may exist. A **budget** cap. |
+| `NODE_PRESSURE_PCT` | 80 | Manager → Fleet | Placement guard: another replica will not fit |
+| `COOLDOWN_UP_SECONDS` | 300 | Manager → Fleet | Must exceed boot + pull + app warmup, or you overshoot |
+
+Fleet and database policy is **not** in the cloud-config. Every one of these
+ships with the default above and is changed afterwards in the panel, under
+**Manager → Fleet** and **Manager → Databases** — which is also why the
+cloud-config only asks for the handful of things nobody else can supply.
 
 Application policy belongs to the application; fleet policy belongs to the
 cluster. A copy of an SLO in `infra.env` would be a copy that goes stale, and
@@ -402,9 +409,6 @@ Four things to have open in other tabs:
 Anything your application itself needs — a managed database, an API key, a
 bucket — is not on this list. Those go in that component's environment after the
 cluster is up, and the cluster has no opinion about them.
-
-Optional: an SSH public key for `CI_SSH_PUBLIC_KEY` if you want a non-root
-`deploy` user on the master. The panel does not need it.
 
 ## Admin panel
 
@@ -701,7 +705,8 @@ rolls production back:
    |---|---|
    | `admin-<app>.<root>` | `http://<master-private-ip>:3000` |
 
-   Grafana does not need one — it is reached through the panel at `/grafana/`.
+   Grafana does not need one — it is reached through the panel at `/grafana/`
+   and takes the same `ADMIN_USER` / `ADMIN_PASSWORD` when it asks.
 
 7. **Put it behind Cloudflare Access.** The panel holds the docker socket and
    can read your Hetzner token, so its password is one factor and Access is the
@@ -735,7 +740,7 @@ rolls production back:
 12. **Push a commit** and watch it deploy.
 
 To prove the Hetzner token and the worker cloud-init before you need them,
-temporarily set `MIN_WORKERS=1` in the panel (Settings → Fleet), watch a worker
+temporarily set `MIN_WORKERS=1` in the panel (Manager → Fleet), watch a worker
 join and your components move onto it, then set it back to 0 and watch them hand
 back and the server get deleted.
 

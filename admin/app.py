@@ -1516,11 +1516,14 @@ def grafana(sub):                       # noqa: ARG001 — `sub` is the URL capt
     below it is relative, which is why nothing has to be rewritten on the way
     out.
 
-    IT STILL ASKS FOR ITS OWN LOGIN, once. Injecting the admin credential here
-    would mean mounting Grafana's docker secret into the panel to read a
-    password the panel can only write — a real widening, to save typing a
-    password a browser remembers. Its session cookie is forwarded like any
-    other, so this is once per browser, not once per visit.
+    IT STILL ASKS FOR ITS OWN LOGIN, once — for ADMIN_USER and ADMIN_PASSWORD,
+    the panel's own credential, which `stacks/monitoring.yml` hands Grafana as
+    its admin user. Injecting it here is now possible, since the panel already
+    holds both to check them at its own login, and is still not done: it would
+    make every panel session a signed-in Grafana ADMIN session, API included,
+    to save typing a password the browser remembers once. Grafana's session
+    cookie is forwarded like any other, so this is once per browser, not once
+    per visit.
 
     `_require_csrf` is deliberately not applied, for the reason spelled out on
     `component_viewer`: the token on a request through here is Grafana's, not
@@ -1770,20 +1773,17 @@ PREVIEW_INFRA = {
     "WORKER_IMAGE": "ubuntu-24.04",
     "HCLOUD_TOKEN": "hcl_9f2bc41d77aa0e35", "GHCR_USER": "acme-bot",
     "GHCR_TOKEN": "ghp_a71ccf20e9bb14d0",
-    "NODE_PRESSURE_PCT": "80", "MIN_WORKERS": "0", "MAX_WORKERS": "5",
-    "WORKER_MAX_CORES": "8", "WORKER_MAX_MEMORY_GB": "16",
-    "NODE_RESIZE_COOLDOWN_SECONDS": "900",
-    "COOLDOWN_UP_SECONDS": "300", "COOLDOWN_DOWN_SECONDS": "900",
-    "SCHEDULE_FLOOR": "", "DRY_RUN": "false",
+    # No fleet or database policy, deliberately: the cloud-init does not ship
+    # any either. Those rows come from settings_def.DEFAULTS on a real cluster
+    # until somebody changes one, so the preview exercises the same path.
     "ADMIN_USER": "admin", "ADMIN_PASSWORD": "hunter2hunter2",
-    "GRAFANA_ADMIN_USER": "admin", "GRAFANA_ADMIN_PASSWORD": "s3cr3t-grafana",
-    "CF_TUNNEL_TOKEN": "eyJhIjoiN2Y0MGQ5YTIi", "CI_SSH_PUBLIC_KEY": "ssh-ed25519 AAAAC3Nza...",
+    "CF_TUNNEL_TOKEN": "eyJhIjoiN2Y0MGQ5YTIi",
 }
 # Nothing application-shaped here: no image, no port, no SLO, no replica counts.
 # The fixture stands in for the real infra.env, so an extra key would make the
-# preview show a Settings page the live panel cannot show — and a DIFFERENT
-# VALUE would make it document a default the cloud-init does not ship. Both are
-# pinned by test_preview_infra_matches_the_shipped_defaults.
+# preview show a Settings page the live panel cannot show — and a value that
+# disagreed with DEFAULTS would document a product that does not exist. Both
+# are pinned by test_preview_infra_matches_the_shipped_defaults.
 
 
 if __name__ == "__main__":

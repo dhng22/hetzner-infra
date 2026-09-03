@@ -238,8 +238,13 @@ services:
   grafana:
     image: grafana/grafana:11.3.0
     environment:
-      GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER}"
-      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/GRAFANA_ADMIN_PASSWORD
+      # THE PANEL'S OWN LOGIN. Grafana is served through the panel, behind the
+      # panel's session, so a second admin password was a second thing to
+      # rotate and nothing extra to breach. Grafana applies it when its
+      # database is first created and never again, which is why changing
+      # ADMIN_PASSWORD later does not move this one.
+      GF_SECURITY_ADMIN_USER: "${ADMIN_USER}"
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/ADMIN_PASSWORD
       GF_USERS_ALLOW_SIGN_UP: "false"
       # BEHIND THE PANEL, not on a hostname of its own. Every metric this
       # cluster has ever recorded used to sit behind a second login page on the
@@ -254,7 +259,7 @@ services:
       # it in the Zero Trust dashboard is one fewer public door.
       GF_SERVER_ROOT_URL: "https://admin-${APP_NAME}.${ROOT_DOMAIN}/grafana/"
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
-    secrets: [GRAFANA_ADMIN_PASSWORD]
+    secrets: [ADMIN_PASSWORD]
     volumes:
       - grafanadata:/var/lib/grafana
       - /opt/infra/config/grafana-datasources.yml:/etc/grafana/provisioning/datasources/ds.yml:ro
@@ -446,5 +451,5 @@ volumes:
 secrets:
   HCLOUD_TOKEN:
     external: true
-  GRAFANA_ADMIN_PASSWORD:
+  ADMIN_PASSWORD:
     external: true
