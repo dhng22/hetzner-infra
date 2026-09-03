@@ -138,19 +138,58 @@ class AxisTest(unittest.TestCase):
     be stretched with it.
     """
 
-    def test_a_time_chart_says_what_both_planes_are(self):
+    def test_every_chart_says_where_it_is_now_rather_than_naming_its_axes(self):
+        """
+        The line under a chart used to read "y: p95 latency (ms) · x: last 60
+        min", which restated the tick labels sitting on both edges. It says
+        where the chart IS instead — the number a shape cannot show and the one
+        somebody scanning a column of them is after.
+        """
         for label, body in (
-                ("line", charts.line({"api": series(1.0, 2.0)}, "ms",
-                                     y="p95 latency (ms)", x="last 60 min")),
-                ("stack", charts.stack({"2xx": series(1.0, 2.0)}, "/s",
-                                       y="responses per second",
-                                       x="last 60 min")),
-                ("columns", charts.columns([{"name": "OOM", "value": 2.0}],
-                                           y="events counted"))):
+                ("line", charts.line({"api": series(1.0, 2.0)}, "ms")),
+                ("stack", charts.stack({"2xx": series(1.0, 2.0)}, "/s")),
+                ("columns", charts.columns([{"name": "OOM", "value": 2.0}])),
+                ("bars", charts.bars([{"name": "wkr-1", "value": 2.0,
+                                       "max": 4.0}], "%"))):
             with self.subTest(chart=label):
-                self.assertIn("chart-axes", body)
-                self.assertIn("y:", body)
-                self.assertIn("x:", body)
+                self.assertIn("chart-note", body)
+                self.assertNotIn("y:", body)
+                self.assertNotIn("x:", body)
+
+    def test_a_reading_names_the_series_only_when_there_is_a_choice(self):
+        one = charts.line({"api": series(300.0, 412.0)}, "ms")
+        many = charts.line({"api": series(300.0, 412.0),
+                            "web": series(90.0, 91.0)}, "ms")
+        self.assertIn("now 412ms", one)
+        self.assertNotIn("highest", one)
+        self.assertIn("api highest", many)
+
+    def test_a_reading_says_which_side_of_the_rule_it_is_on(self):
+        """
+        The dashed line is already drawn; whether today's number is above it is
+        the fact worth reading, and a glance at a 96px chart does not settle it.
+        """
+        under = charts.line({"api": series(300.0, 412.0)}, "ms", reference=500.0)
+        over = charts.line({"api": series(300.0, 620.0)}, "ms", reference=500.0)
+        self.assertIn("under the 500ms line", under)
+        self.assertIn("OVER the 500ms line", over)
+
+    def test_a_stack_names_the_layer_the_total_is_mostly_made_of(self):
+        note = charts.stack({"2xx": series(10.0, 12.0),
+                             "5xx": series(0.2, 0.3)}, "/s")
+        self.assertIn("mostly 2xx", note)
+
+    def test_a_tally_of_nothing_says_so_in_words(self):
+        """
+        A row of baselines looks identical to a chart that failed to load, and
+        "we counted and it was none" is the answer here most of the time.
+        """
+        self.assertIn("nothing counted in this window",
+                      charts.columns([{"name": "OOM kills", "value": 0.0},
+                                      {"name": "tx errors", "value": 0.0}]))
+        self.assertIn("counted: tx errors 11.0, OOM kills 3.0",
+                      charts.columns([{"name": "OOM kills", "value": 3.0},
+                                      {"name": "tx errors", "value": 11.0}]))
 
     def test_the_axis_ends_are_printed_not_only_implied(self):
         svg = charts.line({"api": series(10.0, 5407.0)}, "ms")

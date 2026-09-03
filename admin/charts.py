@@ -140,13 +140,38 @@ def _frame(body, title, extra_class=""):
             f'<title>{_esc(title)}</title>{body}</svg>')
 
 
-def _caption(y_axis, x_axis):
-    """What each plane is for, said in words under the picture."""
+def _worst(series):
+    """(name, points) of the series with the highest peak, or (None, None)."""
+    if not series:
+        return None, None
+    name = max(series, key=lambda k: max(v for _, v in series[k]))
+    return name, series[name]
+
+
+def _reading(series, unit, reference=None, named=True):
+    """
+    The one line worth reading under a time chart.
+
+    It replaced a caption naming the axes, which restated what the tick labels
+    on both edges already say. The space is better spent on where the chart is
+    NOW and how that compares to its own peak and to the rule it is judged by —
+    the numbers somebody scanning a column of charts is actually after, and the
+    only ones a shape cannot show.
+    """
+    name, points = _worst(series)
+    if not points:
+        return ""
+    latest = points[-1][1]
+    peak = max(v for _, v in points)
     parts = []
-    if y_axis:
-        parts.append(f"y: {y_axis}")
-    if x_axis:
-        parts.append(f"x: {x_axis}")
+    if named and len(series) > 1:
+        parts.append(f"{name} highest")
+    parts.append(f"now {fmt(latest, unit)}")
+    if peak > latest:
+        parts.append(f"peak {fmt(peak, unit)}")
+    if reference:
+        over = latest >= reference
+        parts.append(f"{'OVER' if over else 'under'} the {fmt(reference, unit)} line")
     return " · ".join(parts)
 
 
@@ -178,7 +203,7 @@ def _wrap(plot, y_ticks=(), x_ticks=(), caption="", legend=(), spread=False):
             f'<span class="chart-key"><i style="background:var({var})"></i>'
             f'{_esc(name)}</span>' for name, var in legend) + '</div>')
     if caption:
-        out.append(f'<figcaption class="chart-axes">{_esc(caption)}</figcaption>')
+        out.append(f'<figcaption class="chart-note">{_esc(caption)}</figcaption>')
     out.append('</figure>')
     return "".join(out)
 
@@ -265,8 +290,7 @@ def _slices(rows, t0, t1, unit):
     return "".join(out)
 
 
-def line(series, unit="", reference=None, band=None, empty="no data yet",
-         y="", x="last hour"):
+def line(series, unit="", reference=None, band=None, empty="no data yet"):
     """
     One line per series over time.
 
@@ -312,17 +336,15 @@ def line(series, unit="", reference=None, band=None, empty="no data yet",
          for t in stamps], t0, t1, unit))
 
     peak = max(v for points in series.values() for _, v in points)
-    hint = f"{fmt(hi, unit)} axis" if reference is None else \
-        f"{fmt(hi, unit)} axis, rule at {fmt(reference, unit)}"
     return _wrap(
         _frame("".join(body), f"{len(series)} series, peak {fmt(peak, unit)}"),
         y_ticks=(fmt(hi, unit), fmt(lo, unit)),
         x_ticks=(ago(t0, t1), "now"),
-        caption=_caption(y or hint, x),
+        caption=_reading(series, unit, reference),
         legend=_legend([name for name, _ in order]))
 
 
-def stack(series, unit="", empty="no traffic recorded", y="", x="last hour"):
+def stack(series, unit="", empty="no traffic recorded"):
     """
     Stacked areas — for a total split into parts, where the parts sum to
     something meaningful. Response codes are the case this exists for: the
@@ -374,15 +396,25 @@ def stack(series, unit="", empty="no traffic recorded", y="", x="last hour"):
          for t in stamps], t0, t1, unit))
 
     peak = max(running.values())
+    # The stacked height is the total; what the picture cannot say is which
+    # layer that total is mostly made of, which for status codes is the whole
+    # question.
+    newest = stamps[-1]
+    biggest = max(own, key=lambda n: own[n][newest]) if own else ""
+    note = f"now {fmt(running[newest], unit)}"
+    if peak > running[newest]:
+        note += f" · peak {fmt(peak, unit)}"
+    if biggest and own[biggest][newest] > 0:
+        note += f" · mostly {biggest}"
     return _wrap(
         _frame("".join(body), f"{len(layers)} layers, peak {fmt(peak, unit)}"),
         y_ticks=(fmt(hi, unit), fmt(0.0, unit)),
         x_ticks=(ago(t0, t1), "now"),
-        caption=_caption(y or f"{fmt(hi, unit)} axis, stacked", x),
+        caption=note,
         legend=_legend([name for name, _ in order]))
 
 
-def bars(rows, unit="", empty="nothing to compare", y="", x=""):
+def bars(rows, unit="", empty="nothing to compare"):
     """
     Horizontal bars, one per named thing, longest first — not a time series.
 
@@ -413,13 +445,13 @@ def bars(rows, unit="", empty="nothing to compare", y="", x=""):
             f'<span class="bar-value">{_esc(note)}</span>'
             f'</div>')
     out.append('</div>')
+    worst = max(rows, key=lambda r: r["value"] / (r.get("max") or ceiling))
     return _wrap("".join(out),
-                 caption=_caption(y or "one row per thing measured",
-                                  x or f"0 → {fmt(ceiling, unit)}"))
+                 caption=f'busiest: {worst["name"]} at '
+                         f'{fmt(worst["value"], unit)}')
 
 
-def columns(rows, unit="", empty="none in this window", y="",
-            x="one bar per counter"):
+def columns(rows, unit="", empty="none in this window"):
     """
     Vertical bars for counts over a window — error tallies, not rates.
 
@@ -446,13 +478,20 @@ def columns(rows, unit="", empty="none in this window", y="",
                     f'x="{left:.1f}" y="{PAD_T + height - drawn:.1f}" '
                     f'width="{bar:.1f}" height="{drawn:.1f}" rx="2" '
                     f'data-tip="{_esc(tip)}"/>')
+    # "We counted and it was none" is the answer most of the time here, and it
+    # is worth saying in words — a row of baselines looks identical to a chart
+    # that failed to load.
+    hits = [r for r in rows if r["value"] > 0]
+    note = ("nothing counted in this window" if not hits else
+            "counted: " + ", ".join(f'{r["name"]} {fmt(r["value"], unit)}'
+                                    for r in sorted(hits, key=lambda r: -r["value"])))
     return _wrap(
         _frame("".join(body), ", ".join(
             f"{r['name']} {fmt(r['value'], unit)}" for r in rows)),
         y_ticks=(fmt(hi, unit), fmt(0.0, unit)),
         x_ticks=[(r["name"], fmt(r["value"], unit)) for r in rows],
         spread=True,
-        caption=_caption(y or f"count, 0 → {fmt(hi, unit)}", x))
+        caption=note)
 
 
 def bullet(value, warn=None, danger=None, ceiling=100.0, unit="%",

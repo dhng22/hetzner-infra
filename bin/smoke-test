@@ -124,8 +124,17 @@ head_ "services converged"
 while read -r name replicas; do
   [ -z "$name" ] && continue
   running="${replicas%%/*}"; want="${replicas##*/}"
+  # 0/0 IS CONVERGED. It is a service that was asked for zero replicas and is
+  # running zero, which in this cluster is a designed state and not a fault:
+  # standby replica-set members are created at 0 and started by dataguard when
+  # the topology grows, and a data viewer sits at 0 until somebody presses
+  # View. Reporting eight of those as failures buried the one real one and had
+  # me telling the operator his databases were not deployed while mongo and
+  # redis were serving traffic.
   if [ "$running" = "$want" ] && [ "$running" != "0" ]; then
     ok "$name ($replicas)"
+  elif [ "$want" = "0" ]; then
+    ok "$name (stopped on purpose)"
   else
     bad "$name ($replicas)" "$(docker service ps --no-trunc --format '{{.Error}}' "$name" 2>/dev/null | grep -v '^$' | head -1)"
   fi
@@ -302,9 +311,15 @@ else
     done
 
     type="$(python3 -c "import json;print(json.load(open('$dir/component.json'))['type'])" 2>/dev/null)"
-    svc="${name}_${type}"
-    if ! docker service inspect "$svc" >/dev/null 2>&1; then
-      skip "$name is deployed" "spec exists but $svc is not running — run 'component deploy $name'"
+    # A component's services are NUMBERED once it has members — `database` of
+    # type mongo deploys `database_mongo-1`, not `database_mongo`. Looking only
+    # for the bare name reported a fully deployed replica set as "spec exists
+    # but not running", which is a diagnostic that lies in the one direction
+    # that costs an operator the most: it says a healthy database is missing.
+    svc="$(docker service ls --format '{{.Name}}' \
+           | grep -E "^${name}_${type}(-[0-9]+)?$" | sort | head -1)"
+    if [ -z "$svc" ]; then
+      skip "$name is deployed" "spec exists but no ${name}_${type} service is running — run 'component deploy $name'"
       continue
     fi
 

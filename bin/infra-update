@@ -114,11 +114,23 @@ os.replace(tmp, path)
 PYEOF
 }
 
+#: Fail, recording WHICH HALF failed.
+#
+# `stage` matters because the two halves are cleared by different evidence.
+# A REACH failure is disproved the moment a later check reaches the repo. An
+# APPLY failure is not: the commit is recorded before the deploys, so a run
+# that dies after that point leaves `commit == remote` with `status=error`,
+# and that error is the ONLY thing that makes the next tick retry instead of
+# seeing the commit it wants and exiting. Clearing it on a successful check
+# would leave the box serving old code while reporting the new SHA — which is
+# the exact failure the retry guard exists to prevent.
 die() {
-    log "ERROR: $*"
-    state_set "status=error" "detail=$*" "checked_at=$(date -Is)"
+    log "ERROR: $2"
+    state_set "status=error" "stage=$1" "detail=$2" "checked_at=$(date -Is)"
     exit 1
 }
+reach_fail() { die reach "$*"; }
+apply_fail() { die apply "$*"; }
 
 # One at a time. A timer firing while a rebuild is still running would race two
 # `docker stack deploy`s against the same stack.
@@ -128,7 +140,7 @@ if ! flock -n 9; then
   exit 0
 fi
 
-[ -f "$INFRA_ENV" ] || die "$INFRA_ENV not found (run this on the master)"
+[ -f "$INFRA_ENV" ] || apply_fail "$INFRA_ENV not found (run this on the master)"
 set -a; . "$INFRA_ENV"; set +a
 
 # Opt-in. A cluster with no repo configured is a valid state — it was built from
@@ -179,10 +191,10 @@ running="$(state_get commit)"
 # happened (a token GitHub answers "Bad credentials" to) is the one that
 # sentence sends you looking in the wrong place for.
 if ! ls_remote="$(git ls-remote "$INFRA_REPO_URL" "refs/heads/$BRANCH" 2>&1)"; then
-  die "cannot reach the repo: $(why "$ls_remote")"
+  reach_fail "cannot reach the repo: $(why "$ls_remote")"
 fi
 remote="$(printf '%s\n' "$ls_remote" | awk 'NR==1{print $1}')"
-[ -n "$remote" ] || die "branch '$BRANCH' does not exist in the repo"
+[ -n "$remote" ] || reach_fail "branch '$BRANCH' does not exist in the repo"
 
 # READ BEFORE WRITING. The commit is recorded BEFORE the deploys, so a run that
 # fails after that point leaves `commit == remote` with `status=error`, and
@@ -197,8 +209,26 @@ remote="$(printf '%s\n' "$ls_remote" | awk 'NR==1{print $1}')"
 # overwriting it every five minutes is what destroyed the evidence. Only the end
 # of a successful run sets `ok`, and only `die` sets `error`.
 last_status="$(state_get status)"
+last_stage="$(state_get stage)"
 
 state_set "checked_at=$(date -Is)" "remote=$remote" "branch=$BRANCH"
+
+# Reaching the repo DISPROVES a recorded reach failure, so stop reporting it.
+#
+# Without this the panel could say "repo reachable" in the same second the rail
+# beside it said "update failing", because only the end of a full successful
+# run ever cleared the error — up to a whole poll interval later. Someone who
+# has just pasted a working token reads that as the token still being wrong and
+# goes looking for a second problem that does not exist.
+#
+# It clears the status to UNKNOWN rather than to ok: reaching the repo says
+# nothing about whether the last apply worked, and the state has no business
+# claiming otherwise. An APPLY failure is deliberately left alone — see `die`.
+if [ "$last_status" = "error" ] && [ "$last_stage" = "reach" ]; then
+  log "repo is reachable again; clearing: $(state_get detail)"
+  state_set "status=" "stage=" "detail="
+  last_status=""
+fi
 
 if [ "$MODE" != "force" ] && [ "$running" = "$remote" ] && [ "$last_status" != "error" ]; then
   [ "$MODE" = "check" ] && log "up to date at ${remote:0:12}"
@@ -222,7 +252,7 @@ trap cleanup EXIT
 
 if ! clone_out="$(git clone --quiet --depth 1 --branch "$BRANCH" \
                      "$INFRA_REPO_URL" "$work/repo" 2>&1)"; then
-  die "clone failed: $(why "$clone_out")"
+  reach_fail "clone failed: $(why "$clone_out")"
 fi
 got="$(git -C "$work/repo" rev-parse HEAD)"
 
@@ -249,7 +279,7 @@ config/vmagent.yml.tpl config/alerts.yml bin/component bin/stack-deploy
 bin/infra-update bin/infra-images"
 fi
 for required in $required_files; do
-  [ -e "$work/repo/$required" ] || die "the fetched tree is missing $required — refusing to apply it"
+  [ -e "$work/repo/$required" ] || apply_fail "the fetched tree is missing $required — refusing to apply it"
 done
 
 # --- what changed, for the one decision that still depends on it -------------
@@ -279,7 +309,7 @@ changed config && config_changed=true
 # Sourced from the FETCHED tree, not the live one: this is the new commit's idea
 # of where its own images live, and it is read before anything is copied over.
 . "$work/repo/bin/infra-images"
-infra_images "$got" || die "cannot work out which images ${got:0:12} should run (see above)"
+infra_images "$got" || apply_fail "cannot work out which images ${got:0:12} should run (see above)"
 
 # Pulling IS the check. A published commit pulls; an unpublished one does not,
 # and the reason — still building, build failed, registry credentials expired —
@@ -311,7 +341,7 @@ if [ -n "$pull_error" ]; then
               "detail=waiting for GitHub Actions to publish the images for ${got:0:12}"
     exit 0
   fi
-  die "no images for ${got:0:12} after $((waited / 60)) minutes. The build for this commit probably failed — check the repository's Actions tab. Last error: $pull_error"
+  apply_fail "no images for ${got:0:12} after $((waited / 60)) minutes. The build for this commit probably failed — check the repository's Actions tab. Last error: $pull_error"
 fi
 state_set "waiting_since="
 
@@ -356,7 +386,7 @@ for area in admin autoscaler overseer dataguard signals pki bin stacks config; d
   [ -e "$work/repo/$area" ] || continue
   diff -qr --no-dereference "${DIFF_SKIP[@]}" \
        "$INFRA_DIR/$area" "$work/repo/$area" >/dev/null 2>&1 \
-    || die "$area still differs from the fetched tree after rsync — an exclude pattern is swallowing code. Refusing to deploy a stale tree."
+    || apply_fail "$area still differs from the fetched tree after rsync — an exclude pattern is swallowing code. Refusing to deploy a stale tree."
 done
 
 chmod +x "$INFRA_DIR"/bin/* 2>/dev/null || true
@@ -402,7 +432,7 @@ log "files updated to ${got:0:12}"
 # through. admin LAST, on purpose — it is the console you would use to find out
 # that an update went wrong, so it stays up for as much of the update as it can.
 log "deploying monitoring"
-"$INFRA_DIR/bin/stack-deploy" monitoring >/dev/null || die "monitoring deploy failed"
+"$INFRA_DIR/bin/stack-deploy" monitoring >/dev/null || apply_fail "monitoring deploy failed"
 if [ "$config_changed" = true ]; then
   log "config changed; restarting vmagent and vmalert onto it"
   docker service update --force --quiet "monitoring_vmagent" >/dev/null 2>&1 || true
@@ -431,10 +461,10 @@ for retired in monitoring_dispatcher; do
 done
 
 log "deploying ingress"
-"$INFRA_DIR/bin/stack-deploy" ingress >/dev/null || die "ingress deploy failed"
+"$INFRA_DIR/bin/stack-deploy" ingress >/dev/null || apply_fail "ingress deploy failed"
 
 log "deploying admin"
-"$INFRA_DIR/bin/stack-deploy" admin >/dev/null || die "admin deploy failed"
+"$INFRA_DIR/bin/stack-deploy" admin >/dev/null || apply_fail "admin deploy failed"
 
 # --- did the new code actually start? ----------------------------------------
 # `docker stack deploy` is DETACHED: it exits 0 once Swarm accepts the spec,
@@ -465,7 +495,7 @@ wait_for_commit() {
     [ "$(date +%s)" -lt "$deadline" ] || break
     sleep 5
   done
-  die "$name did not come up on ${want:0:12} — it is on ${actual:-no running container on this node}. Swarm may have rolled it back. Check: docker service ps --no-trunc $name"
+  apply_fail "$name did not come up on ${want:0:12} — it is on ${actual:-no running container on this node}. Swarm may have rolled it back. Check: docker service ps --no-trunc $name"
 }
 
 for name in monitoring_autoscaler monitoring_overseer monitoring_dataguard admin_ui; do

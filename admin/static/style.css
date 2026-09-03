@@ -1022,7 +1022,10 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
   gap: 4px 10px; margin-top: 6px; font-size: var(--t-xs); color: var(--text-mute); }
 .chart-key { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
 .chart-key > i { flex: none; width: 9px; height: 3px; border-radius: 2px; }
-.chart-axes { grid-column: 1 / -1; grid-row: 4; margin-top: 4px;
+/* Not an axis caption — the tick labels on both edges already say what the
+   planes are. This is where the chart is NOW against its own peak and against
+   the rule it is judged by, which is what a shape cannot show. */
+.chart-note { grid-column: 1 / -1; grid-row: 4; margin-top: 4px;
   color: var(--text-mute); font-size: var(--t-xs); }
 
 /* One hover target per sample, invisible until pointed at. It carries

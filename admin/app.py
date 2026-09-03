@@ -1705,7 +1705,16 @@ def _repo_check(changed):
                       "rail is where it reports.")
     if ok and "already running" in out:
         return True, "Not checked — an update was already running. Watch the left rail."
-    return ok, (f"Repo reachable — {last}" if ok else f"Repo check FAILED — {last}")
+    if ok:
+        return True, f"Repo reachable — {last}"
+    # Named because it is the likeliest cause at exactly this moment: the check
+    # runs seconds after somebody pasted a credential, and a token minted
+    # moments ago is not usable from every GitHub edge yet. The updater keeps
+    # trying on its own timer, so a save that is actually correct comes right
+    # without anyone touching it again.
+    return False, (f"Repo check FAILED — {last} A token created moments ago can "
+                   f"take a little while to work; the updater retries on its own "
+                   f"and the left rail is where it reports.")
 
 
 #: Groups the Autoscaler page owns. They are edited there, next to the live
