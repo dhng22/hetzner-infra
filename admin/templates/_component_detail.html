@@ -242,10 +242,16 @@
         </div>
       </section>
 
+      {# A save never STARTS a component, so a stopped one must not offer to
+         deploy — the button said "Save and deploy" and the route then brought
+         the whole stack up. Same condition the pill uses. #}
       <div class="sticky-save">
-        <button class="btn btn-primary" type="submit">Save and deploy</button>
+        <button class="btn btn-primary" type="submit">
+          {{ "Save and deploy" if view.primary and view.primary.exists else "Save" }}</button>
         <a class="btn" href="{{ component_href(component.name) }}">Cancel</a>
-        <span class="muted">Applied with a rolling, health-gated update.</span>
+        <span class="muted">{{ "Applied with a rolling, health-gated update."
+          if view.primary and view.primary.exists
+          else "Kept on disk. It is applied when you deploy." }}</span>
       </div>
     </form>
   </div>
@@ -554,7 +560,8 @@
       {% endif %}
 
       <div class="sticky-save">
-        <button class="btn btn-primary" type="submit">Save and deploy</button>
+        <button class="btn btn-primary" type="submit">
+          {{ "Save and deploy" if view.primary and view.primary.exists else "Save" }}</button>
         <a class="btn" href="{{ component_href(component.name) }}">Cancel</a>
       </div>
     </form>

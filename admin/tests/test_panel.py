@@ -78,6 +78,23 @@ class PanelTest(unittest.TestCase):
         page = self.client.get("/components/new?type=app").get_data(as_text=True)
         return page.split('name="csrf" value="')[1].split('"')[0]
 
+    def running(self, name):
+        """
+        Put a component's services into the fixture cluster.
+
+        A save does not start anything — `_deploy_if_needed` skips the deploy
+        when the primary service does not exist — so a test about what a deploy
+        touches has to say the component is actually deployed. Registered in
+        the same table `fixtures.service` reads, and removed again afterwards
+        so no test inherits another's cluster.
+        """
+        component = self.components.load(name)
+        for service in component.services():
+            self.panel.data._SERVICES[service] = self.panel.data._svc(
+                service, "ghcr.io/you/app:sha-abc1234", 1, 1)
+            self.addCleanup(self.panel.data._SERVICES.pop, service, None)
+        return component
+
     def create_app(self, name="api", **extra):
         csrf = self.login()
         form = {"csrf": csrf, "type": "app", "name": name,
@@ -189,6 +206,30 @@ class PanelTest(unittest.TestCase):
         self.client.post("/components/api4/env", follow_redirects=True,
                          data=MultiDict([("csrf", csrf), ("key", "ONLY"), ("value", "yes")]))
         self.assertEqual(self.components.store.env_map("api4"), {"ONLY": "yes"})
+
+    def test_a_dotted_variable_name_is_not_rejected(self):
+        """
+        `MONGODB.DBNAME` is a name real applications read. The environment goes
+        into a compose `environment:` mapping and then through execve, neither
+        of which applies shell identifier rules, so refusing it was the panel
+        inventing a limit the system does not have.
+        """
+        csrf, _ = self.create_app("dotted")
+        page = self.client.post("/components/dotted/env", follow_redirects=True,
+                                data={"csrf": csrf,
+                                      "bulk": "MONGODB.DBNAME=drama\n"
+                                              "spring.data.mongodb.uri=x\n"}
+                                ).get_data(as_text=True)
+        self.assertNotIn("variable name", page)
+        self.assertEqual(self.components.store.env_map("dotted"),
+                         {"MONGODB.DBNAME": "drama", "spring.data.mongodb.uri": "x"})
+
+    def test_a_name_this_file_cannot_hold_is_still_refused(self):
+        """The rule that is left is the format's, not the shell's."""
+        problems = self.components.store.validate_env(
+            [{"key": "A B", "value": "1"}, {"key": "#X", "value": "1"},
+             {"key": "", "value": "1"}, {"key": "OK.NAME", "value": "1"}])
+        self.assertEqual(len(problems), 3)
 
     def test_a_bad_env_paste_writes_nothing(self):
         csrf, _ = self.create_app("api5")
@@ -1846,7 +1887,7 @@ class DeployDiffTest(PanelTest):
 
     def test_an_identical_save_deploys_nothing(self):
         csrf, _ = self.create_app("steady")
-        component = self.components.load("steady")
+        component = self.running("steady")
         component.write_stack()              # stand in for the deploy we stubbed
         self.deploys.clear()
         page = self.client.post("/components/steady/settings",
@@ -1857,7 +1898,7 @@ class DeployDiffTest(PanelTest):
 
     def test_a_real_change_deploys_and_names_what_moves(self):
         csrf, _ = self.create_app("moving")
-        component = self.components.load("moving")
+        component = self.running("moving")
         component.write_stack()
         self.deploys.clear()
         form = dict(self._spec_form(csrf, component))
@@ -1866,6 +1907,21 @@ class DeployDiffTest(PanelTest):
                                 follow_redirects=True).get_data(as_text=True)
         self.assertEqual(self.deploys, ["moving"])
         self.assertIn("Rolling moving_app", page)
+
+    def test_saving_a_stopped_component_does_not_start_it(self):
+        """
+        Save is not Deploy. A stopped component has no services to update, so
+        `docker stack deploy` would CREATE them — pressing Save on the
+        environment form used to bring the whole stack up. The change belongs
+        on disk either way; applying it is the Deploy button's job.
+        """
+        csrf, _ = self.create_app("parked")          # never added to the cluster
+        self.deploys.clear()
+        page = self.client.post("/components/parked/env", follow_redirects=True,
+                                data={"csrf": csrf, "bulk": "A=1\n"}).get_data(as_text=True)
+        self.assertEqual(self.deploys, [])
+        self.assertIn("not running", page)
+        self.assertEqual(self.components.store.env_map("parked"), {"A": "1"})
 
     def test_a_removal_is_named_before_it_happens(self):
         """

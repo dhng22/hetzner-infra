@@ -134,7 +134,14 @@ def delete_dir(name):
 # per line, blanks and # comments ignored. Parsing lives here rather than in the
 # panel so the CLI and the panel cannot disagree about what a file means.
 
-KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# What this FILE can hold, not what a shell would let you type. `MONGODB.DBNAME`
+# and `spring.data.mongodb.uri` are real variable names that real applications
+# read; the environment reaches the container as a compose `environment:`
+# mapping and then through execve, neither of which cares about shell identifier
+# rules. So the only names refused are the ones this format cannot round-trip:
+# `=` is the separator, whitespace is stripped off both sides, and a line
+# starting with `#` is read back as a comment and silently lost.
+KEY_RE = re.compile(r"^[^\s=#][^\s=]*$")
 
 
 def read_env(name, filename="env"):
@@ -170,7 +177,9 @@ def validate_env(pairs):
     for p in pairs:
         k = p["key"]
         if not KEY_RE.match(k):
-            problems.append(f"{k!r} is not a valid variable name.")
+            problems.append(f"{k!r} cannot be a variable name here: a name may "
+                            f"not be empty, contain spaces or '=', or start "
+                            f"with '#'.")
         elif k in seen:
             problems.append(f"{k} appears more than once.")
         seen.add(k)

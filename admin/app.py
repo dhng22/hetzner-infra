@@ -285,7 +285,8 @@ def _load(name):
 
 def _deploy_if_needed(component):
     """
-    Apply a saved change, but only if it is one. `(ok, output, detail, ran)`.
+    Apply a saved change, but only if it is one AND the component is running.
+    `(ok, output, detail, ran)`.
 
     Every save used to end in an unconditional `docker stack deploy` over the
     whole rendered file, which made "I changed the log level" and "I removed a
@@ -297,6 +298,19 @@ def _deploy_if_needed(component):
     from "there was nothing to deploy" — recording the second as a deployment
     would put a phantom entry in the component's history.
     """
+    # A save does not START anything. A component that is stopped, or that was
+    # never deployed, has no services for a deploy to update — `stack deploy`
+    # would create them, so pressing Save on the environment form was quietly
+    # the Deploy button. The files ARE the component (see `Component.stop`), so
+    # the change is safe on disk and gets applied by the deploy that is actually
+    # asked for. This is the panel's own definition of not-deployed — the
+    # primary service does not exist — the same one `shape.component_view` uses,
+    # so the pill and the flash cannot disagree.
+    if not data.service(component.service, with_tasks=False)["exists"]:
+        return (True, "",
+                f"{component.name} is not running, so nothing was deployed — "
+                f"press Deploy to apply it.", False)
+
     diff = component.pending_changes()
     if components.base.nothing_to_do(diff):
         return True, "", "Nothing to redeploy — the rendered stack is unchanged.", False
