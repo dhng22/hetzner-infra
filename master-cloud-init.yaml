@@ -95,7 +95,7 @@ write_files:
       #   https://x-access-token:<token>@github.com/you/repo.git
       # A token is needed even for a PUBLIC repo: GitHub answers an anonymous
       # fetch from a cloud IP with 401 often enough to look like a dead network.
-      INFRA_REPO_URL=https://github.com/dhng22/hetzner-infra.git
+      INFRA_REPO_URL=https://x-access-token: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@github.com/dhng22/hetzner-infra.git
       INFRA_REPO_BRANCH=master
       # How often to ask whether the branch moved. One `git ls-remote` a tick,
       # which transfers nothing when nothing has changed.
@@ -124,9 +124,11 @@ write_files:
       if [ ! -e /opt/infra/stacks ]; then
         case "${INFRA_REPO_URL:-}" in
           ""|*REPLACE_ME*)
-            echo "FATAL: /opt/infra has no bundle and INFRA_REPO_URL is not set." >&2
-            echo "Set it in the infra.env block above — it is both where the bundle" >&2
-            echo "comes from and where this cluster's images are published." >&2
+            echo "FATAL: /opt/infra has no bundle and INFRA_REPO_URL still says" >&2
+            echo "REPLACE_ME. Put a GitHub token in it — as the password, in the" >&2
+            echo "x-access-token: slot. A PUBLIC repo needs one too: GitHub answers" >&2
+            echo "an unauthenticated fetch from a cloud IP with 401. Read-only" >&2
+            echo "'contents' is enough." >&2
             exit 1
             ;;
         esac
