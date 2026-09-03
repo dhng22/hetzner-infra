@@ -289,11 +289,42 @@ write_files:
             exit 1
             ;;
         esac
-        echo "cloning ${INFRA_REPO_URL} (${INFRA_REPO_BRANCH:-master})"
+        # The same credential repair bin/infra-update does, repeated here
+        # because this is the boot that INSTALLS bin/infra-update: a token
+        # pasted as https://TOKEN@host is userinfo with no password, which git
+        # reads as a username and then asks for a password that a cloud-init
+        # boot has no terminal to answer. Anything already carrying a colon is
+        # somebody's deliberate user:secret and is left exactly as it is.
+        clone_url="$INFRA_REPO_URL"
+        case "$clone_url" in
+          http://*|https://*)
+            _rest="${clone_url#*://}"
+            case "${_rest%%/*}" in
+              *@*)
+                case "${_rest%%@*}" in
+                  *:*) ;;
+                  *) clone_url="${clone_url%%://*}://x-access-token:${_rest}" ;;
+                esac
+                ;;
+            esac
+            ;;
+        esac
+        # Redacted in both places it is printed. The URL carries the token, and
+        # a cloud-init log is read by anyone who can reach the console.
+        redact() { sed -e 's#://[^/@[:space:]]*@#://***@#g' \
+                       -e 's#gh[pousr]_[A-Za-z0-9]\{16,\}#***#g' \
+                       -e 's#github_pat_[A-Za-z0-9_]\{16,\}#***#g'; }
+        echo "cloning $(printf '%s' "$INFRA_REPO_URL" | redact) (${INFRA_REPO_BRANCH:-master})"
         rm -rf /tmp/infra-bundle
-        git clone --quiet --depth 1 --branch "${INFRA_REPO_BRANCH:-master}" \
-          "$INFRA_REPO_URL" /tmp/infra-bundle \
-          || { echo "FATAL: could not clone $INFRA_REPO_URL" >&2; exit 1; }
+        if ! clone_err="$(GIT_TERMINAL_PROMPT=0 git clone --quiet --depth 1 \
+             --branch "${INFRA_REPO_BRANCH:-master}" "$clone_url" \
+             /tmp/infra-bundle 2>&1)"; then
+          # git's own words, not "could not clone": an expired token, a wrong
+          # branch and a dead network are three different mornings.
+          echo "FATAL: could not clone $(printf '%s' "$INFRA_REPO_URL" | redact)" >&2
+          printf '%s\n' "$clone_err" | redact >&2
+          exit 1
+        fi
         git -C /tmp/infra-bundle rev-parse HEAD > /opt/infra/state/commit
         # The working files, not a checkout: bin/infra-update compares /opt/infra
         # against a freshly fetched tree, and a .git directory here would be one

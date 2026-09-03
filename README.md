@@ -647,11 +647,30 @@ rolls production back:
 1. **Push this repo to GitHub and let the workflow run once.** The master
    pulls its three infrastructure images from GHCR rather than building them,
    so the commit you boot from has to have been published — check the Actions
-   tab is green before creating the server. A public repository with public
-   packages needs nothing else; a private one needs `GHCR_TOKEN` to have
-   `read:packages`.
+   tab is green before creating the server. A private repository needs
+   `GHCR_TOKEN` to have `read:packages`.
 
-   There is nothing to configure for this. The image path is derived from
+   **A public repository still needs a token in `INFRA_REPO_URL`.** This used
+   to say it needed nothing, and that sentence cost an afternoon. GitHub serves
+   the ref advertisement to anyone but answers the fetch itself — `POST
+   /git-upload-pack` — with 401 for an unauthenticated request from a cloud IP;
+   measured from a Hetzner master against `github.com/git/git.git`, so it is a
+   property of where the box is and not of which repo you point it at. Roughly
+   one attempt in six gets through, which is worse than a clean failure: the
+   cluster updates just often enough to look alive. Put the token in as the
+   PASSWORD — `https://x-access-token:TOKEN@github.com/you/repo.git` — because a
+   bare `https://TOKEN@...` is userinfo with no password, which git reads as a
+   username and then asks for a password no boot and no timer can answer. Both
+   the cloud-init and `bin/infra-update` repair that second form on the way
+   past; neither can do anything about a missing or expired token.
+
+   Read-only `contents` is enough. It is proof of identity to get past the
+   anonymous block, not access. Change it later in the panel under
+   **Settings → Panel**, which writes `infra.env` and then asks the master
+   whether it can still pull, rather than telling you it saved and leaving you
+   to find out in five minutes.
+
+   There is nothing else to configure for this. The image path is derived from
    `INFRA_REPO_URL` and the tag is the commit, so both halves of every name
    come from facts the cluster already has.
 2. **Fill every `REPLACE_ME`** in the `VARIABLES` block. The one that matters

@@ -1237,6 +1237,87 @@ class PanelTest(unittest.TestCase):
         for key in ("INFRA_REPO_URL", "INFRA_REPO_BRANCH"):
             self.assertNotIn(key, delivered)
 
+    def test_the_cloud_init_ships_every_key_the_panel_section_offers(self):
+        """
+        The Panel rows have no entry in DEFAULTS — there is no sane default for
+        "which repo is this cluster", and inventing one would point a fresh
+        master at somebody else's code. So they render only if infra.env
+        carries them, which means a cloud-init that stopped shipping one would
+        not leave the field blank: it would make the whole section vanish, on
+        the one page that exists to set it.
+        """
+        import pathlib
+        import re
+        import settings_def
+
+        root = pathlib.Path(__file__).resolve().parents[2]
+        block = (root / "master-cloud-init.yaml").read_text()
+        block = block[block.index("/etc/infra/infra.env"):block.index("bootstrap.sh")]
+        shipped = {m.group(1) for m in
+                   re.finditer(r"^\s{6}([A-Z][A-Z0-9_]*)=", block, re.M)}
+
+        self.assertIn("MIN_WORKERS", shipped, "the infra.env block did not parse")
+        panel = next(keys for title, keys in settings_def.GROUPS if title == "Panel")
+        for key in panel:
+            self.assertIn(key, shipped,
+                          f"{key} is offered by Settings > Panel but no cluster "
+                          f"is built with it, so the row can never render")
+            self.assertNotIn(key, settings_def.DEFAULTS,
+                             f"{key} must have no invented default")
+
+    def test_both_copies_of_the_credential_repair_agree(self):
+        """
+        The rule that moves a pasted token into the password position is
+        written twice — in `bin/infra-update`, and again in the cloud-init,
+        because that boot is what INSTALLS bin/infra-update and cannot source
+        it. Two copies of one rule is the drift this repo keeps getting bitten
+        by, so they are run side by side against the same table rather than
+        trusted to stay in step.
+        """
+        import pathlib
+        import subprocess
+
+        root = pathlib.Path(__file__).resolve().parents[2]
+
+        def block(text, marker):
+            """The `case ... esac` starting at `marker`, by its own indent."""
+            lines = text.splitlines()
+            start = next(i for i, ln in enumerate(lines) if marker in ln)
+            indent = len(lines[start]) - len(lines[start].lstrip())
+            for i in range(start + 1, len(lines)):
+                if (lines[i].strip() == "esac"
+                        and len(lines[i]) - len(lines[i].lstrip()) == indent):
+                    return "\n".join(lines[start:i + 1])
+            self.fail(f"no esac closes {marker!r}")
+
+        copies = (
+            ("bin/infra-update", 'case "$INFRA_REPO_URL" in', "INFRA_REPO_URL"),
+            ("master-cloud-init.yaml", 'case "$clone_url" in', "clone_url"),
+        )
+        table = [
+            ("https://github_pat_XYZ@github.com/o/r.git",
+             "https://x-access-token:github_pat_XYZ@github.com/o/r.git"),
+            ("https://me:github_pat_XYZ@github.com/o/r.git",
+             "https://me:github_pat_XYZ@github.com/o/r.git"),
+            ("https://github.com/o/r.git", "https://github.com/o/r.git"),
+            # An '@' in the PATH is not userinfo and must not be treated as one.
+            ("https://github.com/o/we@ird.git", "https://github.com/o/we@ird.git"),
+            # Not http(s): left alone, or the rewrite corrupts it.
+            ("git@github.com:o/r.git", "git@github.com:o/r.git"),
+            ("ssh://git@github.com/o/r.git", "ssh://git@github.com/o/r.git"),
+        ]
+        for source, marker, var in copies:
+            code = block((root / source).read_text(), marker)
+            for given, want in table:
+                with self.subTest(source=source, url=given):
+                    out = subprocess.run(
+                        ["bash", "-c",
+                         f'{var}="$1"\n{code}\nprintf "%s" "${var}"',
+                         "sh", given],
+                        capture_output=True, text=True, timeout=20)
+                    self.assertEqual(out.returncode, 0, out.stderr)
+                    self.assertEqual(out.stdout, want)
+
     def test_the_host_verb_has_nothing_to_smuggle_a_repo_through(self):
         """
         `bin/panel-hostops` is the panel's only reach onto the master, and its
