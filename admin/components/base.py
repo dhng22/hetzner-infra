@@ -888,7 +888,7 @@ class Component:
                                tone="danger", when="running"),
         }
 
-    def credentials(self, master_ip=""):
+    def credentials(self):
         """
         What the Credentials tab shows, or None when the type has none.
 
@@ -966,3 +966,240 @@ def shell_command(parts):
 
 def quote(value):
     return shlex.quote(str(value))
+
+
+# =============================================================================
+# THE EXTERNAL ENDPOINT
+# =============================================================================
+# A database's INTERNAL address is permanent by construction: Mongo's seed alias
+# resolves to whichever members are running, Redis's sentinel URL names watchers
+# that answer "who is the primary" — so an application inside the cluster is
+# given one string on the first day and never told about a failover, a new
+# member or a move onto dedicated machines.
+#
+# The external address had none of that, and could not: it was a host port on
+# member 1's service, and every one of those words was a problem.
+#
+#   * A DISCOVERY PROTOCOL CANNOT CROSS THE BOUNDARY. Sentinel answers with
+#     `<stack>_redis-2`; a replica set's `hello` answers with
+#     `<stack>_mongo-3:27017`. Those names exist on the overlay network and
+#     nowhere else, so a client outside that follows the protocol is handed an
+#     address it cannot resolve — which is why publishing the sentinels, or
+#     naming `replicaSet=` in an external URL, does not work and cannot be made
+#     to.
+#   * MEMBER 1 IS NOT THE PRIMARY. Once a set has grown, the copy on the master
+#     is a secondary, so the published port reached a server that refuses every
+#     write.
+#   * MEMBER 1 DOES NOT ALWAYS EXIST. `plan.next_action` removes the master's
+#     copy when the set no longer needs it, and the port went with it. A
+#     connection string handed out on Monday was dead by the time dataguard
+#     finished moving the database.
+#   * AND THE PORT WAS ON THE MASTER. Host-mode publishing binds the node the
+#     task runs on, member 1 is pinned to the manager, and there is one manager.
+#     So losing that machine took the external path with it — while the
+#     applications inside the cluster carried on, because their address is peer
+#     discovery and needs no master at all.
+#
+# TWO PIECES FIX FOUR PROBLEMS, and they are different pieces.
+#
+# WHICH COPY — a TCP proxy of its own, doing the discovery the client cannot do
+# and forwarding to whichever member is the primary right now. HAProxy rather
+# than something written here, because "find the primary" is a health check and
+# HAProxy has been doing exactly this since before Sentinel existed. Each engine
+# supplies the question — `INFO replication` for Redis, an `isMaster` handshake
+# for Mongo — so a failover is one check that starts failing and another that
+# starts passing, with no state kept anywhere.
+#
+# WHICH MACHINE — the tunnel, which is the same answer this cluster already
+# gives for every application. Nothing is published on a host port and no
+# firewall is opened: the connector dials OUT to Cloudflare, so there is no
+# address on this side to lose, and Cloudflare stops routing to a connector the
+# moment its machine goes. That is why an app survives losing the master today,
+# and it is the only way a database can. The proxy is therefore GLOBAL, one per
+# node like the connector itself, and is reached over the edge network rather
+# than through the host.
+#
+# What it costs: the client runs `cloudflared access tcp`, which gives it a local
+# port to connect to. So the connection string is a local address plus a helper,
+# rather than a public address on its own — and the traffic detours through
+# Cloudflare, which is a few milliseconds on every round trip. That trade was
+# taken deliberately; the alternative that keeps a plain public address is a
+# floating IP, which costs money and still has to be moved by hand.
+#
+# The traffic is PASSED THROUGH end to end, never terminated. For Mongo that
+# means the client's TLS session ends at the member holding the data — neither
+# this proxy nor the connector nor Cloudflare can read a query. The client dials
+# `127.0.0.1`, which every member certificate already carries because mongod's
+# own health check uses it, so nothing about the certificates depends on where
+# the client is.
+#
+# ACCESS IS WHAT REPLACES THE FIREWALL. A hostname routed to this tunnel is
+# reachable by anyone who knows it, with only the database password in the way.
+# Put a Cloudflare Access policy with a service token in front of it; that is the
+# door, and it is the one the panel keeps telling you about.
+HAPROXY_IMAGE = "haproxy:3.0-alpine"
+
+#: The listen block, the resolver and the timeouts, which are the same whatever
+#: is behind them. Only the check and the backend list differ per engine.
+#:
+#: `init-addr none` with a resolver is what lets this start at all: most member
+#: slots are services at `replicas: 0`, so their names do not resolve yet, and
+#: HAProxy's default is to refuse to start on an unresolvable server. Instead
+#: each one begins DOWN and is re-resolved every few seconds, which is also how
+#: a member that dataguard starts on a new machine joins the backend without
+#: anything being reconfigured.
+_GATEWAY_CONF = """\
+# Generated by the admin panel. Edits here are replaced on the next deploy.
+global
+    log stdout format raw local0 info
+    # Stated rather than left to be computed from whatever file-descriptor limit
+    # the container happens to get. A database proxy that silently accepted a
+    # hundred connections and queued the rest would look like the database was
+    # slow, which is the hardest kind of limit to find.
+    maxconn 2000
+
+defaults
+    mode tcp
+    log global
+    option tcplog
+    # Both sides get TCP keepalives, so an idle-but-live pooled connection is
+    # not mistaken for a dead one and a genuinely dead peer is still reaped by
+    # the kernel rather than sitting here until the timeout below.
+    option tcpka
+    timeout connect 5s
+    timeout client 24h
+    timeout server 24h
+
+resolvers swarm
+    # Docker's embedded DNS. Service names resolve here and nowhere else, which
+    # is the whole reason this process sits on the edge network.
+    nameserver docker 127.0.0.11:53
+    resolve_retries 3
+    timeout resolve 1s
+    timeout retry 1s
+    hold valid 5s
+    hold nx 5s
+    hold timeout 5s
+    hold refused 5s
+    hold other 5s
+
+listen {name}
+    bind :{port}
+    # There is only ever one server passing the check — the primary — so the
+    # algorithm is a formality. `first` says that out loud rather than implying
+    # a spread that cannot happen.
+    balance first
+    option tcp-check
+{check}
+    default-server check {server_options}inter {inter} fall 2 rise 1 \
+resolvers swarm init-addr none on-marked-down shutdown-sessions
+{servers}
+"""
+
+
+def gateway_service(*, name, port, backends, check, labels, logging,
+                    server_options="", inter="2s"):
+    """
+    The compose service for one database's external endpoint.
+
+    `backends` is (server name, host:port) for EVERY slot, running or not:
+    a slot that does not exist yet is a name that does not resolve, which the
+    resolver above turns into a server that is simply down until it does.
+
+    `check` is the engine's own way of asking "are you the primary", as
+    `tcp-check` lines. It is the only part of this that differs between Redis
+    and Mongo, which is why it is a parameter and not a subclass.
+
+    `inter` is how often each running member is asked. It is a trade between how
+    long a demoted primary keeps receiving traffic and how much the engine logs:
+    every check is a fresh connection, and mongod records one at each end of it.
+    """
+    lines = "\n".join(f"    server {server} {address}" for server, address in backends)
+    conf = _GATEWAY_CONF.format(
+        name=name, port=port, inter=inter,
+        check="\n".join(f"    {line}" for line in check),
+        server_options=(server_options + " ") if server_options else "",
+        servers=lines)
+    # `printf %s` into a file the container can write, then exec — the same
+    # shape as the sentinel config next door, and for the same reason: a config
+    # file mounted read-only cannot be regenerated when the stack changes, and a
+    # docker config object would be a second immutable-and-versioned dance for
+    # something that is derived from the spec every time it is rendered.
+    #
+    # Nothing in `conf` may contain `$`: compose interpolates it before docker
+    # ever sees the file. Nothing does — service names, ports and hex are all
+    # that is in there, which is also why the Redis password is sent as hex.
+    if "$" in conf:                                              # pragma: no cover
+        raise store.ComponentError(
+            "the gateway configuration contains a '$', which compose would "
+            "interpolate away before docker ever read the file")
+    return {
+        "image": HAPROXY_IMAGE,
+        "command": ["sh", "-c",
+                    f'set -e; printf %s "{conf}" > /tmp/haproxy.cfg; '
+                    'exec haproxy -f /tmp/haproxy.cfg'],
+        # NO `ports`. Nothing is published on a host interface and no firewall
+        # rule is needed, because the only thing that connects to this is the
+        # tunnel connector, and it is on the edge network already.
+        "networks": [EDGE_NETWORK],
+        "logging": logging,
+        "deploy": {
+            # GLOBAL, WITH NO CONSTRAINT, exactly like the connector in
+            # stacks/ingress.yml and for exactly the same reason: one per node,
+            # so losing a node loses one of them rather than the only one. A
+            # single replica pinned to the manager is what this used to be, and
+            # it made the external path die with the master — which is the
+            # failure the tunnel exists to remove. Do not add a constraint here.
+            #
+            # At the resting state of this cluster there are no workers, so
+            # global is one task on the master and the redundancy is nil. That
+            # is the same guarantee the connector gives, and it grows the same
+            # way: the moment a worker exists, so does a second door.
+            "mode": "global",
+            "labels": labels,
+            "restart_policy": {"condition": "any", "delay": "5s"},
+            # Global, so this is a per-node tax the autoscaler subtracts from a
+            # worker's usable size — the same accounting the connector gets.
+            "resources": {"reservations": {"cpus": "0.02", "memory": "32M"}},
+        },
+    }
+
+
+#: A bare hostname. Not an address: what goes here is the public hostname you
+#: added to the tunnel in the Cloudflare dashboard, so a scheme or a port in it
+#: is a paste from the wrong box.
+HOSTNAME_RE = re.compile(
+    r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))+$")
+
+
+def clean_hostname(value):
+    """
+    The tunnel hostname as a bare host, or "" if it is not one.
+
+    Forgiving of the two ways the same thing gets pasted — with a scheme in
+    front, with a path on the end — because that is how it looks in the address
+    bar of the dashboard you just copied it from.
+    """
+    value = (value or "").strip().lower()
+    value = re.sub(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", "", value).split("/")[0]
+    value = value.split(":")[0]
+    if not HOSTNAME_RE.match(value):
+        return ""
+    # An IP address matches the shape above and is NOT one of these: a tunnel
+    # hostname is a DNS name Cloudflare answers for, and no top-level domain is
+    # numeric. Worth catching by itself, because the field this replaced asked
+    # for an address and somebody will paste the old one in.
+    return "" if value.rsplit(".", 1)[-1].isdigit() else value
+
+
+def access_command(hostname, port):
+    """
+    What the client outside the cluster runs to get a local port.
+
+    `cloudflared access tcp` opens the tunnel from the client's side and listens
+    locally, so the application connects to 127.0.0.1 and speaks its ordinary
+    protocol over it. Nothing about the database is exposed to the internet, and
+    nothing about the client has to be known here.
+    """
+    return (f"cloudflared access tcp --hostname {hostname} "
+            f"--url 127.0.0.1:{port}")

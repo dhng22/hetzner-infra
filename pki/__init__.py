@@ -260,3 +260,36 @@ def covers(pem, hostnames):
     present = {str(v) for v in san.get_values_for_type(x509.DNSName)}
     present |= {str(v) for v in san.get_values_for_type(x509.IPAddress)}
     return all(str(name) in present for name in hostnames)
+
+
+def member_names(service, alias=""):
+    """
+    Every name one member's certificate must carry. THE definition, used by both
+    writers.
+
+    A member is dialled by more names than the one it is called:
+
+        <stack>_<kind>-<n>   its Swarm service name, which is what the replica
+                             set config names and what its peers connect to
+        tasks.<...>          the per-task record, for a direct connection
+        <name>-<kind>        the alias every member answers to, which is what
+                             makes the connection string permanent
+        localhost 127.0.0.1  mongod's own health check inside the container —
+                             and, as it happens, a client outside the cluster,
+                             which reaches this member through a tunnel helper
+                             listening on its own loopback. TLS is forwarded
+                             rather than terminated, so the address the client
+                             dialled is the one the member has to prove.
+
+    This list lived in two places, and they knew different things. The panel
+    issued the full one; dataguard renewed with the service name alone. So at
+    thirty days out the alias silently left the certificate, and the symptom was
+    a set that replicated perfectly and stopped answering its own connection
+    string. One function is the fix — and it is what lets dataguard RECONCILE
+    the SAN rather than only its expiry, so a name that was missing is repaired
+    by the loop instead of by remembering to redeploy.
+    """
+    out = [service, f"tasks.{service}"]
+    if alias:
+        out.append(alias)
+    return out + ["localhost", "127.0.0.1"]

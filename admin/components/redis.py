@@ -61,6 +61,21 @@ VIEWER_IMAGE = "redis/redisinsight:2.60"
 SENTINEL_COUNT = 3
 
 
+def _resp(*words):
+    """
+    One Redis command as RESP, hex-encoded, for `tcp-check send-binary`.
+
+    Redis has spoken this since 2.0 and the inline alternative does not survive
+    a password with a space in it, so the array form is the only one that is
+    correct for every password this component will accept.
+    """
+    out = b"*%d\r\n" % len(words)
+    for word in words:
+        raw = word.encode()
+        out += b"$%d\r\n%s\r\n" % (len(raw), raw)
+    return out.hex()
+
+
 class RedisComponent(Component):
     TYPE = "redis"
     LABEL = "Redis"
@@ -112,12 +127,18 @@ class RedisComponent(Component):
                        "resync without a full transfer. Turn it off for a pure "
                        "cache — and note that with it off there is nothing to back "
                        "up, so the backup fields below stop meaning anything."),
-            Field("external_port", "Published port", "port", None,
-                  minimum=1024, maximum=65535,
-                  help="Optional. Publishes the primary's replica on the master at "
-                       "this port for an external client. The firewall still denies "
-                       "it until you open it on this page, and it reaches ONE "
-                       "server rather than following a failover."),
+            Field("external_hostname", "Tunnel hostname", "text", "",
+                  placeholder="cache.example.com",
+                  help="Optional, and it is what makes this database reachable "
+                       "from OUTSIDE the cluster. Add the hostname to your "
+                       "Cloudflare tunnel — the Credentials tab gives you the "
+                       "target to paste — and put an Access policy in front of "
+                       "it, because a hostname on the tunnel is reachable by "
+                       "anyone who knows it. Nothing is published on a host port "
+                       "and no firewall is opened: your client runs "
+                       "`cloudflared access tcp`, which gives it a local port. "
+                       "Leave it empty and this database is reachable only from "
+                       "inside the cluster."),
             Field("cpu_reservation", "CPU reserved", "cpu", 0.2, required=True,
                   minimum=0.01, maximum=32),
             Field("memory_reservation_mb", "Memory reserved (MB)", "memory", 640,
@@ -221,6 +242,10 @@ class RedisComponent(Component):
         """
         return base.MEMBER_SLOTS
 
+    def member_indexes(self):
+        """Every slot this component renders. One when nothing manages it."""
+        return range(1, (self.slots if self.managed else 1) + 1)
+
     @property
     def managed(self):
         return bool(self.spec.get("dataguard"))
@@ -263,6 +288,8 @@ class RedisComponent(Component):
                       for i in range(1, SENTINEL_COUNT + 1)]
         else:
             names = [self.member_service(1)]
+        if self.external_hostname():
+            names.append(f"{self.stack}_gateway")
         if self.spec.get("exporter"):
             names.append(f"{self.stack}_redis-exporter")
         if self.spec.get("visualizer"):
@@ -277,13 +304,23 @@ class RedisComponent(Component):
 
     def connection_url(self, host=None, port=None):
         """
-        The sentinel URL, written once.
+        The sentinel URL, written once — or the external one, when given a host.
 
         `redis+sentinel://` is what redis-py takes directly. Everything else in
         the Credentials tab is the same three facts spelled out — sentinel hosts,
         master name, password — because ioredis and Lettuce want them as fields
         rather than as a URL, and handing somebody only the scheme their client
         cannot parse is not help.
+
+        THE EXTERNAL FORM IS A PLAIN `redis://` AND THAT IS DELIBERATE, not the
+        gap it looks like. A sentinel URL cannot work from outside: sentinel
+        answers "the primary is `cache_redis-2`", which is Swarm service DNS and
+        resolves on the overlay network only, so a client that spoke the
+        protocol perfectly would be sent to an address it cannot reach. The
+        gateway asks that question from inside the cluster instead and forwards
+        to the answer — so this one address is always the current primary, a
+        failover changes nothing about it, and the client needs no sentinel
+        support at all. See `_gateway`.
         """
         if host:
             return (f"redis://default:{quote(self.password(), safe='')}@"
@@ -296,8 +333,11 @@ class RedisComponent(Component):
         hosts = ",".join(self.sentinel_hosts())
         return f"redis+sentinel://default:{secret}@{hosts}/{self.stack}/0"
 
-    def credentials(self, master_ip=""):
-        port = self.spec.get("external_port")
+    def external_hostname(self):
+        return base.clean_hostname(self.spec.get("external_hostname"))
+
+    def credentials(self):
+        hostname = self.external_hostname()
         return {
             "password": self.password(),
             # Derived from the SAME list the URL is built from, so the two can
@@ -309,9 +349,19 @@ class RedisComponent(Component):
                                        for h in self.sentinel_hosts()),
             "internal_port": "26379",
             "internal_url": self.connection_url(),
-            "external_port": port,
-            "external_host": master_ip,
-            "external_url": self.connection_url(master_ip, port) if port else "",
+            "external_hostname": hostname,
+            # What to paste into the Cloudflare dashboard, and what to run
+            # beside your application. The panel owes you both exactly, the same
+            # way it owes an app its tunnel target — routing is not automated
+            # here on purpose.
+            "external_target": f"tcp://{self.stack}_gateway:6379",
+            "external_command": base.access_command(hostname, 6379) if hostname else "",
+            "external_url": self.connection_url("127.0.0.1", 6379) if hostname else "",
+            "external_notes": self._external_notes(),
+            # Only to offer closing it: this database used to be published on a
+            # host port, that rule is still in the master's firewall, and now
+            # nothing is listening behind it.
+            "legacy_port": self.spec.get("external_port"),
             "sentinels": self.sentinel_hosts(),
             "master_name": self.stack,
             "notes": [
@@ -335,10 +385,48 @@ class RedisComponent(Component):
             ],
         }
 
+    def _external_notes(self):
+        return [
+            "IT GOES THROUGH THE TUNNEL, so nothing is published on a host port "
+            "and no firewall rule exists to get wrong. The connector dials OUT "
+            "to Cloudflare — there is no address on this side for anyone to "
+            "scan, and losing a machine loses one connector rather than the way "
+            "in, which is why your applications already survive that.",
+            "PUT A CLOUDFLARE ACCESS POLICY IN FRONT OF THAT HOSTNAME. This is "
+            "the door, and it is the one thing here that is yours to close: a "
+            "hostname routed to the tunnel is reachable by anyone who knows it, "
+            "with only this password in the way. A service token is the form "
+            "that suits a machine.",
+            "YOUR CLIENT CONNECTS TO 127.0.0.1, not to the hostname. "
+            "`cloudflared access tcp` holds the tunnel open and listens locally, "
+            "so the URL above is a local address and the hostname appears only "
+            "in the command beside it. Run it next to your application — a "
+            "sidecar container, or a service on the box.",
+            "WHATEVER IT REACHES, IT IS THE PRIMARY. A proxy inside the cluster "
+            "asks every server which one is in charge and forwards to that one, "
+            "so a failover changes nothing you configured and your client needs "
+            "no sentinel support at all — which is just as well, because "
+            "sentinel would answer with names that only resolve in here.",
+            "REDIS SPEAKS NO TLS HERE, but the tunnel does: the hop across the "
+            "internet is encrypted by Cloudflare. What is in the clear is the "
+            "short hop inside this cluster, and the one on your own machine "
+            "between your app and the helper.",
+            "EXPECT A FEW MILLISECONDS MORE PER ROUND TRIP than a direct "
+            "connection — the traffic goes out to Cloudflare and back. Chatty "
+            "code feels this; pooled connections and pipelining hide most of it.",
+        ]
+
     # --- validation ---------------------------------------------------------
 
     def validate(self):
         problems = super().validate()
+        hostname = self.spec.get("external_hostname")
+        if hostname and not self.external_hostname():
+            problems.append(
+                f"{hostname!r} is not a tunnel hostname. It is the DNS name you "
+                "added to your Cloudflare tunnel — `db.example.com` — not an "
+                "address and not a port. Left as it is, this database would "
+                "quietly stay reachable from inside the cluster only.")
         maxmem = self.spec.get("maxmemory_mb") or 0
         reserved = self.spec.get("memory_reservation_mb") or 0
         if maxmem and reserved and maxmem >= reserved:
@@ -544,14 +632,61 @@ class RedisComponent(Component):
                 "resources": self.resources(),
             },
         }
-        if index == 1 and self.spec.get("external_port"):
-            service["ports"] = [{
-                "target": 6379,
-                "published": int(self.spec["external_port"]),
-                "protocol": "tcp",
-                "mode": "host",
-            }]
+        # NO `ports` HERE, and that is the fix rather than an omission. Member 1
+        # is the copy on the master: it is a SECONDARY as soon as the set has
+        # grown, and `plan.next_action` removes it outright once the set no
+        # longer needs the master — so a port published on it reached a
+        # read-only server and then nothing at all. The published port belongs
+        # to the gateway, which is not a member and never moves.
         return service
+
+    def _gateway(self):
+        """
+        The external endpoint: one address that is always the current primary.
+
+        `INFO replication` is the whole trick. Every member is a backend and
+        every member is asked the same question; only the one that answers
+        `role:master` passes, so it is the only one traffic goes to. A failover
+        is two checks changing their minds a second apart, and
+        `on-marked-down shutdown-sessions` closes the connections that were
+        pinned to the old primary so the client reconnects into the new one
+        instead of sitting on a server that now refuses writes.
+
+        This is what a client outside the cluster gets INSTEAD of sentinel, and
+        it is not a downgrade — it is the only thing that can work. Sentinel
+        answers "the primary is `cache_redis-2`", a name that exists on the
+        overlay network and nowhere else, so an external client that spoke
+        sentinel perfectly would be told to connect to an address it cannot
+        resolve. The proxy asks the question from inside, where the answer means
+        something.
+
+        The AUTH is sent as RESP hex rather than as text. `tcp-check send` would
+        need the password escaped for HAProxy's parser, and it would need it
+        escaped again for the shell that writes this file, and a `$` in it would
+        be eaten by compose before either of them saw it. Hex has none of those
+        characters in it at all.
+        """
+        return base.gateway_service(
+            name="redis",
+            port=6379,
+            # Every slot the render emits, which for an unmanaged component is
+            # the one unsuffixed server: `member_key` collapses to `redis` there,
+            # so looping over eight slots would declare the same backend eight
+            # times and HAProxy refuses a duplicate server name outright.
+            backends=[(self.member_key(i), f"{self.member_service(i)}:6379")
+                      for i in self.member_indexes()],
+            check=[
+                f"tcp-check send-binary {_resp('AUTH', 'default', self.password())}",
+                "tcp-check expect string +OK",
+                f"tcp-check send-binary {_resp('INFO', 'replication')}",
+                # A replica answers `role:slave`, and no field in the section
+                # contains this string but the one we want.
+                "tcp-check expect string role:master",
+                f"tcp-check send-binary {_resp('QUIT')}",
+                "tcp-check expect string +OK",
+            ],
+            labels=self.base_labels(),
+            logging=self.loki_logging())
 
     def _sentinel(self, index):
         return {
@@ -604,7 +739,7 @@ class RedisComponent(Component):
         s = self.spec
         self.ensure_password()
 
-        members = range(1, self.slots + 1) if self.managed else range(1, 2)
+        members = self.member_indexes()
         services = {self.member_key(i): self._member(i) for i in members}
         volumes = {f"{self.name}-{i}-data": {} for i in members}
         if self.managed:
@@ -612,6 +747,9 @@ class RedisComponent(Component):
                 services[f"sentinel-{i}"] = self._sentinel(i)
                 volumes[f"{self.name}-sentinel-{i}"] = {}
         networks = [base.EDGE_NETWORK]
+
+        if self.external_hostname():
+            services["gateway"] = self._gateway()
 
         if s.get("exporter"):
             networks.append(base.MONITORING_NETWORK)

@@ -371,10 +371,20 @@ class ComponentTest(ComponentCase):
         self.assertNotIn("redis-exporter", without["services"])
         self.assertEqual(without["services"]["redis-1"]["networks"], ["edge"])
 
-    def test_redis_published_port_is_host_mode(self):
-        rendered = self.make_redis(external_port=46379).render()
-        self.assertEqual(rendered["services"]["redis-1"]["ports"], [{
-            "target": 6379, "published": 46379, "protocol": "tcp", "mode": "host"}])
+    def test_nothing_is_published_on_a_host_port_any_more(self):
+        """
+        Not by a member, and not by the gateway either.
+
+        Member 1 is the copy on the master: a secondary once the set has grown,
+        gone entirely once dataguard no longer needs the master, and pinned to
+        the one machine this cluster cannot lose. A host port there reached a
+        server that refused writes, then reached nothing, and died with the
+        master besides. The tunnel replaces all three: the connector dials out,
+        so there is no address on this side and no firewall rule to open.
+        """
+        rendered = self.make_redis(external_hostname="cache.example.com").render()
+        for service in rendered["services"].values():
+            self.assertNotIn("ports", service)
 
     # --- managed databases --------------------------------------------------
 
@@ -1043,3 +1053,305 @@ class MemberSlotTest(ComponentCase):
         self.assertEqual([k for k in services if k.startswith("sentinel")], [])
         self.assertNotIn("redis-2", services)
         self.assertNotIn("cache-redis", redis.connection_url())
+
+
+class ExternalEndpointTest(ComponentCase):
+    """
+    How a client OUTSIDE the cluster reaches a database, and why it is two
+    pieces rather than one.
+
+    The design this replaces published a host port on member 1, and every word
+    of that was a problem:
+
+      * it was advertised on the master's PRIVATE address, which no client
+        outside the cluster has ever been able to reach;
+      * a Redis client got a plain URL to one server with no way to follow a
+        failover, while the sentinel URL beside it cannot work from outside at
+        all — sentinel answers with names that resolve only on the overlay;
+      * a Mongo client got `replicaSet=`, which makes the driver discover the
+        set and connect to those same overlay names, so the string worked while
+        the set was one member and stopped the day it became two;
+      * the port lived on member 1, which dataguard demotes and then removes;
+      * and member 1 is pinned to the master, so the whole external path died
+        with the one machine this cluster cannot replace.
+
+    WHICH COPY is answered by a proxy that asks every member who is in charge.
+    WHICH MACHINE is answered by the tunnel, which is how every application here
+    already survives losing a node.
+    """
+
+    def gateway_conf(self, component):
+        """The HAProxy configuration as it will reach the container."""
+        return component.render()["services"]["gateway"]["command"][2]
+
+    def published_redis(self, name="c1", **spec):
+        return self.make_redis(name, external_hostname="cache.example.com", **spec)
+
+    def published_mongo(self, name="d1", **spec):
+        return self.make_mongo(name, external_hostname="docs.example.com", **spec)
+
+    # --- it exists only when asked for --------------------------------------
+
+    def test_no_hostname_means_no_gateway(self):
+        for component in (self.make_redis("c1"), self.make_mongo("d1")):
+            rendered = component.render()
+            self.assertNotIn("gateway", rendered["services"], component.TYPE)
+            self.assertNotIn(f"{component.stack}_gateway", component.services())
+
+    def test_the_gateway_is_global_and_unpinned(self):
+        """
+        THE FIX FOR THE ONE THAT MATTERED. It was a single replica pinned to the
+        manager, so the external path died with the master — while the
+        applications inside the cluster carried on, because their address is
+        peer discovery and needs no master at all.
+
+        Global with no constraint is what the tunnel connector does, one per
+        node, for exactly this reason.
+        """
+        for component in (self.published_redis(), self.published_mongo()):
+            deploy = component.render()["services"]["gateway"]["deploy"]
+            self.assertEqual(deploy["mode"], "global", component.TYPE)
+            self.assertNotIn("placement", deploy, component.TYPE)
+            self.assertNotIn("replicas", deploy, component.TYPE)
+            self.assertIn(f"{component.stack}_gateway", component.services())
+
+    def test_the_gateway_is_on_the_edge_network_and_opens_no_port(self):
+        """
+        The connector reaches it by service DNS on `edge`, from inside. That is
+        what makes the firewall irrelevant rather than merely closed.
+        """
+        for component in (self.published_redis(), self.published_mongo()):
+            service = component.render()["services"]["gateway"]
+            self.assertEqual(service["networks"], ["edge"], component.TYPE)
+            self.assertNotIn("ports", service, component.TYPE)
+
+    def test_the_gateway_carries_no_manager_label(self):
+        """
+        It is not a member and nothing may treat it as one. Dataguard discovers
+        by `dataguard.role`, so a gateway carrying one would be counted into the
+        set — the exact collision the sentinels caused.
+        """
+        for component in (self.published_redis(), self.published_mongo()):
+            labels = component.render()["services"]["gateway"]["deploy"]["labels"]
+            self.assertEqual(set(labels), {"infra.component", "infra.type"},
+                             component.TYPE)
+
+    # --- what it forwards to ------------------------------------------------
+
+    def test_every_member_slot_is_a_backend(self):
+        """
+        Including the ones that do not exist yet. A slot at `replicas: 0` is a
+        name that does not resolve, which `init-addr none` turns into a server
+        that is simply down until dataguard starts it — so growth needs no
+        reconfiguration, exactly as it needs none inside the cluster.
+        """
+        conf = self.gateway_conf(self.published_mongo("docs"))
+        for index in range(1, self.components.base.MEMBER_SLOTS + 1):
+            self.assertIn(f"server mongo-{index} docs_mongo-{index}:27017", conf)
+        self.assertIn("init-addr none", conf)
+        self.assertIn("resolvers swarm", conf)
+
+    def test_an_unmanaged_redis_declares_its_one_server_once(self):
+        """
+        `member_key` collapses to the bare type when nothing manages the
+        component, so looping over eight slots would declare the same backend
+        eight times — and HAProxy refuses a duplicate server name outright,
+        which is a database that will not start rather than one that misbehaves.
+        """
+        conf = self.gateway_conf(self.published_redis(dataguard=False))
+        self.assertEqual(conf.count("\n    server "), 1)
+        self.assertIn("server redis c1_redis:6379", conf)
+
+    def test_a_demoted_primary_has_its_connections_closed(self):
+        """
+        Otherwise a client stays pinned to a server that has just become a
+        secondary and refuses its writes, for as long as the connection lives.
+        """
+        for component in (self.published_redis(), self.published_mongo()):
+            self.assertIn("on-marked-down shutdown-sessions",
+                          self.gateway_conf(component), component.TYPE)
+
+    def test_the_configuration_carries_no_compose_variable(self):
+        """
+        It is written into the service's command, and `docker stack deploy`
+        interpolates `${...}` on the way past. A `$` in here would be eaten
+        before docker ever read the file — which is also why the Redis password
+        is sent as hex rather than as text.
+        """
+        for component in (self.published_redis(), self.published_mongo()):
+            self.assertNotIn("$", self.gateway_conf(component), component.TYPE)
+
+    # --- how each engine is asked "are you the primary" ---------------------
+
+    def test_redis_is_asked_for_its_replication_role(self):
+        redis = self.published_redis()
+        conf = self.gateway_conf(redis)
+        self.assertIn("tcp-check expect string role:master", conf)
+        password = redis.password()
+        auth = self.components.redis._resp("AUTH", "default", password)
+        self.assertIn(f"tcp-check send-binary {auth}", conf)
+        # Hex of the RESP array form, which is the one that survives a password
+        # with a space in it — and the one compose cannot interpolate away.
+        self.assertEqual(
+            bytes.fromhex(auth),
+            f"*3\r\n$4\r\nAUTH\r\n$7\r\ndefault\r\n"
+            f"${len(password)}\r\n{password}\r\n".encode())
+
+    def test_mongo_is_asked_with_the_one_message_every_version_answers(self):
+        """
+        OP_QUERY is removed from MongoDB for everything except the handshake,
+        which is what makes it the message a health check can rely on — and it
+        needs no authentication, so the proxy holds no credential at all.
+        """
+        import struct
+        mongo = self.components.mongo
+        raw = bytes.fromhex(mongo._ISMASTER_QUERY)
+        length, _request, response_to, opcode = struct.unpack("<iiii", raw[:16])
+        self.assertEqual(length, len(raw), "the header must state its own length")
+        self.assertEqual(opcode, 2004, "OP_QUERY")
+        self.assertEqual(response_to, 0)
+        self.assertIn(b"admin.$cmd\x00", raw)
+        self.assertIn(b"isMaster", raw)
+        # `\x08ismaster\x00\x01` — the BSON boolean that means "primary". A
+        # secondary sends the same element ending \x00 and does not match.
+        self.assertEqual(bytes.fromhex(mongo._ISMASTER_TRUE),
+                         b"\x08ismaster\x00\x01")
+        self.assertIn(f"tcp-check expect binary {mongo._ISMASTER_TRUE}",
+                      self.gateway_conf(self.published_mongo()))
+
+    def test_mongo_health_checks_speak_tls_but_the_traffic_is_not_terminated(self):
+        """
+        `check-ssl` gives the check its own TLS connection; the data path is
+        plain `mode tcp`, so the client's session ends at the member holding the
+        data and neither this proxy nor the tunnel sees a query.
+        """
+        conf = self.gateway_conf(self.published_mongo())
+        self.assertIn("check-ssl", conf)
+        self.assertIn("mode tcp", conf)
+        self.assertNotIn("bind :27017 ssl", conf)
+        self.assertNotIn("secrets",
+                         self.published_mongo("d2").render()["services"]["gateway"])
+
+    # --- what the page hands you --------------------------------------------
+
+    def test_the_page_gives_the_tunnel_target_the_command_and_the_url(self):
+        """
+        Three things, and the third one surprises people: the application does
+        NOT connect to the hostname. The helper holds the tunnel open and
+        listens locally, so the hostname belongs to the command and the driver
+        gets a loopback address.
+        """
+        creds = self.published_mongo("docs").credentials()
+        self.assertEqual(creds["external_hostname"], "docs.example.com")
+        self.assertEqual(creds["external_target"], "tcp://docs_gateway:27017")
+        self.assertIn("--hostname docs.example.com", creds["external_command"])
+        self.assertIn("--url 127.0.0.1:27017", creds["external_command"])
+        self.assertIn("@127.0.0.1:27017/", creds["external_url"])
+        self.assertNotIn("docs.example.com", creds["external_url"])
+
+    def test_the_mongo_external_url_does_not_ask_the_driver_to_discover(self):
+        """
+        `replicaSet=` was in this string and is the bug: the driver asks the
+        seed who the members are, throws the seed away, and is answered with
+        overlay names. `directConnection=true` is what stops that.
+        """
+        url = self.published_mongo("docs").credentials()["external_url"]
+        self.assertIn("directConnection=true", url)
+        self.assertNotIn("replicaSet", url)
+        # No path into a container the client will never run in, and no read
+        # preference for a secondary it has no address for.
+        self.assertNotIn("tlsCAFile", url)
+        self.assertNotIn("readPreference", url)
+        # ...and TLS and the write concern are still there, because those are
+        # the same guarantees an application inside the cluster gets.
+        self.assertIn("tls=true", url)
+        self.assertIn("w=majority", url)
+
+    def test_the_internal_mongo_url_still_discovers(self):
+        """The change above must not have leaked into the in-cluster string."""
+        url = self.published_mongo("docs").connection_url()
+        self.assertIn("replicaSet=docs", url)
+        self.assertNotIn("directConnection", url)
+        self.assertIn("tlsCAFile", url)
+
+    def test_the_redis_external_url_needs_no_sentinel_support(self):
+        redis = self.published_redis("cache", dataguard=True)
+        creds = redis.credentials()
+        self.assertEqual(creds["external_url"],
+                         f"redis://default:{redis.password()}@127.0.0.1:6379")
+        self.assertTrue(creds["internal_url"].startswith("redis+sentinel://"))
+
+    def test_no_hostname_means_no_url_rather_than_a_wrong_one(self):
+        """
+        The failure this whole change starts from: the panel printed a
+        confident, copyable URL naming 10.0.0.2. An address nothing outside can
+        reach is worse than a blank, because it sends somebody debugging their
+        own firewall.
+        """
+        for component in (self.make_redis("c1"), self.make_mongo("d1")):
+            creds = component.credentials()
+            self.assertEqual(creds["external_url"], "", component.TYPE)
+            self.assertEqual(creds["external_command"], "", component.TYPE)
+            self.assertEqual(creds["external_hostname"], "", component.TYPE)
+
+    def test_the_hostname_is_a_bare_host_or_nothing(self):
+        """
+        It is copied out of a dashboard, so it arrives with a scheme on the
+        front and a path on the end about as often as it arrives clean.
+        """
+        base = self.components.base
+        for given, wanted in (
+                ("docs.example.com", "docs.example.com"),
+                ("  DOCS.example.com  ", "docs.example.com"),
+                ("https://docs.example.com/", "docs.example.com"),
+                ("docs.example.com:27017", "docs.example.com"),
+                # Not a hostname: a bare label has no zone, and an address is
+                # what the old design asked for and this one never wants.
+                ("localhost", ""),
+                ("203.0.113.10", ""),
+                ("not a host", ""),
+                ("", "")):
+            self.assertEqual(base.clean_hostname(given), wanted, given)
+
+    # --- the certificate that makes the mongo URL usable --------------------
+
+    def test_the_members_already_prove_the_address_the_client_dials(self):
+        """
+        The client dials 127.0.0.1, because the tunnel helper listens there, and
+        every member certificate already carries it for mongod's own health
+        check. So publishing a database needs no certificate work at all — which
+        is the version of this that does not have a migration in it.
+        """
+        import pki
+        mongo = self.published_mongo("docs")
+        mongo.render()
+        with open(self.components.store.path_for("docs", "tls/member-3.pem"),
+                  "rb") as fh:
+            pem = fh.read()
+        self.assertTrue(pki.covers(pem, ["127.0.0.1", "localhost", "docs-mongo",
+                                         "docs_mongo-3"]))
+
+    def test_the_hostname_never_reaches_a_certificate(self):
+        """
+        It is the tunnel's name, not the database's. Putting it in the SAN would
+        tie the certificates to where the client happens to be, which is the
+        thing that had a migration attached to it.
+        """
+        import pki
+        mongo = self.published_mongo("docs")
+        mongo.render()
+        with open(self.components.store.path_for("docs", "tls/member-1.pem"),
+                  "rb") as fh:
+            self.assertFalse(pki.covers(fh.read(), ["docs.example.com"]))
+
+    def test_a_hostname_that_does_not_parse_is_refused_rather_than_ignored(self):
+        """
+        Silently blanking it would mean typing a hostname, pressing save, and
+        watching nothing happen — with the External panel still saying
+        "in-cluster only" and no reason given anywhere.
+        """
+        for index, type_name in enumerate(("redis", "mongo")):
+            _component, problems = self.components.create(
+                type_name, f"x{index}", {"external_hostname": "203.0.113.10"})
+            self.assertTrue(any("not a tunnel hostname" in p for p in problems),
+                            f"{type_name}: {problems}")

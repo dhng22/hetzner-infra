@@ -1086,3 +1086,11 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
 .log-filter-regex { flex: 0 0 auto; white-space: nowrap; }
 .log-filter .hint { margin-top: 6px; }
 .hint.is-bad { color: var(--bad); }
+
+/* Credential notes and the CA certificate, on the External panel. The notes are
+   the only place the difference between the internal and the external path is
+   written down for the person about to paste one of them into an application. */
+.hint.notes { margin: 0; padding-left: 1.1em; display: flex; flex-direction: column; gap: var(--s-2); }
+.hint.notes li { list-style: disc; }
+details.ca > summary { cursor: pointer; font-size: var(--t-sm); color: var(--text-mute); }
+details.ca .conn pre { margin: 0; overflow-x: auto; font-size: 11px; line-height: 1.45; max-height: 220px; }

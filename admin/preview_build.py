@@ -57,11 +57,16 @@ SEED = [
     # A managed Redis and a managed Mongo, both with a visualiser, so the
     # preview exercises the Observability group, the Dataguard group and the
     # View button rather than only the plain-configuration half.
-    ("redis", "cache", {"maxmemory_mb": 512, "external_port": 46379,
+    ("redis", "cache", {"maxmemory_mb": 512,
+                        "external_hostname": "cache.acme.dev",
                         "dataguard": "true", "visualizer": "true",
                         "backup_target": "s3-main"}),
+    # Both databases publish a port, so the preview exercises the External
+    # panel on both — the gateway URL, the CA certificate a client outside the
+    # cluster needs, and the firewall button beside them.
     ("mongo", "documents", {"cache_mb": 256, "memory_reservation_mb": 768,
                             "username": "root", "dataguard": "true",
+                            "external_hostname": "docs.acme.dev",
                             "visualizer": "true", "secondary_reads": "true",
                             "backup_target": "s3-main"}),
 ]
@@ -148,7 +153,7 @@ def detail_contexts():
         # The preview used to branch on `TYPE == "redis"` here, which is exactly
         # the drift a second database type turns into a blank tab.
         if type(component).SECRETS:
-            context["creds"] = component.credentials(fixtures.master_ip())
+            context["creds"] = component.credentials()
             context["firewall"] = panel._firewall_state(component)
         out.append(context)
     return out

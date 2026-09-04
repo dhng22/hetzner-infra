@@ -672,8 +672,15 @@ class PanelTest(unittest.TestCase):
         """
         import settings_def
 
+        # POLICY only. `Identity` and `External` describe THIS cluster — its
+        # name, its domain, the address the outside reaches it on — and a
+        # preview showing a plausible one is the same honest fiction as
+        # `acme.dev`. Everything else is a decision this project has made, and a
+        # fixture contradicting one of those is the lie this test is for.
+        about_the_cluster = {key for title, keys in settings_def.GROUPS
+                             if title in ("Identity", "External") for key in keys}
         for key, value in self.panel.PREVIEW_INFRA.items():
-            if key in settings_def.DEFAULTS:
+            if key in settings_def.DEFAULTS and key not in about_the_cluster:
                 self.assertEqual(
                     value, settings_def.DEFAULTS[key],
                     f"the preview shows {key}={value!r} but the default is "
@@ -1270,7 +1277,7 @@ class PanelTest(unittest.TestCase):
         _, _, page = self._save_settings(
             {"key": ["INFRA_REPO_URL"], "value__INFRA_REPO_URL": "https://a/b.git"},
             {"INFRA_REPO_URL": "https://old/b.git"},
-            host=(False, "refused: the admin panel may only run: ufw-allow <port>"))
+            host=(False, "refused: the admin panel may only run: ufw-deny <port>"))
         self.assertIn("predates the check", page)
         self.assertNotIn("FAILED", page)
         self.assertNotIn("banner bad", page)

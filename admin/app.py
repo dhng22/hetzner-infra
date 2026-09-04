@@ -756,7 +756,7 @@ def component_detail(name):
     # Any type that declares credentials gets the tab, and a type that does not
     # gets nothing. No branch here names a database.
     if tab == "credentials" and type(component).secrets_for("credentials"):
-        extra["creds"] = component.credentials(data.master_ip())
+        extra["creds"] = component.credentials()
         extra["firewall"] = _firewall_state(component)
     # `pbm list` shells into a container, so it runs only when the tab is open.
     # Any type that can list snapshots gets the tab; no branch here names one.
@@ -811,7 +811,14 @@ def _newest_deploy(name, view=None):
 
 
 def _firewall_state(component):
-    """Whether the master's firewall currently lets the published port through."""
+    """
+    Whether a port this component USED to be published on is still open.
+
+    Only that. Databases are reached through the tunnel now — nothing is
+    published on a host interface and no rule is opened for one — so this is
+    here to close the door the old way left standing, on a cluster that was
+    running before the change. A component that never had one reports nothing.
+    """
     port = component.spec.get("external_port")
     return {
         "available": True if PREVIEW else hostops.available(),
@@ -1015,18 +1022,21 @@ def save_credentials(name):
 @app.post("/components/<name>/firewall")
 @auth.login_required
 def firewall(name):
-    """Open or close a port on the master, over the restricted SSH channel."""
+    """
+    Close a port on the master, over the restricted SSH channel.
+
+    CLOSE ONLY. Opening one was the other half of this until databases moved
+    behind the tunnel, and there is nothing left to open: the connector dials
+    out, so no database is reachable through a host interface at all. What
+    remains is the rule an older cluster opened for a published port, still
+    standing in front of nothing.
+    """
     _require_csrf()
     _no_writes_in_preview()
     _load(name)
-    port = request.form.get("port", "").strip()
-    action = request.form.get("firewall_action", "")
-    if action == "open":
-        ok, output = hostops.open_port(port)
-    elif action == "close":
-        ok, output = hostops.close_port(port)
-    else:
+    if request.form.get("firewall_action") != "close":
         abort(400, "Unknown action.")
+    ok, output = hostops.close_port(request.form.get("port", "").strip())
     flash(output, "ok" if ok else "bad")
     return redirect(_component_href(name, "credentials"))
 

@@ -26,7 +26,7 @@ log() { logger -t panel-hostops -- "$*" 2>/dev/null || true; echo "$*"; }
 
 deny() {
   log "REFUSED: ${SSH_ORIGINAL_COMMAND:-<empty>}"
-  echo "refused: the admin panel may only run: ufw-allow <port>, ufw-deny <port>, ufw-status, repo-check" >&2
+  echo "refused: the admin panel may only run: ufw-deny <port>, ufw-status, repo-check" >&2
   exit 2
 }
 
@@ -42,11 +42,14 @@ valid_port() {
 }
 
 case "$verb" in
-  ufw-allow)
-    valid_port "$arg" || deny
-    log "ufw allow ${arg}/tcp"
-    ufw allow "${arg}/tcp"
-    ;;
+  # NO `ufw-allow`, and it was removed rather than never added. Databases are
+  # reached through the Cloudflare tunnel now — the connector dials out, nothing
+  # is published on a host interface — so there is no longer anything the panel
+  # needs a hole in this firewall for. Closing stays, for the rule an older
+  # cluster opened for a published database port; that port now has nothing
+  # behind it, and an open port with nothing behind it is what nobody finds
+  # again. Do not put this back without a reason as good as the one that took
+  # it out.
   ufw-deny)
     valid_port "$arg" || deny
     log "ufw delete allow ${arg}/tcp"

@@ -125,6 +125,60 @@ Setting your own matters when you are moving an existing database whose clients
 already know it. Rotating is safe for the same reason nothing is injected:
 nothing else in the cluster holds a copy to go stale.
 
+### Reaching a database from outside the cluster
+
+Set a **Tunnel hostname** on the component. Nothing is published on a host port
+and no firewall rule is opened — it goes through the same Cloudflare tunnel your
+applications already use, which is why it survives losing a node the same way
+they do.
+
+Three things, and the Credentials tab gives you all of them:
+
+1. Add that hostname to your tunnel, pointed at `tcp://<name>_gateway:27017` —
+   the same "here is the local target to paste" the panel gives an app. **Put a
+   Cloudflare Access policy on it**; a service token suits a machine. That
+   policy is the door, and it is what replaces the firewall.
+2. Run `cloudflared access tcp --hostname <yours> --url 127.0.0.1:27017`
+   alongside your application.
+3. Connect to `127.0.0.1`. The hostname belongs to the helper, not to your
+   driver.
+
+Behind that hostname is a small proxy which asks every member, from inside,
+which one is the primary, and forwards to it. That is why the external string
+carries no discovery of its own — `redis://…` with no sentinels,
+`mongodb://…?directConnection=true` with no `replicaSet`. **A discovery protocol
+cannot cross the cluster boundary**: sentinel answers "the primary is
+`cache_redis-2`" and a replica set answers `docs_mongo-3:27017`, which are Swarm
+service names that resolve on the overlay network and nowhere else. A client
+outside that followed the protocol perfectly would be sent somewhere it cannot
+reach.
+
+So the address survives everything: an election, a member added under read
+pressure, the set moving onto its own machines, the master's copy being dropped
+— and losing a node, because the proxy is global like the connector and the
+tunnel has no address on this side to lose. **You are never asked to update a
+consumer.**
+
+Three things follow:
+
+* **It costs a few milliseconds per round trip.** The traffic goes out to
+  Cloudflare and back. Pooled connections and batching hide most of it; chatty
+  code will feel it.
+* **External reads come from the primary**, whatever Reads-may-go-to-secondaries
+  says. That switch is a contract with the applications INSIDE the cluster,
+  which use the internal string and do discover the set.
+* **At rest there are no workers**, so "global" is one copy, on the master. That
+  is the same guarantee the tunnel connector gives your apps, and it grows the
+  same way — the moment a worker exists, so does a second door.
+
+Mongo's TLS runs end to end: your driver's session ends at the member holding
+the data, so neither the proxy nor the connector nor Cloudflare can read a
+query. Your driver dials `127.0.0.1`, which every member certificate already
+carries, so publishing a database needs no certificate work at all. Download the
+CA from the Credentials tab and add `tlsCAFile=`. Redis speaks no TLS itself, so
+the hop across the internet is encrypted by the tunnel and the short hops at
+each end are not.
+
 ## Hostnames
 
 Routing is configured once, by hand, in the Cloudflare dashboard — the tunnel

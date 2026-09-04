@@ -883,19 +883,42 @@ def tls_dir(component):
 
 def ensure_tls(component):
     """
-    Renew any member certificate that is close to expiring. Never issues a CA.
+    Keep every member certificate correct: not expiring, and naming every host
+    it may be dialled by. Never issues a CA.
 
-    An EXPIRED member certificate does not degrade a replica set, it stops it:
-    members refuse each other, there is no primary, and every write fails. So
-    this starts a month out, does one member per loop — applying a renewal is a
-    restart of that member — and exports the days remaining so the state is
-    alertable rather than merely true.
+    TWO REASONS TO REISSUE, AND THE SECOND ONE IS NOT OPTIONAL.
+
+    Expiry is the obvious one. An EXPIRED member certificate does not degrade a
+    replica set, it stops it: members refuse each other, there is no primary,
+    and every write fails. So that starts a month out.
+
+    The other is the SAN, and it is the one that was missing. A member is dialled
+    by its service name, by the per-task name, and by the alias that makes the
+    connection string permanent — and a certificate that does not carry the name
+    a client dialled fails the handshake, while the set goes on replicating
+    perfectly and every internal check goes on passing. Nothing anywhere says
+    why the database stopped answering its own connection string.
+
+    Reconciling both here is what makes that self-healing. The panel fixes it at
+    deploy time; this is the loop, so it fixes it without anybody being told to
+    go and redeploy. One member per loop either way, because applying a reissue
+    restarts that member.
+
+    `pki.member_names` is the list, shared with the panel. It used to be written
+    out in both places, and the copy here knew only the service name — so at
+    thirty days out a renewal SHORTENED the certificate and broke exactly the
+    names this now repairs.
 
     A component whose authority is missing is REPORTED, not repaired. The panel
     creates it; inventing one here would silently replace the material every
-    member is already using and take the set down.
+    member is already using and take the set down. A component that has no TLS
+    directory at all is not missing anything — Redis holds no certificates — and
+    is passed over in silence rather than told to redeploy something that is
+    working.
     """
     directory = tls_dir(component)
+    if not os.path.isdir(directory):
+        return True
     ca_key = os.path.join(directory, "ca.key")
     if not os.path.exists(ca_key):
         say_once((component.name, "notls"),
@@ -916,22 +939,30 @@ def ensure_tls(component):
         left = pki.days_remaining(existing) if existing else None
         if left is not None:
             G_TLS_DAYS.labels(component=component.name, member=str(index)).set(left)
-        if existing is None or not pki.needs_renewal(existing):
+        if existing is None:
             continue
-        host = f"{component.name}_{component.kind}-{index}"
-        pem = pki.issue_member(key_pem, crt_pem, CLUSTER, component.name,
-                               [host, f"tasks.{host}", "localhost", "127.0.0.1"])
+        hostnames = pki.member_names(
+            f"{component.name}_{component.kind}-{index}",
+            f"{component.name}-{component.kind}")
+        expiring = pki.needs_renewal(existing)
+        incomplete = not pki.covers(existing, hostnames)
+        if not (expiring or incomplete):
+            continue
+        why = "it is close to expiring" if expiring else (
+            "it does not name every host this member is dialled by "
+            f"({', '.join(hostnames)})")
+        pem = pki.issue_member(key_pem, crt_pem, CLUSTER, component.name, hostnames)
         if DRY_RUN:
-            log.info("[dry-run] would renew the certificate for %s member %d",
-                     component.name, index)
+            log.info("[dry-run] would reissue the certificate for %s member %d: %s",
+                     component.name, index, why)
             continue
         _write_local(path, pem)
         name = _ensure_secret(f"{component.name}-tls-{index}", pem)
         _swap_secret(f"{component.name}_{component.kind}-{index}",
                      f"{component.name}-tls-{index}", name, "tls-member.pem")
         G_TLS_DAYS.labels(component=component.name, member=str(index)).set(pki.LEAF_DAYS)
-        log.info("%s: renewed the certificate for member %d and restarted it",
-                 component.name, index)
+        log.info("%s: reissued the certificate for member %d and restarted it — %s",
+                 component.name, index, why)
         # One per loop. Each renewal restarts a member, and restarting two at
         # once in a three-member set is an election with no majority.
         break

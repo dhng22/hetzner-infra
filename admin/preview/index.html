@@ -1126,6 +1126,14 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
 .log-filter-regex { flex: 0 0 auto; white-space: nowrap; }
 .log-filter .hint { margin-top: 6px; }
 .hint.is-bad { color: var(--bad); }
+
+/* Credential notes and the CA certificate, on the External panel. The notes are
+   the only place the difference between the internal and the external path is
+   written down for the person about to paste one of them into an application. */
+.hint.notes { margin: 0; padding-left: 1.1em; display: flex; flex-direction: column; gap: var(--s-2); }
+.hint.notes li { list-style: disc; }
+details.ca > summary { cursor: pointer; font-size: var(--t-sm); color: var(--text-mute); }
+details.ca .conn pre { margin: 0; overflow-x: auto; font-size: 11px; line-height: 1.45; max-height: 220px; }
 </style>
 <script>
 (function () {
@@ -2541,7 +2549,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-04T10:33:36Z" data-localtime>2026-09-04T10:33:36Z</time>
+          <time datetime="2026-09-04T14:14:07Z" data-localtime>2026-09-04T14:14:07Z</time>
           
         </div>
       </div>
@@ -3959,7 +3967,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-04T10:33:36Z" data-localtime>2026-09-04T10:33:36Z</time>
+          <time datetime="2026-09-04T14:14:07Z" data-localtime>2026-09-04T14:14:07Z</time>
           
         </div>
       </div>
@@ -5290,7 +5298,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-04T10:33:36Z" data-localtime>2026-09-04T10:33:36Z</time>
+          <time datetime="2026-09-04T14:14:07Z" data-localtime>2026-09-04T14:14:07Z</time>
           
         </div>
       </div>
@@ -5397,6 +5405,13 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <td class="mono small">redis:7.4-alpine</td>
                 <td class="num">1/1</td>
                 <td><span class="pill ok">healthy</span></td>
+              </tr>
+              
+              <tr>
+                <td class="mono">cache_gateway</td>
+                <td class="mono small">—</td>
+                <td class="num">0/0</td>
+                <td><span class="pill mute">missing</span></td>
               </tr>
               
               <tr>
@@ -5515,9 +5530,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis+sentinel://default:04e3060e629774c8ee5a38586fdb1b0a258709fc16a4724f@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
+              <code>redis+sentinel://default:cf10645b52c9020f1fcea8c6e05035b89d79f1bd1f1ef2af@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis+sentinel://default:04e3060e629774c8ee5a38586fdb1b0a258709fc16a4724f@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
+                      data-copy-text="redis+sentinel://default:cf10645b52c9020f1fcea8c6e05035b89d79f1bd1f1ef2af@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -5528,7 +5543,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="04e3060e629774c8ee5a38586fdb1b0a258709fc16a4724f">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="cf10645b52c9020f1fcea8c6e05035b89d79f1bd1f1ef2af">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -5541,6 +5556,12 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
             this service alone — nothing else in the cluster holds a copy, and nothing
             is written into any application's environment for you.
           </p>
+          
+          
+          <ul class="hint notes">
+            <li>The URL names the SENTINELS, not the server. Your client asks them who the primary is, so a failover changes the answer and never the address you configured.</li><li>A CLIENT THAT CANNOT SPEAK SENTINEL WILL NOT FAIL OVER. redis-py, ioredis, Lettuce and go-redis all can; if yours cannot, use the sentinel host list and master name below with whatever it does support, or accept that this is HA for the data and not for that client.</li><li>ioredis and Lettuce want the parts rather than the URL: sentinels=[&#39;cache_sentinel-1:26379&#39;, &#39;cache_sentinel-2:26379&#39;, &#39;cache_sentinel-3:26379&#39;], name=&#34;cache&#34;, and this password.</li><li>THE SENTINELS THEMSELVES TAKE NO PASSWORD; the one above is the server&#39;s. That is not a gap left open by accident — no client reads a sentinel password out of a sentinel URL, so requiring one would make the string above unusable in every language. Reaching the sentinels means being on this cluster&#39;s private network already.</li>
+          </ul>
+          
         </div>
       </section>
 
@@ -5549,45 +5570,51 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <h2>External</h2>
           <span class="spacer"></span>
           <span class="pill ok plain">
-            published</span>
+            through the tunnel</span>
         </div>
         <div class="panel-body stack">
           
-          <div class="conn">
-            <code>redis://default:04e3060e629774c8ee5a38586fdb1b0a258709fc16a4724f@10.0.0.2:46379</code>
-            <button class="btn btn-sm" type="button" data-copy
-                    data-copy-text="redis://default:04e3060e629774c8ee5a38586fdb1b0a258709fc16a4724f@10.0.0.2:46379">Copy</button>
+          
+          <div>
+            <div class="eyebrow">1 &middot; Point the tunnel at this</div>
+            <div class="conn">
+              <code>tcp://cache_gateway:6379</code>
+              <button class="btn btn-sm" type="button" data-copy
+                      data-copy-text="tcp://cache_gateway:6379">Copy</button>
+            </div>
+            <p class="hint">
+              In the Cloudflare dashboard, add <code>cache.acme.dev</code>
+              to this cluster's tunnel with that target — and put an Access policy on
+              it. A hostname on the tunnel is reachable by anyone who knows it, and
+              this is the only door in front of your data.
+            </p>
           </div>
-          <div class="table-wrap">
-            <table>
-              <tbody>
-                <tr><th>Host</th><td class="mono">10.0.0.2</td></tr>
-                <tr><th>Port</th><td class="mono">46379</td></tr>
-              </tbody>
-            </table>
+          <div>
+            <div class="eyebrow">2 &middot; Run this beside your application</div>
+            <div class="conn">
+              <code>cloudflared access tcp --hostname cache.acme.dev --url 127.0.0.1:6379</code>
+              <button class="btn btn-sm" type="button" data-copy
+                      data-copy-text="cloudflared access tcp --hostname cache.acme.dev --url 127.0.0.1:6379">Copy</button>
+            </div>
+          </div>
+          <div>
+            <div class="eyebrow">3 &middot; Connection URL</div>
+            <div class="conn">
+              <code>redis://default:cf10645b52c9020f1fcea8c6e05035b89d79f1bd1f1ef2af@127.0.0.1:6379</code>
+              <button class="btn btn-sm" type="button" data-copy
+                      data-copy-text="redis://default:cf10645b52c9020f1fcea8c6e05035b89d79f1bd1f1ef2af@127.0.0.1:6379">Copy</button>
+            </div>
           </div>
           
 
           
-          <div class="panel-note">
-            
-              Port 46379 is
-              <strong>open</strong> in ufw.
-              Publishing puts it on the master's interface; the firewall is what
-              decides whether the internet can reach it.
-            
-          </div>
+          <ul class="hint notes">
+            <li>IT GOES THROUGH THE TUNNEL, so nothing is published on a host port and no firewall rule exists to get wrong. The connector dials OUT to Cloudflare — there is no address on this side for anyone to scan, and losing a machine loses one connector rather than the way in, which is why your applications already survive that.</li><li>PUT A CLOUDFLARE ACCESS POLICY IN FRONT OF THAT HOSTNAME. This is the door, and it is the one thing here that is yours to close: a hostname routed to the tunnel is reachable by anyone who knows it, with only this password in the way. A service token is the form that suits a machine.</li><li>YOUR CLIENT CONNECTS TO 127.0.0.1, not to the hostname. `cloudflared access tcp` holds the tunnel open and listens locally, so the URL above is a local address and the hostname appears only in the command beside it. Run it next to your application — a sidecar container, or a service on the box.</li><li>WHATEVER IT REACHES, IT IS THE PRIMARY. A proxy inside the cluster asks every server which one is in charge and forwards to that one, so a failover changes nothing you configured and your client needs no sentinel support at all — which is just as well, because sentinel would answer with names that only resolve in here.</li><li>REDIS SPEAKS NO TLS HERE, but the tunnel does: the hop across the internet is encrypted by Cloudflare. What is in the clear is the short hop inside this cluster, and the one on your own machine between your app and the helper.</li><li>EXPECT A FEW MILLISECONDS MORE PER ROUND TRIP than a direct connection — the traffic goes out to Cloudflare and back. Chatty code feels this; pooled connections and pipelining hide most of it.</li>
+          </ul>
           
-          <form method="post" action="#"
-                data-preview>
-            <input type="hidden" name="csrf" value="preview">
-            <input type="hidden" name="port" value="46379">
-            <input type="hidden" name="firewall_action" value="close">
-            <button class="btn " type="submit">
-              Close the port
-            </button>
-          </form>
+
           
+
           
         </div>
       </section>
@@ -5990,20 +6017,20 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         
         
 <div class="field">
-  <label for="f-external_port">Published port</label>
+  <label for="f-external_hostname">Tunnel hostname</label>
 
   
-    <input id="f-external_port" name="external_port"
-           type="number"
-           
-           min="1024"
-           max="65535"
+    <input id="f-external_hostname" name="external_hostname"
+           type="text"
            
            
-           value="46379">
+           
+           
+           placeholder="cache.example.com"
+           value="cache.acme.dev">
   
 
-  <p class="hint">Optional. Publishes the primary&#39;s replica on the master at this port for an external client. The firewall still denies it until you open it on this page, and it reaches ONE server rather than following a failover.</p>
+  <p class="hint">Optional, and it is what makes this database reachable from OUTSIDE the cluster. Add the hostname to your Cloudflare tunnel — the Credentials tab gives you the target to paste — and put an Access policy in front of it, because a hostname on the tunnel is reachable by anyone who knows it. Nothing is published on a host port and no firewall is opened: your client runs `cloudflared access tcp`, which gives it a local port. Leave it empty and this database is reachable only from inside the cluster.</p>
 </div>
       
         
@@ -6443,7 +6470,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-04T10:33:36Z" data-localtime>2026-09-04T10:33:36Z</time>
+          <time datetime="2026-09-04T14:14:07Z" data-localtime>2026-09-04T14:14:07Z</time>
           
         </div>
       </div>
@@ -6526,6 +6553,13 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
               
               <tr>
                 <td class="mono">documents_mongo-8</td>
+                <td class="mono small">—</td>
+                <td class="num">0/0</td>
+                <td><span class="pill mute">missing</span></td>
+              </tr>
+              
+              <tr>
+                <td class="mono">documents_gateway</td>
                 <td class="mono small">—</td>
                 <td class="num">0/0</td>
                 <td><span class="pill mute">missing</span></td>
@@ -6656,9 +6690,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>mongodb://root:641dae949a56ca372cfd6733eeee60dece833acd4e8b37b3@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
+              <code>mongodb://root:0c2de9e9ae39ebf9b7fabcc833f43b0408d50bf238c8356b@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:641dae949a56ca372cfd6733eeee60dece833acd4e8b37b3@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
+                      data-copy-text="mongodb://root:0c2de9e9ae39ebf9b7fabcc833f43b0408d50bf238c8356b@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -6669,7 +6703,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="641dae949a56ca372cfd6733eeee60dece833acd4e8b37b3">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="0c2de9e9ae39ebf9b7fabcc833f43b0408d50bf238c8356b">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -6682,6 +6716,18 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
             this service alone — nothing else in the cluster holds a copy, and nothing
             is written into any application's environment for you.
           </p>
+          
+          
+          <ul class="hint notes">
+            <li>Every member is named in the string above, including the ones that do not exist yet. That is deliberate: the driver ignores a seed it cannot resolve and discovers the real set from the ones it can, which is what lets this database move onto its own machines without you changing anything.</li><li>TLS is required, and the string above already names the authority file, so an application on the edge network needs nothing added to it. That file is mounted into every application component in this cluster — but only as of its next deploy, so an app that was running before this database existed has to be redeployed once before it can connect.</li><li>A client OUTSIDE the cluster downloads the CA certificate below and adds `tlsCAFile=` pointing at wherever it saved it. The external URL leaves that option out precisely because only you know that path — everything else about that URL is on the External panel.</li><li>THE JAVA DRIVER IS THE EXCEPTION, and it fails quietly. It does not implement `tlsCAFile` — it logs &#34;Connection string contains unsupported option &#39;tlscafile&#39;&#34; at WARN, uses the JVM&#39;s own trust store instead, and every operation then fails with &#34;PKIX path building failed&#34;. Java&#39;s equivalent is an SSLContext on the client: load this CA into a KeyStore, hand it to MongoClientSettings via applyToSslSettings, and do NOT set -Djavax.net.ssl.trustStore, which would replace trust for the whole process.</li><li>A JAVA CLIENT ALSO HAS TO ALLOW THE HOST NAME. Swarm names every service `&lt;stack&gt;_&lt;service&gt;`, and the JDK rejects a host name containing an underscore before it reads the certificate at all (&#34;Illegal given domain name: documents_mongo-1&#34;), even though that exact name is in the certificate. Set invalidHostNameAllowed on the same SSL settings. It gives up less than it sounds: this authority signs nothing but this component&#39;s own members, so a chain that validates already proves the peer is one of them.</li><li>READS MAY GO TO SECONDARIES, and a secondary can be behind the write that produced what you are reading. To keep read-your-own-writes, use one causally consistent session per request chain and carry its operationTime forward:
+    with client.start_session(causal_consistency=True) as s:
+        coll.insert_one(doc, session=s)
+        token = s.operation_time          # send this to the client
+    # on the next request, before reading:
+    s.advance_operation_time(token)
+Without that, a user can save a row and not see it on the next page load, and nothing anywhere reports an error.</li>
+          </ul>
+          
         </div>
       </section>
 
@@ -6689,15 +6735,50 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="panel-head">
           <h2>External</h2>
           <span class="spacer"></span>
-          <span class="pill mute plain">
-            not published</span>
+          <span class="pill ok plain">
+            through the tunnel</span>
         </div>
         <div class="panel-body stack">
           
-          <p class="muted">
-            Not published. Set a port in Settings to expose it on the master's private
-            address — then open the firewall below, deliberately.
-          </p>
+          
+          <div>
+            <div class="eyebrow">1 &middot; Point the tunnel at this</div>
+            <div class="conn">
+              <code>tcp://documents_gateway:27017</code>
+              <button class="btn btn-sm" type="button" data-copy
+                      data-copy-text="tcp://documents_gateway:27017">Copy</button>
+            </div>
+            <p class="hint">
+              In the Cloudflare dashboard, add <code>docs.acme.dev</code>
+              to this cluster's tunnel with that target — and put an Access policy on
+              it. A hostname on the tunnel is reachable by anyone who knows it, and
+              this is the only door in front of your data.
+            </p>
+          </div>
+          <div>
+            <div class="eyebrow">2 &middot; Run this beside your application</div>
+            <div class="conn">
+              <code>cloudflared access tcp --hostname docs.acme.dev --url 127.0.0.1:27017</code>
+              <button class="btn btn-sm" type="button" data-copy
+                      data-copy-text="cloudflared access tcp --hostname docs.acme.dev --url 127.0.0.1:27017">Copy</button>
+            </div>
+          </div>
+          <div>
+            <div class="eyebrow">3 &middot; Connection URL</div>
+            <div class="conn">
+              <code>mongodb://root:0c2de9e9ae39ebf9b7fabcc833f43b0408d50bf238c8356b@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;tls=true&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority</code>
+              <button class="btn btn-sm" type="button" data-copy
+                      data-copy-text="mongodb://root:0c2de9e9ae39ebf9b7fabcc833f43b0408d50bf238c8356b@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;tls=true&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority">Copy</button>
+            </div>
+          </div>
+          
+
+          
+          <ul class="hint notes">
+            <li>IT GOES THROUGH THE TUNNEL, so nothing is published on a host port and no firewall rule exists to get wrong. The connector dials OUT to Cloudflare — there is no address on this side for anyone to scan, and losing a machine loses one connector rather than the way in, which is why your applications already survive that.</li><li>PUT A CLOUDFLARE ACCESS POLICY IN FRONT OF THAT HOSTNAME. This is the door, and it is the one thing here that is yours to close: a hostname routed to the tunnel is reachable by anyone who knows it, with only this password in the way. A service token is the form that suits a machine.</li><li>YOUR DRIVER CONNECTS TO 127.0.0.1, not to the hostname. `cloudflared access tcp` holds the tunnel open and listens locally, so the URL above is a local address and the hostname appears only in the command beside it. Run it next to your application — a sidecar container, or a service on the box.</li><li>TLS STILL RUNS END TO END, from your driver to the member holding the data. Neither the tunnel nor Cloudflare nor the proxy inside this cluster can read a query: they forward bytes. The certificate already names 127.0.0.1, so it verifies against the address your driver actually dialled — download the CA below and add `tlsCAFile=`.</li><li>`directConnection=true` IS LOAD-BEARING, do not remove it. Without it the driver asks the set who its members are and then connects to THEM — and it is answered with names that resolve on this cluster&#39;s overlay network and nowhere else. That is what a replica set means by discovery, and it is why an external URL cannot name `replicaSet=`. With it, the driver treats this as one server and a proxy inside the cluster does the following-the-primary.</li><li>SO EXTERNAL READS COME FROM THE PRIMARY, whatever this component&#39;s secondary-reads setting says. That setting is a contract with the applications INSIDE the cluster, which use the internal string and do discover the set.</li><li>EXPECT A FEW MILLISECONDS MORE PER ROUND TRIP than a direct connection — the traffic goes out to Cloudflare and back. A driver doing many small round trips feels this; batching and a warm connection pool hide most of it.</li>
+          </ul>
+          
+
           
 
           
@@ -7140,20 +7221,20 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         
         
 <div class="field">
-  <label for="f-external_port">Published port</label>
+  <label for="f-external_hostname">Tunnel hostname</label>
 
   
-    <input id="f-external_port" name="external_port"
-           type="number"
-           
-           min="1024"
-           max="65535"
+    <input id="f-external_hostname" name="external_hostname"
+           type="text"
            
            
-           value="">
+           
+           
+           placeholder="docs.example.com"
+           value="docs.acme.dev">
   
 
-  <p class="hint">Optional. Publishes the member on the master at this port for an external client. The firewall still denies it until you open it on this page. It reaches ONE member, not the set — a replica set is discovered, not proxied.</p>
+  <p class="hint">Optional, and it is what makes this database reachable from OUTSIDE the cluster. Add the hostname to your Cloudflare tunnel — the Credentials tab gives you the target to paste — and put an Access policy in front of it, because a hostname on the tunnel is reachable by anyone who knows it. Nothing is published on a host port and no firewall is opened: your client runs `cloudflared access tcp`, which gives it a local port, and TLS still runs end to end from your driver to the member holding the data.</p>
 </div>
       
         
@@ -8437,20 +8518,20 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         
         
 <div class="field">
-  <label for="f-external_port">Published port</label>
+  <label for="f-external_hostname">Tunnel hostname</label>
 
   
-    <input id="f-external_port" name="external_port"
-           type="number"
-           
-           min="1024"
-           max="65535"
+    <input id="f-external_hostname" name="external_hostname"
+           type="text"
            
            
+           
+           
+           placeholder="cache.example.com"
            value="">
   
 
-  <p class="hint">Optional. Publishes the primary&#39;s replica on the master at this port for an external client. The firewall still denies it until you open it on this page, and it reaches ONE server rather than following a failover.</p>
+  <p class="hint">Optional, and it is what makes this database reachable from OUTSIDE the cluster. Add the hostname to your Cloudflare tunnel — the Credentials tab gives you the target to paste — and put an Access policy in front of it, because a hostname on the tunnel is reachable by anyone who knows it. Nothing is published on a host port and no firewall is opened: your client runs `cloudflared access tcp`, which gives it a local port. Leave it empty and this database is reachable only from inside the cluster.</p>
 </div>
       
         
@@ -8860,20 +8941,20 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         
         
 <div class="field">
-  <label for="f-external_port">Published port</label>
+  <label for="f-external_hostname">Tunnel hostname</label>
 
   
-    <input id="f-external_port" name="external_port"
-           type="number"
-           
-           min="1024"
-           max="65535"
+    <input id="f-external_hostname" name="external_hostname"
+           type="text"
            
            
+           
+           
+           placeholder="docs.example.com"
            value="">
   
 
-  <p class="hint">Optional. Publishes the member on the master at this port for an external client. The firewall still denies it until you open it on this page. It reaches ONE member, not the set — a replica set is discovered, not proxied.</p>
+  <p class="hint">Optional, and it is what makes this database reachable from OUTSIDE the cluster. Add the hostname to your Cloudflare tunnel — the Credentials tab gives you the target to paste — and put an Access policy in front of it, because a hostname on the tunnel is reachable by anyone who knows it. Nothing is published on a host port and no firewall is opened: your client runs `cloudflared access tcp`, which gives it a local port, and TLS still runs end to end from your driver to the member holding the data.</p>
 </div>
       
         
@@ -10867,7 +10948,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788514416.345351" data-localtime-epoch>1788514416</time>
+              <time datetime="1788527647.410485" data-localtime-epoch>1788527647</time>
             
           </td>
           <td>
@@ -11559,7 +11640,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788514416.345351" data-localtime-epoch>1788514416</time>
+              <time datetime="1788527647.410485" data-localtime-epoch>1788527647</time>
             
           </td>
           <td>

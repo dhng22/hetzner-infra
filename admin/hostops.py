@@ -49,11 +49,13 @@ def _valid_port(port):
     return str(port).isdigit() and 1 <= int(port) <= 65535 and int(port) != 22
 
 
-def open_port(port):
-    if not _valid_port(port):
-        return False, f"{port!r} is not a port the panel may open."
-    ok, out = _ssh(f"ufw-allow {int(port)}")
-    return ok, out or f"Opened {port}/tcp on the master."
+# NO `open_port`, AND THAT IS THE POINT OF THIS FILE GETTING SMALLER. Databases
+# are reached through the tunnel now: the connector dials out, nothing is
+# published on a host interface, and no rule has to be opened for one. Closing
+# is all that is left — for the rule an older cluster opened the old way, which
+# now stands in front of nothing. A capability nobody needs is a capability a
+# compromised panel should not have; see the warning at the top of
+# bin/panel-hostops.
 
 
 def close_port(port):
