@@ -46,7 +46,7 @@ class Field:
 
     def __init__(self, name, label, kind="text", default=None, help="",
                  required=False, choices=(), minimum=None, maximum=None,
-                 placeholder="", secret=False, immutable=False, managed=None,
+                 placeholder="", secret=False, managed=None,
                  group=None, switch=False):
         self.name = name
         self.label = label
@@ -59,7 +59,6 @@ class Field:
         self.maximum = maximum
         self.placeholder = placeholder
         self.secret = secret
-        self.immutable = immutable    # settable at create, read-only afterwards
         # Who owns this value once the component exists: "ci", "autoscaler", or
         # "convention". A managed field keeps its place in the spec — the
         # renderer still needs a number before anything has been measured, and a
@@ -417,6 +416,12 @@ class Component:
         job — dataguard's entire first move is putting a replica somewhere else
         — and a placement somebody pinned by hand is a promise the manager would
         break on its next loop.
+
+        There is no second pair any more. "How big may this set get" used to be
+        one, because the ceiling was a number on the form that had to be kept in
+        step with the switch. Every managed set now renders the same
+        `MEMBER_SLOTS` slots, so the switch is the only thing left to say: off is
+        one server, on is however many dataguard needs.
 
         So they are kept in step HERE, once. The create form, the settings tab
         and `bin/component` all pass through this, which is what stops the three
@@ -909,6 +914,35 @@ class Component:
     def summary(self):
         """One line for the card. Subclasses override."""
         return self.LABEL
+
+
+# How many member SLOTS every managed database renders. Not a question for the
+# user: slots render stopped and cost nothing until dataguard starts one, so a
+# ceiling on the form only ever bought a decision somebody had to make on their
+# first day with no way to know the answer.
+#
+# SLOTS, NOT MEMBERS. Slot 1 is the copy pinned to the master and is never handed
+# out for growth (`plan.free_index`); dataguard fills the slots above it and then
+# drops the master's copy once the set no longer needs it. So eight slots is a
+# grown set of up to seven.
+#
+# This number is deliberately NOT the thing that stops a set growing, and it is
+# sized so it never becomes that thing. What stops it is machines: a second
+# member on a machine that already has one shares its disk and its failure
+# domain, so the useful ceiling is the fleet, and the fleet is `MAX_WORKERS`
+# (default 5) plus the master. Seven grown members is comfortably above that, and
+# it is also MongoDB's own limit on VOTING members — the point past which extra
+# members must be non-voting whatever we do here.
+#
+# What DOES decide the size is dataguard, and it already asks the right
+# questions. It builds to three members for failover and then stops. It grows
+# past three only under sustained READ pressure, and only when the component
+# sends reads to secondaries — `plan.next_action`, which refuses to add replicas
+# to a database that reads everything from the primary rather than pretending the
+# action helped. Write pressure never adds members at all; it buys a bigger
+# primary. So the growth policy lives where the measurements are, and this
+# constant only has to stay out of its way.
+MEMBER_SLOTS = 8
 
 
 def compose_networks(*names):

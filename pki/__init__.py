@@ -236,3 +236,27 @@ def days_remaining(pem, now=None):
 def needs_renewal(pem, now=None):
     left = days_remaining(pem, now)
     return left is not None and left <= RENEW_BEFORE_DAYS
+
+
+def covers(pem, hostnames):
+    """
+    Whether this certificate's SAN already names every one of `hostnames`.
+
+    Expiry is not the only reason to reissue. A member reached by a name its
+    certificate does not carry fails the handshake with a hostname mismatch, and
+    the set keeps working internally while its own connection string stops
+    connecting — so "the SAN list changed" has to be a renewal trigger too.
+
+    Unreadable input answers False. The caller reissues, which is the safe way
+    to be wrong about a certificate.
+    """
+    try:
+        cert = x509.load_pem_x509_certificate(
+            pem if isinstance(pem, bytes) else pem.encode())
+        san = cert.extensions.get_extension_for_class(
+            x509.SubjectAlternativeName).value
+    except Exception:  # noqa: BLE001 — any unreadable certificate is reissued
+        return False
+    present = {str(v) for v in san.get_values_for_type(x509.DNSName)}
+    present |= {str(v) for v in san.get_values_for_type(x509.IPAddress)}
+    return all(str(name) in present for name in hostnames)

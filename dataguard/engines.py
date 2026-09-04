@@ -452,9 +452,15 @@ class RedisEngine(Engine):
 
     Different arithmetic from Mongo and the difference matters: the SENTINELS
     vote, not the data nodes. Adding a replica therefore does not change the
-    quorum, and the sentinel count is what has to stay odd. That is why
-    `VOTING_MEMBERS` is False — the state machine reads it and skips the
-    odd-voting-set gate here.
+    quorum, and the sentinel count is what has to stay odd. That is what
+    `VOTING_MEMBERS` is False for, and where it is read: `would_break_majority`,
+    which is what stops a REMOVAL taking the quorum with it.
+
+    It is deliberately not read while growing. `plan.next_action` used to accept
+    it as a parameter and never look at it, under a comment claiming there was
+    an odd-voting-set gate to skip; there was not, and there should not be — an
+    even voting set is a legal waypoint on the way to an odd one, which is
+    exactly what "building out to a set that can lose one" means.
     """
 
     VOTING_MEMBERS = False

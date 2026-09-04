@@ -155,7 +155,7 @@ def _size(sizes, host):
     return (sizes or {}).get(host)
 
 
-def next_action(component, state, topology, pressure, engine_votes=True,
+def next_action(component, state, topology, pressure,
                 sizes=None, at_max_plan=False):
     """
     The single next step, or HOLD.

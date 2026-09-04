@@ -1448,7 +1448,6 @@ def loop():
         pressure = read_pressure(component, topology, dispatched, usage, now,
                                  engine=engine)
         action = plan.next_action(component, state, topology, pressure,
-                                  engine.VOTING_MEMBERS,
                                   sizes=member_sizes(component),
                                   at_max_plan=component_at_max_plan(component))
         results[name] = (state, action, gates)

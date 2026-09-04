@@ -97,12 +97,6 @@ class RedisComponent(Component):
                   choices=("7.4-alpine", "7.2-alpine", "6.2-alpine"),
                   help="Changing this restarts the replicas one at a time. The "
                        "volumes survive."),
-            Field("replica_pool", "Replica pool", "number", 3, required=True,
-                  minimum=3, maximum=6, immutable=True,
-                  help="How many servers BEYOND the one on the master this may ever "
-                       "have. Fixed at creation because the sentinels are named in "
-                       "the connection URL — raising it later is the one change "
-                       "that does alter the string."),
             Field("maxmemory_mb", "Max memory (MB)", "memory", 512, required=True,
                   minimum=16, maximum=65536,
                   help="Redis evicts above this. Keep it below the memory limit or "
@@ -211,8 +205,21 @@ class RedisComponent(Component):
     # --- identity -----------------------------------------------------------
 
     @property
-    def pool(self):
-        return int(self.spec.get("replica_pool") or 3) + 1
+    def slots(self):
+        """
+        How many member slots exist. A constant — see `base.MEMBER_SLOTS`.
+
+        SLOTS, not servers: slot 1 is the copy on the master and is never handed
+        out for growth, so the grown set is one smaller than this.
+
+        This used to be `replica_pool + 1`, a number chosen at creation and
+        frozen, on the stated grounds that "the sentinels are named in the
+        connection URL". They are — but there are always exactly
+        `SENTINEL_COUNT` of them and the count never depended on it, so the URL
+        never changed with it and the whole restriction was answering a question
+        Redis does not ask.
+        """
+        return base.MEMBER_SLOTS
 
     @property
     def managed(self):
@@ -251,7 +258,7 @@ class RedisComponent(Component):
 
     def services(self):
         if self.managed:
-            names = [self.member_service(i) for i in range(1, self.pool + 1)]
+            names = [self.member_service(i) for i in range(1, self.slots + 1)]
             names += [self.sentinel_service(i)
                       for i in range(1, SENTINEL_COUNT + 1)]
         else:
@@ -500,14 +507,14 @@ class RedisComponent(Component):
             # correctly.
             "dataguard.role": "member",
             "dataguard.member": str(index),
-            "dataguard.pool": str(self.pool),
+            "dataguard.pool": str(self.slots),
             "dataguard.set": self.stack,
             "dataguard.enabled": "true" if self.managed else "false",
             # `pool - 1`, not `pool`: slot 1 is the copy on the master and is
             # never handed out for growth, so a set that has grown off the master
             # can only ever fill the slots beyond it. Telling dataguard `pool`
             # promises a member it has nowhere to put.
-            "dataguard.max_members": str(self.pool - 1),
+            "dataguard.max_members": str(self.slots - 1),
             "dataguard.lag_budget_seconds": str(s.get("lag_budget_seconds") or 10),
             # Redis has no per-replica read flag: a sentinel-aware client chooses
             # a replica itself, and nothing here can take one out of rotation. So
@@ -597,7 +604,7 @@ class RedisComponent(Component):
         s = self.spec
         self.ensure_password()
 
-        members = range(1, self.pool + 1) if self.managed else range(1, 2)
+        members = range(1, self.slots + 1) if self.managed else range(1, 2)
         services = {self.member_key(i): self._member(i) for i in members}
         volumes = {f"{self.name}-{i}-data": {} for i in members}
         if self.managed:
@@ -768,6 +775,10 @@ class RedisComponent(Component):
         }
 
     def summary(self):
-        live = sum(1 for i in range(1, self.pool + 1)
+        # The live count alone. It used to read `1/4 replicas`, which invited the
+        # question "why are three of them missing" — they were not missing, they
+        # were slots nobody needed yet. There is no ceiling to be short of.
+        live = sum(1 for i in range(1, self.slots + 1)
                    if (self.live_replicas(self.member_service(i)) or 0) >= 1)
-        return f"redis:{self.spec.get('version', '')} · {live}/{self.pool} replicas"
+        word = "server" if live == 1 else "servers"
+        return f"redis:{self.spec.get('version', '')} · {live} {word}"

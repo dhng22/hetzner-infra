@@ -378,17 +378,19 @@ class ComponentTest(ComponentCase):
 
     # --- managed databases --------------------------------------------------
 
-    def test_the_seed_list_names_every_member_including_the_absent_ones(self):
+    def test_the_seed_list_names_one_host_however_big_the_set_gets(self):
         """
-        The property the whole design rests on. A driver ignores a seed it
-        cannot resolve and discovers the set from the ones it can, so member 4
-        can be a name that means nothing for six months and then mean a machine
-        in Helsinki — with nothing that talks to the database changing.
+        The property the whole design rests on, and it used to be spelled the
+        other way round: the string named every slot, so the slot count was
+        frozen at creation and a set that outgrew it could not be helped.
+
+        One alias instead. Swarm answers it with the members that are running,
+        so member 4 can mean nothing for six months and then mean a machine in
+        Helsinki — with neither the string nor a ceiling changing.
         """
-        component = self.make_mongo(replica_pool=3)
-        url = component.connection_url()
-        for index in range(1, 5):
-            self.assertIn(f"docs_mongo-{index}:27017", url)
+        url = self.make_mongo().connection_url()
+        self.assertIn("docs-mongo:27017", url)
+        self.assertNotIn("docs_mongo-", url)
         self.assertIn("replicaSet=docs", url)
 
     def test_the_connection_string_requires_tls_from_the_first_day(self):
@@ -582,7 +584,8 @@ class ComponentTest(ComponentCase):
         labels = self.make_mongo().render()["services"]["mongo-2"]["deploy"]["labels"]
         self.assertEqual(labels["infra.managed_by"], "dataguard")
         self.assertEqual(labels["dataguard.member"], "2")
-        self.assertEqual(labels["dataguard.pool"], "4")
+        self.assertEqual(labels["dataguard.pool"],
+                         str(self.components.base.MEMBER_SLOTS))
         self.assertEqual(labels["dataguard.enabled"], "true")
         self.assertEqual(labels["dataguard.secondary_reads"], "true")
 
@@ -892,7 +895,10 @@ class CredentialsAgreeTest(ComponentCase):
         from_panel = [h.split(":")[0] for h in mongo.access()["target"].split(",")]
         self.assertEqual(from_row, from_url)
         self.assertEqual(from_panel, from_url)
-        self.assertEqual(len(from_url), 4)
+        # One, now that the seed list is an alias — and the point of the test is
+        # unchanged: whatever the string names, the Host row and the Overview
+        # panel name exactly that and nothing else.
+        self.assertEqual(from_url, ["docs-mongo"])
 
     def test_no_reach_panel_puts_a_password_on_the_overview_tab(self):
         """
@@ -927,3 +933,113 @@ class CredentialsAgreeTest(ComponentCase):
         self.assertEqual(from_row, from_url)
         self.assertNotIn(":", creds["internal_host"])
         self.assertEqual(creds["internal_port"], "26379")
+
+
+class MemberSlotTest(ComponentCase):
+    """
+    How big a set may get is not a question the form asks any more.
+
+    It used to ask twice — `replica_pool` and `max_members` — and freeze the
+    first at creation, because Mongo's seed list named every slot. These tests
+    pin the two facts that replaced that: the slot count is a constant, and the
+    connection string does not mention it.
+    """
+
+    def test_neither_ceiling_is_on_the_form(self):
+        for cls in (self.components.RedisComponent, self.components.MongoComponent):
+            names = {f.name for f in cls.fields()}
+            self.assertNotIn("replica_pool", names, cls.__name__)
+            self.assertNotIn("max_members", names, cls.__name__)
+
+    def test_every_slot_is_rendered_and_all_but_one_is_stopped(self):
+        # Growth is `docker service scale`, never `stack deploy` — so the slots
+        # have to exist before dataguard wants one, and cost nothing until then.
+        import yaml
+        mongo = self.make_mongo(name="docs")
+        services = yaml.safe_load(mongo.stack_yaml())["services"]
+        members = [k for k in services if k[6:].isdigit() and k.startswith("mongo-")]
+        self.assertEqual(len(members), self.components.base.MEMBER_SLOTS)
+        # The slot count must stay ABOVE the fleet, so that what limits a set is
+        # machines and read pressure rather than a number rendered into a file.
+        # `MAX_WORKERS` defaults to 5, so the master plus the fleet is 6.
+        self.assertGreater(self.components.base.MEMBER_SLOTS, 6)
+        self.assertEqual(services["mongo-1"]["deploy"]["replicas"], 1)
+        for key in members:
+            if key != "mongo-1":
+                self.assertEqual(services[key]["deploy"]["replicas"], 0, key)
+
+    def test_the_mongo_string_names_one_host_and_never_a_slot(self):
+        # The whole reason the ceiling could never be raised: a longer seed list
+        # is a different string, and applications were holding the old one.
+        mongo = self.make_mongo(name="docs")
+        url = mongo.connection_url()
+        self.assertIn("docs-mongo:27017", url)
+        self.assertNotIn("docs_mongo-1", url)
+        self.assertNotIn("docs_mongo-2", url)
+
+    def test_every_member_answers_to_that_one_host(self):
+        # Swarm resolves a shared alias to the members that are RUNNING, and
+        # leaves out a service at zero replicas — verified on the cluster. That
+        # is what makes one name safe as a seed list.
+        import yaml
+        mongo = self.make_mongo(name="docs")
+        services = yaml.safe_load(mongo.stack_yaml())["services"]
+        members = [k for k in services if k[6:].isdigit() and k.startswith("mongo-")]
+        self.assertTrue(members)
+        for key in members:
+            self.assertEqual(services[key]["networks"]["edge"]["aliases"],
+                             ["docs-mongo"], key)
+
+    def test_a_member_certificate_covers_the_name_clients_dial(self):
+        # A client dialling the alias checks the certificate against it. Without
+        # the alias in the SAN the set works internally and stops being reachable
+        # by its own connection string.
+        import pki
+        mongo = self.make_mongo(name="docs")
+        mongo.ensure_tls()
+        with open(self.components.store.path_for(
+                "docs", "tls/member-2.pem"), "rb") as fh:
+            pem = fh.read()
+        self.assertTrue(pki.covers(pem, ["docs-mongo"]))
+        self.assertTrue(pki.covers(pem, ["docs_mongo-2"]))
+
+    def test_a_certificate_without_that_name_is_reissued(self):
+        # The migration for sets that already exist: their certificates predate
+        # the alias, and nothing else would notice until a client failed.
+        import pki
+        mongo = self.make_mongo(name="docs")
+        mongo.ensure_tls()
+        path = self.components.store.path_for("docs", "tls/member-2.pem")
+        with open(path, "rb") as fh:
+            stale = fh.read()
+        self.assertFalse(pki.covers(stale, ["docs-mongo", "somewhere-else"]))
+        key, crt = pki.ensure_ca(mongo.tls_dir(), mongo.cluster_name(), "docs")
+        narrow = pki.issue_member(key, crt, mongo.cluster_name(), "docs",
+                                  ["docs_mongo-2"])
+        with open(path, "wb") as fh:
+            fh.write(narrow)
+        mongo.ensure_tls()
+        with open(path, "rb") as fh:
+            self.assertTrue(pki.covers(fh.read(), ["docs-mongo"]))
+
+    def test_the_redis_url_never_depended_on_the_slot_count(self):
+        # The premise the old restriction rested on. There are always exactly
+        # SENTINEL_COUNT sentinels and the URL names those, so growing a Redis
+        # set never altered the string and never needed a frozen ceiling.
+        redis = self.make_redis(name="cache", dataguard=True)
+        url = redis.connection_url()
+        for i in (1, 2, 3):
+            self.assertIn(f"cache_sentinel-{i}:26379", url)
+        self.assertNotIn("cache_redis-1", url)
+        self.assertNotIn("sentinel-4", url)
+
+    def test_the_switch_is_the_only_way_to_ask_for_one_server(self):
+        # What `replica_pool = 0` was going to mean, said by the control that
+        # already meant it.
+        import yaml
+        redis = self.make_redis(name="cache", dataguard=False)
+        services = yaml.safe_load(redis.stack_yaml())["services"]
+        self.assertIn("redis", services)
+        self.assertEqual([k for k in services if k.startswith("sentinel")], [])
+        self.assertNotIn("redis-2", services)
+        self.assertNotIn("cache-redis", redis.connection_url())

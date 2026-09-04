@@ -505,3 +505,29 @@ class UpgradeHandoverTest(unittest.TestCase):
         topo = topology(member(M2, engines.PRIMARY), member(M3), member(M4))
         self.assertEqual("hold", plan.next_action(
             c, plan.STATE_DEDICATED, topo, CALM).verb)
+
+
+class SignatureTest(unittest.TestCase):
+    """
+    `next_action` used to take an `engine_votes` parameter it never read.
+
+    The caller passed `engine.VOTING_MEMBERS` into it and `RedisEngine`'s
+    docstring said the state machine "reads it and skips the odd-voting-set gate
+    here" — there was no such gate, and there should not be: an even voting set
+    is a legal waypoint on the way to an odd one, which is what "building out to
+    a set that can lose one" means. The majority arithmetic that does matter is
+    on REMOVAL, in `would_break_majority`, and that is where `VOTING_MEMBERS` is
+    still read.
+
+    Asserting the signature is what keeps a comment and the code it describes
+    from drifting apart a second time.
+    """
+
+    def test_next_action_takes_no_parameter_it_does_not_read(self):
+        import inspect
+        names = list(inspect.signature(plan.next_action).parameters)
+        self.assertEqual(
+            names, ["component", "state", "topology", "pressure", "sizes",
+                    "at_max_plan"])
+        source = inspect.getsource(plan.next_action)
+        self.assertNotIn("engine_votes", source)

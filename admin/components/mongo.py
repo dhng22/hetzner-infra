@@ -120,26 +120,7 @@ class MongoComponent(Component):
                   help="Changing this restarts the members one at a time. The "
                        "volumes survive, but Mongo only upgrades one major version "
                        "at a time — go 5 to 6 to 7, never 5 to 7."),
-            Field("replica_pool", "Replica pool", "number", 3, required=True,
-                  minimum=3, maximum=6, immutable=True,
-                  help="How many members BEYOND the one on the master this set may "
-                       "ever have. Every one of them is named in the connection "
-                       "string from the day you create this, whether it exists or "
-                       "not, so raising it later is the one change that DOES alter "
-                       "the string — pick the ceiling now. Three is the minimum "
-                       "that can lose a machine and still elect."),
-            Field("max_members", "Members in use at once", "number", 3,
-                  minimum=3, maximum=6,
-                  help="A budget cap on how many of the pool dataguard may run at "
-                       "once. It does not have to be odd — dataguard keeps the "
-                       "VOTING members odd underneath it and carries any extra as "
-                       "non-voting, which is what lets a fourth member exist to "
-                       "serve reads without making the majority an even number. "
-                       "Its ceiling is the replica pool, NOT the pool plus the "
-                       "master: a grown set has no member on the master, so the "
-                       "master's slot is not one of the ones this can fill."),
             Field("username", "Root username", "text", "root", required=True,
-                  immutable=True,
                   help="Created on the FIRST start only, from an empty volume. "
                        "Changing it later does nothing until the data directory is "
                        "empty again."),
@@ -296,7 +277,7 @@ class MongoComponent(Component):
         return True, ""
 
     def _local_container(self):
-        for index in range(1, self.pool + 1):
+        for index in range(1, self.slots + 1):
             out = base.docker_out([
                 "ps", "--filter",
                 f"label=com.docker.swarm.service.name={self.member_service(index)}",
@@ -309,9 +290,20 @@ class MongoComponent(Component):
     # --- identity -----------------------------------------------------------
 
     @property
-    def pool(self):
-        """Total members named in the connection string: n on top of the master."""
-        return int(self.spec.get("replica_pool") or 3) + 1
+    def slots(self):
+        """
+        How many member slots exist. A constant — see `base.MEMBER_SLOTS`.
+
+        SLOTS, not members: slot 1 is the copy on the master and is never handed
+        out for growth, so the grown set is one smaller than this.
+
+        It was `replica_pool + 1` and frozen at creation for a reason that WAS
+        real here, unlike on Redis: the seed list named every slot, so growing
+        the ceiling put a host in the string nobody had been given. `seed_hosts`
+        names one alias now, so the string no longer knows or cares how many
+        there are, and the ceiling stopped being anybody's decision.
+        """
+        return base.MEMBER_SLOTS
 
     def member_key(self, index):
         """
@@ -344,7 +336,7 @@ class MongoComponent(Component):
 
     def services(self):
         names = [self.member_service(i)
-                 for i in range(1, (self.pool if self.managed else 1) + 1)]
+                 for i in range(1, (self.slots if self.managed else 1) + 1)]
         if self.spec.get("exporter"):
             names.append(f"{self.stack}_mongo-exporter")
         if self.managed:
@@ -359,12 +351,35 @@ class MongoComponent(Component):
 
     # --- addressing ---------------------------------------------------------
 
+    def seed_alias(self):
+        """
+        One name that resolves to every member that is currently running.
+
+        Every member service joins the edge network under this alias, and Swarm's
+        DNS answers it with the VIP of each service that has it — verified on the
+        cluster: two members answered with two addresses, a third at `replicas: 0`
+        did not appear at all, and scaling it up put it in the answer within
+        seconds. So a stopped slot is not a dead address in the seed list; it is
+        simply not in the list.
+
+        Underscore-free, because it goes in a certificate SAN and in a URL where
+        a hostname is expected. `<name>-mongo` cannot collide with the service
+        names, which are `<stack>_mongo-<n>`.
+        """
+        return f"{self.name}-mongo"
+
     def seed_hosts(self, port=27017):
-        # An unmanaged component is ONE server, so the seed list is that server.
-        # Naming members 2..n would put hosts in the connection string that are
-        # not merely absent-for-now — nothing will ever render them.
-        last = self.pool if self.managed else 1
-        return [f"{self.member_service(i)}:{port}" for i in range(1, last + 1)]
+        # ONE name, and this is the change that made the connection string
+        # permanent. It used to name every slot — `docs_mongo-1` through
+        # `docs_mongo-4` — which is why the slot count had to be chosen up front
+        # and could never be raised: raising it added a host to a string that
+        # applications were already holding. An alias has no count in it.
+        #
+        # An unmanaged component is one server and has no alias, so it names
+        # that server directly.
+        if not self.managed:
+            return [f"{self.member_service(1)}:{port}"]
+        return [f"{self.seed_alias()}:{port}"]
 
     def connection_url(self, host=None, port=None):
         """
@@ -374,6 +389,9 @@ class MongoComponent(Component):
 
           replicaSet          makes the driver DISCOVER the topology instead of
                               treating the seeds as a list of separate servers.
+                              In-cluster only — see the `host` branch, where it
+                              would send an outside client to addresses that
+                              exist on the overlay network and nowhere else.
           tls                 true from the first day, while the set is still one
                               member on the master — so it is already correct on
                               the day a second machine appears.
@@ -522,21 +540,6 @@ class MongoComponent(Component):
         user = (self.spec.get("username") or "").strip()
         if user and not user.replace("_", "").replace("-", "").isalnum():
             problems.append("Root username may only contain letters, digits, - and _.")
-        # `self.pool` counts the master's slot; growth never does. Dataguard hands
-        # out slots 2..pool and keeps slot 1 for the copy on the master, so a set
-        # that has grown off the master tops out at `pool - 1` — which is exactly
-        # `replica_pool`, "members BEYOND the one on the master". Comparing
-        # against `pool` accepted a number one higher than anything reachable, so
-        # the default of 4 against the default pool was itself unreachable: the
-        # set stopped at 3, reported `at_ceiling`, and named a limit the form had
-        # said was 4.
-        reachable, cap = self.pool - 1, self.spec.get("max_members") or 0
-        if cap and cap > reachable:
-            problems.append(
-                f"Members in use ({cap}) is above what the replica pool can hold "
-                f"({reachable}). A grown set has no member on the master, so it "
-                f"can only use the {reachable} slots beyond it — raise the replica "
-                "pool if you need more, though that changes the connection string.")
         # Deliberately NOT validated here: an even member count, and a managed
         # set with no backup target. Neither is invalid — an even set is legal
         # because dataguard keeps the VOTING members odd underneath it, using
@@ -570,17 +573,30 @@ class MongoComponent(Component):
         key_pem, crt_pem = pki.ensure_ca(self.tls_dir(), self.cluster_name(),
                                          self.name)
         self._ensure_secret("tls-ca", crt_pem)
-        for index in range(1, self.pool + 1):
+        for index in range(1, self.slots + 1):
             path = store.path_for(self.name, f"tls/member-{index}.pem")
             existing = _read_bytes(path)
-            if existing is not None and not pki.needs_renewal(existing):
+            # Expiry is not the only reason to reissue. A client dialling the
+            # seed alias checks the certificate against the name it dialled, so a
+            # member whose certificate predates the alias would fail the TLS
+            # handshake with "hostname mismatch" — the component would keep
+            # working internally and stop being reachable by its own connection
+            # string. Asking what the certificate covers is what makes that
+            # migration happen by itself.
+            if existing is not None and not pki.needs_renewal(existing) \
+                    and pki.covers(existing, self._member_names(index)):
                 self._ensure_secret(f"tls-{index}", existing)
                 continue
             host = self.member_service(index)
             pem = pki.issue_member(key_pem, crt_pem, self.cluster_name(), self.name,
-                                   [host, f"tasks.{host}", "localhost", "127.0.0.1"])
+                                   self._member_names(index))
             store._write_atomic(path, pem.decode(), 0o600)
             self._ensure_secret(f"tls-{index}", pem, replace=existing is not None)
+
+    def _member_names(self, index):
+        """Every name this member may be dialled by, for its certificate SAN."""
+        host = self.member_service(index)
+        return [host, f"tasks.{host}", self.seed_alias(), "localhost", "127.0.0.1"]
 
     @staticmethod
     def cluster_name():
@@ -718,7 +734,10 @@ class MongoComponent(Component):
                 "MONGO_INITDB_ROOT_PASSWORD": self.password(),
             },
             "volumes": [f"{volume}:/data/db"],
-            "networks": [base.EDGE_NETWORK],
+            # The alias is what makes the connection string permanent — see
+            # `seed_alias`. Every member carries it; Swarm answers it with the
+            # ones that are actually running.
+            "networks": {base.EDGE_NETWORK: {"aliases": [self.seed_alias()]}},
             "logging": self.loki_logging(),
             "secrets": [
                 {"source": self.secret_name("tls-ca"), "target": "tls-ca.crt",
@@ -772,10 +791,19 @@ class MongoComponent(Component):
             # correctly.
             "dataguard.role": "member",
             "dataguard.member": str(index),
-            "dataguard.pool": str(self.pool),
+            "dataguard.pool": str(self.slots),
             "dataguard.set": self.stack,
             "dataguard.enabled": "true" if self.managed else "false",
-            "dataguard.max_members": str(s.get("max_members") or self.pool),
+            # `pool - 1`, not `pool`, and no longer a setting: slot 1 is the
+            # copy on the master and a grown set has left it, so the reachable
+            # ceiling is the slots beyond it. Emitting `pool` handed dataguard a
+            # limit one above anything `free_index` could satisfy.
+            #
+            # This is a bound, not a budget. It used to be a form field the user
+            # had to keep in step with a second form field; what actually decides
+            # how big this set gets is pressure and what the overseer will buy,
+            # exactly as it is for the autoscaler.
+            "dataguard.max_members": str(self.slots - 1),
             "dataguard.lag_budget_seconds": str(s.get("lag_budget_seconds") or 10),
             "dataguard.secondary_reads": "true" if s.get("secondary_reads") else "false",
             "dataguard.backup_target": str(s.get("backup_target") or ""),
@@ -794,7 +822,7 @@ class MongoComponent(Component):
         self.ensure_password()
         self.ensure_tls()
 
-        members = range(1, (self.pool if self.managed else 1) + 1)
+        members = range(1, (self.slots if self.managed else 1) + 1)
         services = {self.member_key(i): self._member(i) for i in members}
         secrets = {self.secret_name("tls-ca"): {"external": True}}
         for i in members:
@@ -974,7 +1002,7 @@ class MongoComponent(Component):
         storage_mount = ([{"source": storage_secret,
                            "target": "backup-storage.json", "mode": 0o400}]
                          if storage_secret else [])
-        for index in range(1, self.pool + 1):
+        for index in range(1, self.slots + 1):
             out[f"pbm-agent-{index}"] = {
                 "image": PBM_IMAGE,
                 "command": ["pbm-agent"],
@@ -1382,6 +1410,10 @@ exit 1
         }
 
     def summary(self):
-        live = sum(1 for i in range(1, self.pool + 1)
+        # The live count alone, for the reason given on RedisComponent.summary:
+        # `1/4 members` read as three missing ones, when they were slots nobody
+        # had needed yet.
+        live = sum(1 for i in range(1, self.slots + 1)
                    if (self.live_replicas(self.member_service(i)) or 0) >= 1)
-        return f"mongo:{self.spec.get('version', '')} · {live}/{self.pool} members"
+        word = "member" if live == 1 else "members"
+        return f"mongo:{self.spec.get('version', '')} · {live} {word}"

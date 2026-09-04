@@ -1709,7 +1709,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
           <span class="stripe"></span>
           <span>
             <span class="row-title">cache</span>
-            <span class="row-sub">redis:7.4-alpine · 0/4 replicas</span>
+            <span class="row-sub">redis:7.4-alpine · 0 servers</span>
           </span>
           <span class="row-metric hide-sm">
             <span class="k">Tasks</span>
@@ -1722,7 +1722,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
           <span class="stripe"></span>
           <span>
             <span class="row-title">documents</span>
-            <span class="row-sub">mongo:7.0 · 0/4 members</span>
+            <span class="row-sub">mongo:7.0 · 0 members</span>
           </span>
           <span class="row-metric hide-sm">
             <span class="k">Tasks</span>
@@ -2059,7 +2059,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
           <span class="card-name">cache</span>
           <span class="pill ok">healthy</span>
         </div>
-        <div class="card-sub mono">redis:7.4-alpine · 0/4 replicas</div>
+        <div class="card-sub mono">redis:7.4-alpine · 0 servers</div>
         <div class="card-foot">
           <span class="muted">Redis</span>
           
@@ -2085,7 +2085,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
           <span class="card-name">documents</span>
           <span class="pill ok">healthy</span>
         </div>
-        <div class="card-sub mono">mongo:7.0 · 0/4 members</div>
+        <div class="card-sub mono">mongo:7.0 · 0 members</div>
         <div class="card-foot">
           <span class="muted">MongoDB</span>
           
@@ -2541,7 +2541,7 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-03T18:05:48Z" data-localtime>2026-09-03T18:05:48Z</time>
+          <time datetime="2026-09-04T10:33:36Z" data-localtime>2026-09-04T10:33:36Z</time>
           
         </div>
       </div>
@@ -3959,7 +3959,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-03T18:05:48Z" data-localtime>2026-09-03T18:05:48Z</time>
+          <time datetime="2026-09-04T10:33:36Z" data-localtime>2026-09-04T10:33:36Z</time>
           
         </div>
       </div>
@@ -5290,7 +5290,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-03T18:05:48Z" data-localtime>2026-09-03T18:05:48Z</time>
+          <time datetime="2026-09-04T10:33:36Z" data-localtime>2026-09-04T10:33:36Z</time>
           
         </div>
       </div>
@@ -5348,6 +5348,34 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <td class="mono small">redis:7.4-alpine</td>
                 <td class="num">0/0</td>
                 <td><span class="pill ok">healthy</span></td>
+              </tr>
+              
+              <tr>
+                <td class="mono">cache_redis-5</td>
+                <td class="mono small">—</td>
+                <td class="num">0/0</td>
+                <td><span class="pill mute">missing</span></td>
+              </tr>
+              
+              <tr>
+                <td class="mono">cache_redis-6</td>
+                <td class="mono small">—</td>
+                <td class="num">0/0</td>
+                <td><span class="pill mute">missing</span></td>
+              </tr>
+              
+              <tr>
+                <td class="mono">cache_redis-7</td>
+                <td class="mono small">—</td>
+                <td class="num">0/0</td>
+                <td><span class="pill mute">missing</span></td>
+              </tr>
+              
+              <tr>
+                <td class="mono">cache_redis-8</td>
+                <td class="mono small">—</td>
+                <td class="num">0/0</td>
+                <td><span class="pill mute">missing</span></td>
               </tr>
               
               <tr>
@@ -5487,9 +5515,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis+sentinel://default:79e84579f8e329e9d06ce389f33cf0fe435794aff10e8461@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
+              <code>redis+sentinel://default:04e3060e629774c8ee5a38586fdb1b0a258709fc16a4724f@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis+sentinel://default:79e84579f8e329e9d06ce389f33cf0fe435794aff10e8461@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
+                      data-copy-text="redis+sentinel://default:04e3060e629774c8ee5a38586fdb1b0a258709fc16a4724f@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -5500,7 +5528,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="79e84579f8e329e9d06ce389f33cf0fe435794aff10e8461">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="04e3060e629774c8ee5a38586fdb1b0a258709fc16a4724f">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -5526,9 +5554,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="panel-body stack">
           
           <div class="conn">
-            <code>redis://default:79e84579f8e329e9d06ce389f33cf0fe435794aff10e8461@10.0.0.2:46379</code>
+            <code>redis://default:04e3060e629774c8ee5a38586fdb1b0a258709fc16a4724f@10.0.0.2:46379</code>
             <button class="btn btn-sm" type="button" data-copy
-                    data-copy-text="redis://default:79e84579f8e329e9d06ce389f33cf0fe435794aff10e8461@10.0.0.2:46379">Copy</button>
+                    data-copy-text="redis://default:04e3060e629774c8ee5a38586fdb1b0a258709fc16a4724f@10.0.0.2:46379">Copy</button>
           </div>
           <div class="table-wrap">
             <table>
@@ -5892,25 +5920,6 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   
 
   <p class="hint">Changing this restarts the replicas one at a time. The volumes survive.</p>
-</div>
-      
-        
-        
-<div class="field">
-  <label for="f-replica_pool">Replica pool</label>
-
-  
-    <input id="f-replica_pool" name="replica_pool"
-           type="number"
-           
-           min="3"
-           max="6"
-           required
-           
-           value="3">
-  
-
-  <p class="hint">How many servers BEYOND the one on the master this may ever have. Fixed at creation because the sentinels are named in the connection URL — raising it later is the one change that does alter the string.</p>
 </div>
       
         
@@ -6434,7 +6443,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-03T18:05:48Z" data-localtime>2026-09-03T18:05:48Z</time>
+          <time datetime="2026-09-04T10:33:36Z" data-localtime>2026-09-04T10:33:36Z</time>
           
         </div>
       </div>
@@ -6449,9 +6458,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
       <div class="panel-head"><h2>How to reach it</h2></div>
       <div class="panel-body stack">
         <div class="conn">
-          <code>documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017</code>
+          <code>documents-mongo:27017</code>
           <button class="btn btn-sm" type="button" data-copy
-                  data-copy-text="documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017">Copy</button>
+                  data-copy-text="documents-mongo:27017">Copy</button>
         </div>
         <p class="hint">These are the same hosts the connection string on the Credentials tab names, in the same order — this box leaves out the scheme, the password and the options because it is not behind a reveal, and the Overview tab must not put a password on screen. Connect with the string, not with this; this is here for a client that wants the hosts as a list rather than as a URL. Every member is reachable from any component on the edge network by these names, whether it exists yet or not — the driver ignores the ones it cannot resolve. Do not put this behind the tunnel; the tunnel speaks HTTP.</p>
       </div>
@@ -6492,6 +6501,34 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <td class="mono small">mongo:7.0</td>
                 <td class="num">0/0</td>
                 <td><span class="pill ok">healthy</span></td>
+              </tr>
+              
+              <tr>
+                <td class="mono">documents_mongo-5</td>
+                <td class="mono small">—</td>
+                <td class="num">0/0</td>
+                <td><span class="pill mute">missing</span></td>
+              </tr>
+              
+              <tr>
+                <td class="mono">documents_mongo-6</td>
+                <td class="mono small">—</td>
+                <td class="num">0/0</td>
+                <td><span class="pill mute">missing</span></td>
+              </tr>
+              
+              <tr>
+                <td class="mono">documents_mongo-7</td>
+                <td class="mono small">—</td>
+                <td class="num">0/0</td>
+                <td><span class="pill mute">missing</span></td>
+              </tr>
+              
+              <tr>
+                <td class="mono">documents_mongo-8</td>
+                <td class="mono small">—</td>
+                <td class="num">0/0</td>
+                <td><span class="pill mute">missing</span></td>
               </tr>
               
               <tr>
@@ -6619,20 +6656,20 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>mongodb://root:fb4270ba0a5a50b37e45ad00f626e255c7ea427a6a6667b4@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
+              <code>mongodb://root:641dae949a56ca372cfd6733eeee60dece833acd4e8b37b3@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:fb4270ba0a5a50b37e45ad00f626e255c7ea427a6a6667b4@documents_mongo-1:27017,documents_mongo-2:27017,documents_mongo-3:27017,documents_mongo-4:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
+                      data-copy-text="mongodb://root:641dae949a56ca372cfd6733eeee60dece833acd4e8b37b3@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
             <table>
               <tbody>
-                <tr><th>Host</th><td class="mono">documents_mongo-1, documents_mongo-2, documents_mongo-3, documents_mongo-4</td></tr>
+                <tr><th>Host</th><td class="mono">documents-mongo</td></tr>
                 <tr><th>Port</th><td class="mono">27017</td></tr>
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="fb4270ba0a5a50b37e45ad00f626e255c7ea427a6a6667b4">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="641dae949a56ca372cfd6733eeee60dece833acd4e8b37b3">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -7060,44 +7097,6 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   
 
   <p class="hint">Changing this restarts the members one at a time. The volumes survive, but Mongo only upgrades one major version at a time — go 5 to 6 to 7, never 5 to 7.</p>
-</div>
-      
-        
-        
-<div class="field">
-  <label for="f-replica_pool">Replica pool</label>
-
-  
-    <input id="f-replica_pool" name="replica_pool"
-           type="number"
-           
-           min="3"
-           max="6"
-           required
-           
-           value="3">
-  
-
-  <p class="hint">How many members BEYOND the one on the master this set may ever have. Every one of them is named in the connection string from the day you create this, whether it exists or not, so raising it later is the one change that DOES alter the string — pick the ceiling now. Three is the minimum that can lose a machine and still elect.</p>
-</div>
-      
-        
-        
-<div class="field">
-  <label for="f-max_members">Members in use at once</label>
-
-  
-    <input id="f-max_members" name="max_members"
-           type="number"
-           
-           min="3"
-           max="6"
-           
-           
-           value="3">
-  
-
-  <p class="hint">A budget cap on how many of the pool dataguard may run at once. It does not have to be odd — dataguard keeps the VOTING members odd underneath it and carries any extra as non-voting, which is what lets a fourth member exist to serve reads without making the majority an even number. Its ceiling is the replica pool, NOT the pool plus the master: a grown set has no member on the master, so the master&#39;s slot is not one of the ones this can fill.</p>
 </div>
       
         
@@ -8373,25 +8372,6 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         
         
 <div class="field">
-  <label for="f-replica_pool">Replica pool</label>
-
-  
-    <input id="f-replica_pool" name="replica_pool"
-           type="number"
-           
-           min="3"
-           max="6"
-           required
-           
-           value="3">
-  
-
-  <p class="hint">How many servers BEYOND the one on the master this may ever have. Fixed at creation because the sentinels are named in the connection URL — raising it later is the one change that does alter the string.</p>
-</div>
-      
-        
-        
-<div class="field">
   <label for="f-maxmemory_mb">Max memory (MB)</label>
 
   
@@ -8837,44 +8817,6 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
   
 
   <p class="hint">Changing this restarts the members one at a time. The volumes survive, but Mongo only upgrades one major version at a time — go 5 to 6 to 7, never 5 to 7.</p>
-</div>
-      
-        
-        
-<div class="field">
-  <label for="f-replica_pool">Replica pool</label>
-
-  
-    <input id="f-replica_pool" name="replica_pool"
-           type="number"
-           
-           min="3"
-           max="6"
-           required
-           
-           value="3">
-  
-
-  <p class="hint">How many members BEYOND the one on the master this set may ever have. Every one of them is named in the connection string from the day you create this, whether it exists or not, so raising it later is the one change that DOES alter the string — pick the ceiling now. Three is the minimum that can lose a machine and still elect.</p>
-</div>
-      
-        
-        
-<div class="field">
-  <label for="f-max_members">Members in use at once</label>
-
-  
-    <input id="f-max_members" name="max_members"
-           type="number"
-           
-           min="3"
-           max="6"
-           
-           
-           value="3">
-  
-
-  <p class="hint">A budget cap on how many of the pool dataguard may run at once. It does not have to be odd — dataguard keeps the VOTING members odd underneath it and carries any extra as non-voting, which is what lets a fourth member exist to serve reads without making the majority an even number. Its ceiling is the replica pool, NOT the pool plus the master: a grown set has no member on the master, so the master&#39;s slot is not one of the ones this can fill.</p>
 </div>
       
         
@@ -10925,7 +10867,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788455148.385412" data-localtime-epoch>1788455148</time>
+              <time datetime="1788514416.345351" data-localtime-epoch>1788514416</time>
             
           </td>
           <td>
@@ -11617,7 +11559,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788455148.385412" data-localtime-epoch>1788455148</time>
+              <time datetime="1788514416.345351" data-localtime-epoch>1788514416</time>
             
           </td>
           <td>
