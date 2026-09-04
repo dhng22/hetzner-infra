@@ -303,9 +303,15 @@
              told about. They are the difference between a string you can copy
              and a string you can use. #}
           {% if creds.notes %}
-          <ul class="hint notes">
-            {% for note in creds.notes %}<li>{{ note }}</li>{% endfor %}
-          </ul>
+          {# FOLDED. These are reference — what a specific driver needs, what a
+             specific one gets wrong — and printing them open turned the tab into
+             a page nobody finishes. Open when something does not connect. #}
+          <details class="ca">
+            <summary>Client notes</summary>
+            <ul class="hint notes">
+              {% for note in creds.notes %}<li>{{ note }}</li>{% endfor %}
+            </ul>
+          </details>
           {% endif %}
         </div>
       </section>
@@ -331,10 +337,8 @@
                       data-copy-text="{{ creds.external_target }}">Copy</button>
             </div>
             <p class="hint">
-              In the Cloudflare dashboard, add <code>{{ creds.external_hostname }}</code>
-              to this cluster's tunnel with that target — and put an Access policy on
-              it. A hostname on the tunnel is reachable by anyone who knows it, and
-              this is the only door in front of your data.
+              Add <code>{{ creds.external_hostname }}</code> to this cluster's tunnel
+              with that target, behind an Access policy.
             </p>
           </div>
           <div>
@@ -355,9 +359,8 @@
           </div>
           {% else %}
           <p class="muted">
-            Reachable from inside the cluster only. Set a tunnel hostname in Settings
-            to reach it from outside — nothing is published on a host port and no
-            firewall is opened.
+            Inside the cluster only. Set a tunnel hostname in Settings to reach it
+            from outside.
           </p>
           {% endif %}
 
@@ -371,12 +374,8 @@
           <details class="ca">
             <summary>CA certificate</summary>
             <p class="hint">
-              This database's own authority, and the only thing that can verify it —
-              nothing in a public root store signs these. Save it wherever your client
-              can read it and point <code>tlsCAFile=</code> at that path; the URL above
-              leaves the option out because only you know where you put it. An
-              application INSIDE the cluster needs none of this: its string already
-              names the copy mounted for it.
+              Nothing public signs this. Save it and point <code>tlsCAFile=</code> at
+              it. Apps inside the cluster already have it mounted.
             </p>
             <div class="conn">
               <pre class="mono">{{ creds.ca_certificate }}</pre>
@@ -393,8 +392,8 @@
              the rule is still in the master's firewall, and an open port with
              nothing behind it is exactly the kind of thing nobody finds again. #}
           <div class="panel-note is-bad">
-            Port {{ creds.legacy_port }} is still open in the master's firewall from
-            when this database was published directly. Nothing listens on it now.
+            Port {{ creds.legacy_port }} is still open in the master's firewall.
+            Nothing listens on it.
           </div>
           {% if firewall.available %}
           <form method="post" action="{{ firewall_href(component.name) }}"

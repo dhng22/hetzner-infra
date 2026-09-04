@@ -386,34 +386,14 @@ class RedisComponent(Component):
         }
 
     def _external_notes(self):
+        # SHORT. Anything that needs a paragraph belongs in the README or in the
+        # comment beside the code that does it — a page nobody finishes reading
+        # is a page that has told nobody anything.
         return [
-            "IT GOES THROUGH THE TUNNEL, so nothing is published on a host port "
-            "and no firewall rule exists to get wrong. The connector dials OUT "
-            "to Cloudflare — there is no address on this side for anyone to "
-            "scan, and losing a machine loses one connector rather than the way "
-            "in, which is why your applications already survive that.",
-            "PUT A CLOUDFLARE ACCESS POLICY IN FRONT OF THAT HOSTNAME. This is "
-            "the door, and it is the one thing here that is yours to close: a "
-            "hostname routed to the tunnel is reachable by anyone who knows it, "
-            "with only this password in the way. A service token is the form "
-            "that suits a machine.",
-            "YOUR CLIENT CONNECTS TO 127.0.0.1, not to the hostname. "
-            "`cloudflared access tcp` holds the tunnel open and listens locally, "
-            "so the URL above is a local address and the hostname appears only "
-            "in the command beside it. Run it next to your application — a "
-            "sidecar container, or a service on the box.",
-            "WHATEVER IT REACHES, IT IS THE PRIMARY. A proxy inside the cluster "
-            "asks every server which one is in charge and forwards to that one, "
-            "so a failover changes nothing you configured and your client needs "
-            "no sentinel support at all — which is just as well, because "
-            "sentinel would answer with names that only resolve in here.",
-            "REDIS SPEAKS NO TLS HERE, but the tunnel does: the hop across the "
-            "internet is encrypted by Cloudflare. What is in the clear is the "
-            "short hop inside this cluster, and the one on your own machine "
-            "between your app and the helper.",
-            "EXPECT A FEW MILLISECONDS MORE PER ROUND TRIP than a direct "
-            "connection — the traffic goes out to Cloudflare and back. Chatty "
-            "code feels this; pooled connections and pipelining hide most of it.",
+            "Always the current primary. Your client needs no sentinel support.",
+            "Put a Cloudflare Access policy on that hostname. It is the only door.",
+            "Your app connects to 127.0.0.1 — the hostname belongs to the helper.",
+            "Redis has no TLS here; the tunnel encrypts the hop across the internet.",
         ]
 
     # --- validation ---------------------------------------------------------

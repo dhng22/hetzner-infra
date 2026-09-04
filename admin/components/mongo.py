@@ -540,43 +540,12 @@ class MongoComponent(Component):
         }
 
     def _external_notes(self):
+        # SHORT — see the note on RedisComponent._external_notes.
         return [
-            "IT GOES THROUGH THE TUNNEL, so nothing is published on a host port "
-            "and no firewall rule exists to get wrong. The connector dials OUT "
-            "to Cloudflare — there is no address on this side for anyone to "
-            "scan, and losing a machine loses one connector rather than the way "
-            "in, which is why your applications already survive that.",
-            "PUT A CLOUDFLARE ACCESS POLICY IN FRONT OF THAT HOSTNAME. This is "
-            "the door, and it is the one thing here that is yours to close: a "
-            "hostname routed to the tunnel is reachable by anyone who knows it, "
-            "with only this password in the way. A service token is the form "
-            "that suits a machine.",
-            "YOUR DRIVER CONNECTS TO 127.0.0.1, not to the hostname. "
-            "`cloudflared access tcp` holds the tunnel open and listens locally, "
-            "so the URL above is a local address and the hostname appears only "
-            "in the command beside it. Run it next to your application — a "
-            "sidecar container, or a service on the box.",
-            "TLS STILL RUNS END TO END, from your driver to the member holding "
-            "the data. Neither the tunnel nor Cloudflare nor the proxy inside "
-            "this cluster can read a query: they forward bytes. The certificate "
-            "already names 127.0.0.1, so it verifies against the address your "
-            "driver actually dialled — download the CA below and add "
-            "`tlsCAFile=`.",
-            "`directConnection=true` IS LOAD-BEARING, do not remove it. Without "
-            "it the driver asks the set who its members are and then connects to "
-            "THEM — and it is answered with names that resolve on this cluster's "
-            "overlay network and nowhere else. That is what a replica set means "
-            "by discovery, and it is why an external URL cannot name "
-            "`replicaSet=`. With it, the driver treats this as one server and a "
-            "proxy inside the cluster does the following-the-primary.",
-            "SO EXTERNAL READS COME FROM THE PRIMARY, whatever this component's "
-            "secondary-reads setting says. That setting is a contract with the "
-            "applications INSIDE the cluster, which use the internal string and "
-            "do discover the set.",
-            "EXPECT A FEW MILLISECONDS MORE PER ROUND TRIP than a direct "
-            "connection — the traffic goes out to Cloudflare and back. A driver "
-            "doing many small round trips feels this; batching and a warm "
-            "connection pool hide most of it.",
+            "Always the current primary, so external reads never hit a secondary.",
+            "Put a Cloudflare Access policy on that hostname. It is the only door.",
+            "Your driver connects to 127.0.0.1 — the hostname belongs to the helper.",
+            "Keep `directConnection=true`, and add `tlsCAFile=` for the CA below.",
         ]
 
     def ca_certificate(self):
