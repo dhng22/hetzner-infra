@@ -71,6 +71,17 @@ MIGRATE_IMAGE = "percona/percona-server-mongodb:7.0"
 #: own, and the error names the file rather than the ownership.
 MONGO_UID = "999"
 
+#: The uid `MIGRATE_IMAGE` runs as — Percona's entrypoint drops to `mongodb`,
+#: which is 1001 there and NOT the 999 above. Same reason as `MONGO_UID` and one
+#: the migration job originally missed: a Swarm secret belongs to root unless it
+#: is told otherwise, so mounting a connection string 0400 without this makes it
+#: unreadable by the only process that needs it. What that looks like is not a
+#: permission error — the job reports "cannot read the source" and mongosh, given
+#: an empty URI, reports `ECONNREFUSED 127.0.0.1:27017`, which reads like a wrong
+#: Atlas password or a firewall. The mode stays 0400: it is what stops anything
+#: else in the container from reading somebody else's cluster credential.
+MIGRATE_UID = "1001"
+
 
 def _op_query(collection, document):
     """
@@ -1421,7 +1432,16 @@ say() { printf '%s %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 # the tools read. NOTHING puts a URI on a command line: container arguments show
 # up in the master's own process table, and one of these two is a full
 # credential for somebody else's cluster.
-cfg() { printf 'uri: %s\n' "$(cat "$1")" > "$2"; }
+# The readability check is not paranoia: a secret mounted 0400 without an
+# explicit owner belongs to root, this image does not run as root, and every
+# symptom of that appears LATER and somewhere else — an empty `uri:` makes
+# mongosh fall back to localhost and report ECONNREFUSED, which reads like a
+# wrong password. Say what is actually wrong, at the point it is knowable.
+cfg() {
+  [ -r "$1" ] || { say "cannot read $1 — the secret is mounted for another user"
+                   exit 1; }
+  printf 'uri: %s\n' "$(cat "$1")" > "$2"
+}
 cfg /run/secrets/migrate-here.uri  /tmp/here.yaml
 cfg /run/secrets/migrate-there.uri /tmp/there.yaml
 
@@ -1566,8 +1586,10 @@ exit 1
             "--restart-condition", "none",
             "--network", base.EDGE_NETWORK,
             "--constraint", "node.role == manager",
-            "--secret", f"source={here},target=migrate-here.uri,mode=0400",
-            "--secret", f"source={there},target=migrate-there.uri,mode=0400",
+            "--secret", f"source={here},target=migrate-here.uri,"
+                        f"uid={MIGRATE_UID},mode=0400",
+            "--secret", f"source={there},target=migrate-there.uri,"
+                        f"uid={MIGRATE_UID},mode=0400",
             "--secret", f"source={self.secret_name('tls-ca')},"
                         f"target={self.name}-ca.crt,mode=0444",
             "--env", f"DIRECTION={direction}",

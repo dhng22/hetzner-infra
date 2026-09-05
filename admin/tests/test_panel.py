@@ -3156,6 +3156,57 @@ class MigrateTest(DatabaseHarness, PanelTest):
         # mongosh has no --config, so its URI goes into the script file instead.
         self.assertIn("mongosh --quiet --nodb --file", body)
 
+    def test_the_connection_strings_are_mounted_for_the_user_that_reads_them(self):
+        """
+        A Swarm secret belongs to root unless the mount says otherwise, and the
+        migration image drops to `mongodb` before the script runs — so a 0400
+        mount without an owner is a file the job cannot open. On the live
+        cluster that surfaced as "cannot read the source" followed by
+        `ECONNREFUSED 127.0.0.1:27017`, because mongosh handed an empty URI
+        falls back to localhost. Neither sentence mentions permissions.
+        """
+        import components.mongo as mongo_mod
+        from components import base
+        self.make_mongo("owned")
+        component = self.components.load("owned")
+        component.apply_secrets({"ATLAS_URI": "mongodb+srv://u:p@atlas.example/db"},
+                                tab="migrate", generate_missing=False)
+        component = self.components.load("owned")
+        started = []
+        real = base.run
+
+        def fake_run(argv, timeout=None, stdin=None):
+            started.append(argv)
+            return True, "secret-id"
+
+        base.run = fake_run
+        try:
+            ok, why = component.start_migration("import")
+        finally:
+            base.run = real
+        self.assertTrue(ok, why)
+        [create] = [a for a in started
+                    if a[:3] == ["docker", "service", "create"]]
+        mounts = [a for a in create if a.startswith("source=")]
+        uris = [m for m in mounts if "migrate-here" in m or "migrate-there" in m]
+        self.assertEqual(len(uris), 2)
+        for mount in uris:
+            # Owned by the user that runs, and still 0400 — the mode is what
+            # keeps somebody else's cluster credential out of reach of anything
+            # else in the container, so widening it is not the fix.
+            self.assertIn(f"uid={mongo_mod.MIGRATE_UID}", mount)
+            self.assertIn("mode=0400", mount)
+
+    def test_an_unreadable_secret_says_so_instead_of_failing_later(self):
+        import components.mongo as mongo_mod
+        body = mongo_mod.MongoComponent._MIGRATE_SCRIPT
+        self.assertIn("-r ", body)
+        self.assertIn("mounted for another user", body)
+        # Before anything tries to connect, or the message it prints is
+        # about the database rather than about the mount.
+        self.assertLess(body.index("mounted for another user"),
+                        body.index("preflight: reading both ends"))
+
     def test_the_job_verifies_and_fails_loudly_on_a_mismatch(self):
         import components.mongo as mongo_mod
         body = mongo_mod.MongoComponent._MIGRATE_SCRIPT
