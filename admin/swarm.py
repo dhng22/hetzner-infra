@@ -9,6 +9,7 @@ preview be generated from the real templates instead of a mock that drifts.
 import datetime as _dt
 import functools
 import os
+import re
 import threading
 import time
 
@@ -1395,22 +1396,64 @@ def alert_destination():
     return {"configured": False, "kind": "none"}
 
 
+#: Go template syntax left in an annotation, e.g. `{{ $labels.service }}`.
+_PLACEHOLDER = re.compile(r"\s*\{\{[^}]*\}\}\s*")
+
+
+def _live_summaries():
+    """
+    {rule_id: summary} for rules that are pending or firing, EXPANDED.
+
+    `/api/v1/rules` returns the rule as written, so an annotation reading
+    "p95 on {{ $labels.service }} is above its SLO" comes back with the braces
+    intact — there is no instance to fill them from. `/api/v1/alerts` returns
+    the instances, where vmalert has already substituted the labels, and that is
+    the sentence worth showing: it names the service that is actually breaching.
+
+    Firing beats pending when a rule has both, because that is the instance
+    somebody is being paged about.
+    """
+    live = {}
+    try:
+        r = requests.get(f"{VMALERT_URL}/api/v1/alerts", timeout=8)
+        r.raise_for_status()
+        for alert in r.json().get("data", {}).get("alerts", []):
+            summary = (alert.get("annotations") or {}).get("summary")
+            key = str(alert.get("rule_id", ""))
+            if not summary or not key:
+                continue
+            if key not in live or alert.get("state") == "firing":
+                live[key] = summary
+    except Exception:  # noqa: BLE001 — the rule list is still worth showing
+        pass
+    return live
+
+
 def alerts():
     """Rules and their firing state, straight from vmalert."""
     out = []
     try:
         r = requests.get(f"{VMALERT_URL}/api/v1/rules", timeout=8)
         r.raise_for_status()
+        live = _live_summaries()
         for group in r.json().get("data", {}).get("groups", []):
             for rule in group.get("rules", []):
                 state = rule.get("state", "inactive")
+                summary = (rule.get("annotations") or {}).get("summary", "")
+                expanded = live.get(str(rule.get("id", "")))
+                # An INACTIVE rule has no instance and never will until it
+                # fires, so its placeholders cannot be filled — they are dropped
+                # rather than printed. "p95 on is above its SLO" reads a little
+                # bare; "p95 on {{ $labels.service }}" reads like the panel is
+                # broken, and that is the one it looked like.
+                summary = expanded or _PLACEHOLDER.sub(" ", summary).strip()
                 out.append({
                     "name": rule.get("name", "—"),
                     "group": group.get("name", "—"),
                     "state": state,
                     "tone": "bad" if state == "firing" else "warn" if state == "pending" else "ok",
                     "severity": (rule.get("labels") or {}).get("severity", "—"),
-                    "summary": (rule.get("annotations") or {}).get("summary", ""),
+                    "summary": summary,
                 })
     except Exception:
         pass
