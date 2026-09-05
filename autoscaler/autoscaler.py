@@ -549,6 +549,38 @@ MEM_LIMIT_MULTIPLE = 2.0
 CPU_RESERVE_FLOOR = 0.02
 MEM_RESERVE_FLOOR_MB = 32
 
+#: THROTTLING, and why the CPU limit cannot be derived from usage alone.
+#:
+#: Everything above reads `container_cpu_usage_seconds_total` — CPU actually
+#: CONSUMED. A container at its CPU limit cannot consume more than the limit, so
+#: the measurement that sets the cap is suppressed BY the cap. Size a cap from
+#: it and the result is self-confirming: the service looks like it wants exactly
+#: what it was allowed, and stays there forever.
+#:
+#: That is not theoretical. An I/O-bound API measured 0.003 cores because it
+#: spends its life waiting on the network, floored to a 0.02 reservation and a
+#: 0.08 limit — 8ms of CPU per 100ms scheduling period. Requests needing 30ms of
+#: CPU could not be served in one period, so the kernel chopped them across four
+#: or five, and the shape of the latency histogram gave it away: 70% of requests
+#: under 5ms, NOTHING between 100 and 250ms, then a hard cluster at 250-500ms.
+#: Not a tail — a second population, quantised by the 100ms period. The service
+#: was two orders of magnitude slower than its work, and every averaged CPU
+#: reading said it was nearly idle, which it was, because it was waiting.
+#:
+#: `container_cpu_cfs_throttled_periods_total` is the one signal that escapes
+#: the trap: it counts periods where the container had work to run and was not
+#: allowed to. Any throttling at all means the cap is too low, so the cap is
+#: raised until throttling stops rather than inferred from what got through.
+#:
+#: Raising it is close to free. Swarm PACKS on reservations, not limits, so an
+#: unused ceiling occupies nothing and costs nothing; contention is settled by
+#: CPU shares, which come from the reservation and are untouched here. The
+#: asymmetry is total — a ceiling set too high costs nothing at all, and one set
+#: too low costs half a second a request.
+THROTTLE_TARGET_PCT = 1.0     # any sustained throttling is too much
+CPU_LIMIT_RELIEF = 4.0        # one decisive step, not a crawl up an hourly cooldown
+CPU_LIMIT_RELIEF_FLOOR = 0.5  # below ~half a core, CFS quantisation dominates latency
+
 #: Don't touch a service for a change smaller than this. Every resize is a
 #: rolling restart of every replica, so chasing a 5% drift would restart the
 #: cluster all day and never converge.
@@ -585,7 +617,24 @@ def measure_usage(service_names):
             if cpu.get(name) is not None and mem.get(name) is not None}
 
 
-def right_size(cpu_q, mem_max_bytes, node_cpu, node_mem):
+def measure_throttling(service_names):
+    """
+    {service: % of scheduling periods in which the CPU cap stopped it}.
+
+    The worst replica, not the mean: one throttled replica serves slow requests
+    to whoever lands on it, and averaging it against two idle ones hides that.
+    """
+    pct = vm_query_map(
+        f'max by ({_CPU_LABEL}) ('
+        f'rate(container_cpu_cfs_throttled_periods_total{{{_CPU_LABEL}!=""}}[5m])'
+        f' / clamp_min(rate(container_cpu_cfs_periods_total{{{_CPU_LABEL}!=""}}[5m]), 1)'
+        f') * 100',
+        label=_CPU_LABEL)
+    return {name: pct.get(name) or 0.0 for name in service_names}
+
+
+def right_size(cpu_q, mem_max_bytes, node_cpu, node_mem,
+               throttled_pct=0.0, cpu_limit_now=0.0):
     """
     (cpu_reservation, memory_reservation_mb, cpu_limit, memory_limit_mb).
 
@@ -593,6 +642,13 @@ def right_size(cpu_q, mem_max_bytes, node_cpu, node_mem):
     than any node can satisfy is not a sizing decision, it is an unschedulable
     task — the failure mode is a replica that sits Pending forever while the
     panel reports the component as down for no visible reason.
+
+    The RESERVATION is what the service typically uses, and it decides packing
+    and CPU shares. The LIMIT is what it may burst to, and it decides latency.
+    They are different questions, and deriving the second from the first is what
+    strangled an API for weeks — see THROTTLE_TARGET_PCT above. So when the
+    kernel reports throttling, the limit is raised on that evidence instead, and
+    it is never lowered while it is still the ceiling something is hitting.
     """
     cpu_res = max(CPU_RESERVE_FLOOR, cpu_q * CPU_RESERVE_HEADROOM)
     mem_res_mb = max(MEM_RESERVE_FLOOR_MB,
@@ -604,8 +660,22 @@ def right_size(cpu_q, mem_max_bytes, node_cpu, node_mem):
     cpu_res = min(cpu_res, cpu_cap)
     mem_res_mb = min(mem_res_mb, mem_cap)
 
+    cpu_lim = cpu_res * CPU_LIMIT_MULTIPLE
+    if throttled_pct > THROTTLE_TARGET_PCT:
+        # One decisive step. Every resize restarts the service's replicas and
+        # is gated behind an hour's cooldown, so crawling up 20% at a time would
+        # spend most of a day at a cap we already know is too low.
+        cpu_lim = max(cpu_lim, cpu_limit_now * CPU_LIMIT_RELIEF,
+                      CPU_LIMIT_RELIEF_FLOOR)
+    else:
+        # Never walk a ceiling back down on quiet alone: throttling stopping is
+        # what the raise was FOR, and treating it as proof the raise was
+        # unnecessary would drop the cap, re-throttle the service, and oscillate
+        # on an hourly cycle. An unused ceiling is free; a wrong one is not.
+        cpu_lim = max(cpu_lim, cpu_limit_now)
+
     return (round(cpu_res, 3), int(mem_res_mb),
-            round(min(cpu_res * CPU_LIMIT_MULTIPLE, cpu_cap * 2), 3),
+            round(min(cpu_lim, cpu_cap * 2), 3),
             int(min(mem_res_mb * MEM_LIMIT_MULTIPLE, mem_cap * 2)))
 
 
@@ -624,24 +694,34 @@ def apply_right_sizing(found, usage, node_cpu, node_mem):
     from the beginning.
     """
     applied = 0
+    throttling = measure_throttling([w.name for w in found])
     for w in found:
         if w.rolling or w.name not in usage:
             continue
         cpu_q, mem_max = usage[w.name]
         cpu_res, mem_res, cpu_lim, mem_lim = right_size(
-            cpu_q, mem_max, node_cpu, node_mem)
+            cpu_q, mem_max, node_cpu, node_mem,
+            throttling.get(w.name, 0.0), w.cpu_limit)
 
         now = time.time()
         if now - _last_resize.get(w.name, 0) < RESIZE_COOLDOWN_SECONDS:
             continue
+        # The LIMIT counts as a change in its own right. It used to be a pure
+        # function of the reservation, so testing the reservation alone was the
+        # same test; now a throttled service can need a bigger ceiling while its
+        # measured usage — capped by that very ceiling — has not moved at all.
         if not (_changed_enough(w.cost.cores, cpu_res)
-                or _changed_enough(w.cost.mb, mem_res)):
+                or _changed_enough(w.cost.mb, mem_res)
+                or _changed_enough(w.cpu_limit, cpu_lim)):
             continue
 
         if DRY_RUN:
-            log.info("[dry-run] would resize %s to %.3f CPU / %dMB reserved "
-                     "(measured %.3f CPU / %dMB)", w.name, cpu_res, mem_res,
-                     cpu_q, int(mem_max / (1024 * 1024)))
+            log.info("[dry-run] would resize %s to %.3f CPU / %dMB reserved, "
+                     "cap %.3f -> %.3f CPU (measured %.3f CPU / %dMB, "
+                     "throttled %.1f%% of periods)",
+                     w.name, cpu_res, mem_res, w.cpu_limit, cpu_lim,
+                     cpu_q, int(mem_max / (1024 * 1024)),
+                     throttling.get(w.name, 0.0))
             _last_resize[w.name] = now
             continue
 
@@ -658,10 +738,17 @@ def apply_right_sizing(found, usage, node_cpu, node_mem):
         _last_resize[w.name] = now
         applied += 1
         M_EVENTS.labels(direction="resize").inc()
-        log.info("resized %s: %.2f -> %.3f CPU, %d -> %dMB reserved "
-                 "(measured q%d %.3f CPU, peak %dMB)",
+        # The CAP is in this line because its absence is how the original
+        # problem stayed hidden: the reservation moved around plausibly for
+        # weeks while the ceiling that was costing half a second a request was
+        # never printed anywhere.
+        log.info("resized %s: %.2f -> %.3f CPU, %d -> %dMB reserved, "
+                 "cap %.3f -> %.3f CPU (measured q%d %.3f CPU, peak %dMB, "
+                 "throttled %.1f%% of periods)",
                  w.name, w.cost.cores, cpu_res, int(w.cost.mb), mem_res,
-                 int(USAGE_CPU_Q * 100), cpu_q, int(mem_max / (1024 * 1024)))
+                 w.cpu_limit, cpu_lim,
+                 int(USAGE_CPU_Q * 100), cpu_q, int(mem_max / (1024 * 1024)),
+                 throttling.get(w.name, 0.0))
     return applied
 
 

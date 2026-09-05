@@ -237,6 +237,39 @@ groups:
         annotations:
           summary: "p95 on {{ $labels.service }} is above its SLO and the autoscaler has not recovered it"
 
+      # A SERVICE THE CPU CAP IS HOLDING BACK.
+      #
+      # The cap used to be derived from CPU consumed, which a capped container
+      # cannot exceed — so the measurement that set it was suppressed by it, and
+      # a strangled service reported itself idle. The autoscaler now raises the
+      # cap on this signal instead. This alert is for when that has not worked:
+      # the service is already at the node's ceiling, or the raise is stuck
+      # behind its cooldown, or something re-applied a smaller number.
+      #
+      # It is worth waking somebody for because the damage is invisible in every
+      # other view. Throttling does not show up as CPU pressure, an error, or a
+      # failed health check — the requests all succeed, they just take five
+      # scheduling periods instead of one, and the service looks nearly idle the
+      # whole time it is happening.
+      - alert: ServiceCpuThrottled
+        expr: |
+          max by (container_label_com_docker_swarm_service_name) (
+            rate(container_cpu_cfs_throttled_periods_total[10m])
+            / clamp_min(rate(container_cpu_cfs_periods_total[10m]), 1)
+          ) * 100 > 5
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.container_label_com_docker_swarm_service_name }} is being cut off by its CPU cap"
+          description: >-
+            More than 5% of this service's scheduling periods end with the
+            kernel stopping it because it has used its CPU quota. Every request
+            being served at that moment waits for the next period, which turns
+            milliseconds of work into hundreds of milliseconds of latency. The
+            autoscaler raises the cap on its own when it sees this; if the alert
+            persists, it has run out of node to give or something is re-applying
+            a smaller limit.
+
       # A SERVICE TOO BIG TO REDEPLOY.
       #
       # Every app renders `order: start-first, parallelism: 1`, so Swarm starts

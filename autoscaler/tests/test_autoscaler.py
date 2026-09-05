@@ -88,9 +88,63 @@ class RightSizingTest(unittest.TestCase):
 
     GB = 1024 ** 3
 
-    def size(self, cpu_q, mem_mb, node_cpu=2, node_mem_gb=4):
+    def size(self, cpu_q, mem_mb, node_cpu=2, node_mem_gb=4,
+             throttled_pct=0.0, cpu_limit_now=0.0):
         return A.right_size(cpu_q, mem_mb * 1024 * 1024,
-                            int(node_cpu * 1e9), int(node_mem_gb * self.GB))
+                            int(node_cpu * 1e9), int(node_mem_gb * self.GB),
+                            throttled_pct, cpu_limit_now)
+
+    def test_a_throttled_service_is_believed_over_its_own_cpu_reading(self):
+        """
+        THE TRAP THIS EXISTS FOR. Every other input here is CPU *consumed*, and
+        a container at its cap cannot consume past the cap — so a cap sized from
+        consumption is self-confirming and a strangled service looks content
+        forever.
+
+        Live shape: an I/O-bound API measured 0.003 cores because it spends its
+        life waiting on the network. Floored to a 0.02 reservation, that gave a
+        0.08 limit — 8ms of CPU per 100ms period — so requests needing 30ms of
+        CPU got chopped across five periods. 70% of requests under 5ms, NOTHING
+        between 100 and 250ms, then a hard cluster at 250-500ms: not a tail, a
+        second population quantised by the scheduler.
+        """
+        _, _, strangled, _ = self.size(0.003, 300)
+        self.assertLess(strangled, 0.1)               # what usage alone concludes
+        _, _, relieved, _ = self.size(0.003, 300, throttled_pct=12.0,
+                                      cpu_limit_now=strangled)
+        self.assertGreaterEqual(relieved, A.CPU_LIMIT_RELIEF_FLOOR)
+        self.assertGreater(relieved, strangled * 4)
+
+    def test_relief_keeps_climbing_for_an_appetite_the_floor_does_not_cover(self):
+        # A service still throttled after the first raise needs more than the
+        # floor, and the only evidence of how much more is that it is STILL
+        # throttled. Two steps, not a twenty-percent crawl up an hourly cooldown.
+        _, _, once, _ = self.size(0.003, 300, throttled_pct=12.0, cpu_limit_now=0.08)
+        _, _, twice, _ = self.size(0.003, 300, throttled_pct=12.0, cpu_limit_now=once)
+        self.assertGreater(twice, once)
+
+    def test_a_raised_cap_is_not_walked_back_when_the_throttling_stops(self):
+        """
+        Throttling stopping is what the raise was FOR. Reading it as proof the
+        raise was unnecessary drops the cap, re-throttles the service and
+        oscillates on an hourly cycle — each turn of which restarts every
+        replica. Swarm packs on reservations, so an unused ceiling costs
+        nothing; a wrong one costs half a second a request.
+        """
+        _, _, kept, _ = self.size(0.003, 300, throttled_pct=0.0, cpu_limit_now=0.5)
+        self.assertGreaterEqual(kept, 0.5)
+
+    def test_relief_still_cannot_exceed_what_the_node_has(self):
+        _, _, cap, _ = self.size(0.003, 300, node_cpu=2, throttled_pct=90.0,
+                                 cpu_limit_now=1.9)
+        self.assertLessEqual(cap, 2.0)
+
+    def test_a_cap_change_alone_is_enough_to_apply_a_resize(self):
+        # The limit used to be a pure function of the reservation, so testing
+        # the reservation was the same test. A throttled service now needs a
+        # bigger ceiling while its measured usage — capped by that ceiling — has
+        # not moved at all, and that resize must still happen.
+        self.assertTrue(A._changed_enough(0.08, A.CPU_LIMIT_RELIEF_FLOOR))
 
     def test_the_real_measurement_fits_on_the_master(self):
         cpu_res, mem_res, _, _ = self.size(0.0658, 151)
