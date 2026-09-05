@@ -1337,14 +1337,22 @@ def admit(found, wants, bins, live_replicas):
             sorted(bins, key=lambda b: (b.is_manager, -b.free.cpu, str(b.key)))}
     bin_order = [b for b in sorted(bins, key=lambda b: (b.is_manager, -b.free.cpu, str(b.key)))]
 
+    placed = {w.name: [] for w in order}
+
     def try_place(w):
         for b in bin_order:
             if w.pinned and b.is_manager:
                 continue
             if w.cost.fits_in(free[b.key]):
                 free[b.key] = free[b.key] - w.cost
+                placed[w.name].append(b.key)
                 return True
         return False
+
+    def would_fit(w):
+        """Whether one more replica COULD be placed, without taking the space."""
+        return any(w.cost.fits_in(free[b.key])
+                   for b in bin_order if not (w.pinned and b.is_manager))
 
     def rounds(target_of, on_fail):
         active = list(order)
@@ -1363,6 +1371,45 @@ def admit(found, wants, bins, live_replicas):
     rounds(lambda w: w.policy.min_replicas, lambda w: starved.add(w.name))
     rounds(lambda w: max(wants.get(w.name, 0), w.policy.min_replicas),
            lambda w: capped.setdefault(w.name, granted[w.name]))
+
+    # THE ROLLOUT SLOT. Every app renders `order: start-first, parallelism: 1`
+    # (admin/components/app.py), so Swarm starts a replacement task BEFORE
+    # stopping the one it replaces: a service sitting at N momentarily needs
+    # room for N+1. A service may therefore only hold N replicas when N+1 fits.
+    #
+    # Packing a node to exactly N does not mean "full", it means FROZEN, and the
+    # failure is silent in a way worth spelling out. Every wanted replica is
+    # running, so nothing is starved and nothing is capped; the ceiling equals
+    # the want; the fleet is the right size by its own arithmetic. Then a deploy
+    # arrives, its first replacement task sits `Pending — no suitable node`
+    # forever, `UpdateStatus` reads "updating" indefinitely, and the service
+    # keeps serving the OLD image while the panel reports the new one deployed.
+    #
+    # That is not hypothetical. On this cluster a scale-up to 3 replicas took
+    # the master's last 409MB two minutes before CI pushed an image, and the
+    # rollout stopped dead for half an hour with no alert and every replica
+    # healthy — the service was simply running code nobody had shipped.
+    #
+    # The slot is SHARED, not per-service: the check releases the space again
+    # when it succeeds, so a node loses one replica of room in total rather than
+    # one per service. Shared is enough to prevent the deadlock, which is the
+    # thing worth spending capacity on. Two components rolling at once contend
+    # for the one slot, but that resolves itself — the first rollout's old task
+    # stops when its replacement starts, freeing exactly what the second is
+    # waiting for. Reserving per service would turn that scheduling delay into
+    # permanently idle memory on every node that runs more than one app.
+    #
+    # The floor outranks the slot. A service below its minimum is already an
+    # emergency, and taking a replica off it to protect a future deploy makes a
+    # live problem worse to prevent a possible one.
+    for w in order:
+        if granted[w.name] <= w.policy.min_replicas or would_fit(w):
+            continue
+        granted[w.name] -= 1
+        capped.setdefault(w.name, granted[w.name])
+        if placed[w.name]:
+            key = placed[w.name].pop()
+            free[key] = free[key] + w.cost
 
     # Admission caps GROWTH; it never scales anything down. A transient overhead
     # spike (an infrastructure rollout doubling a reservation for 90 seconds)

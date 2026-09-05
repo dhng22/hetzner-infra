@@ -160,20 +160,56 @@ class AdmissionTest(unittest.TestCase):
         self.b = workload("b", 0.25, 256, min_replicas=1, max_replicas=10)
 
     def test_growth_is_capped_not_granted(self):
-        bins = [A.Bin("w", res(1.0, 2000), False)]
+        # 1.5 CPU holds two 0.5-CPU replicas AND the rollout slot a third would
+        # need; 8 never fits. The bin was 1.0 while admission ignored rollouts,
+        # which packed the node so full that the service could not be deployed.
+        bins = [A.Bin("w", res(1.5, 2000), False)]
         admitted, capped, starved = A.admit(
             [self.a], {"a": 8}, bins, {"a": 1})
-        self.assertEqual(admitted["a"], 2)       # 2 x 0.5 CPU fits, 8 does not
+        self.assertEqual(admitted["a"], 2)
         self.assertIn("a", capped)
         self.assertEqual(starved, set())
 
     def test_neither_service_starves_the_other(self):
         """Strict priority order would give one of them nearly everything."""
-        bins = [A.Bin("w", res(1.5, 4000), False)]
+        # 2.0 CPU, not 1.5: two of each is 1.5, and the shared rollout slot is
+        # the 0.5 on top. At 1.5 the pair fits exactly and neither could roll.
+        bins = [A.Bin("w", res(2.0, 4000), False)]
         admitted, _, _ = A.admit([self.a, self.b], {"a": 9, "b": 9}, bins,
                                  {"a": 1, "b": 1})
         self.assertGreaterEqual(admitted["a"], 2)
         self.assertGreaterEqual(admitted["b"], 2)
+
+    def test_growth_stops_one_replica_short_of_unrollable(self):
+        # `order: start-first` starts the replacement before stopping the task
+        # it replaces, so a service at N transiently needs room for N+1. Filling
+        # the node to exactly N leaves every replica healthy and every deploy
+        # stuck on `Pending — no suitable node`, serving the old image while the
+        # panel reports the new one live.
+        bins = [A.Bin("w", res(2.0, 4000), False)]
+        admitted, capped, _ = A.admit([self.a], {"a": 10}, bins, {"a": 1})
+        self.assertEqual(admitted["a"], 3)       # 4 x 0.5 fits, so 3 may run
+        self.assertIn("a", capped)
+
+    def test_the_rollout_slot_is_shared_not_charged_to_each_service(self):
+        # One node loses one replica of room in total, not one per service.
+        # Charging every service would idle memory on every multi-app node to
+        # prevent a contention that resolves itself: the first rollout's old
+        # task stops when its replacement starts, freeing what the second waits
+        # for. `b` keeps both replicas even though `a` just gave one back.
+        bins = [A.Bin("w", res(2.0, 4000), False)]
+        admitted, _, _ = A.admit([self.a, self.b], {"a": 9, "b": 9}, bins,
+                                 {"a": 1, "b": 1})
+        self.assertEqual((admitted["a"], admitted["b"]), (2, 2))
+
+    def test_the_floor_outranks_the_rollout_slot(self):
+        # A service below its minimum is a live emergency; a stuck future deploy
+        # is a possible one. The slot never takes a replica off the floor.
+        a = workload("a", 0.5, 384, min_replicas=2, max_replicas=10)
+        bins = [A.Bin("w", res(1.0, 2000), False)]
+        admitted, _, starved = A.admit([a], {"a": 2}, bins, {"a": 2})
+        self.assertEqual(admitted["a"], 2)
+        self.assertEqual(starved, set())
 
     def test_minimums_win_over_growth(self):
         a = workload("a", 0.5, 384, min_replicas=2, max_replicas=10)

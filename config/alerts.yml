@@ -237,6 +237,41 @@ groups:
         annotations:
           summary: "p95 on {{ $labels.service }} is above its SLO and the autoscaler has not recovered it"
 
+      # A SERVICE TOO BIG TO REDEPLOY.
+      #
+      # Every app renders `order: start-first, parallelism: 1`, so Swarm starts
+      # a replacement task before stopping the one it replaces: a service at N
+      # transiently needs room for N+1. Admission now reserves that slot, so the
+      # exported ceiling is the largest count the node can still ROLL, not the
+      # largest it can hold.
+      #
+      # Running above it is the one state where everything looks healthy and
+      # nothing can ship. Every replica is up, no service is starved, the fleet
+      # is the right size by its own arithmetic — and the next deploy's first
+      # task sits `Pending: no suitable node` indefinitely while the service
+      # keeps serving the previous image. That happened here for half an hour,
+      # and the only evidence was a status field nobody was watching.
+      #
+      # The ceiling caps growth and never shrinks anything, by design, so this
+      # does not clear itself: a service that grew past the line stays there
+      # until demand falls or the fleet does. Hence a real alert rather than a
+      # log line.
+      - alert: ServiceAboveRolloutCeiling
+        expr: |
+          autoscaler_service_current_replicas
+            > on (service) overseer_service_replica_ceiling
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.service }} has more replicas than its nodes can roll — deploys will hang"
+          description: >-
+            Its node cannot hold one more replica of this service, which is what
+            `start-first` needs to replace a task. A deploy will be accepted,
+            report success, and then sit with a task Pending forever while the
+            old image keeps serving. Give the fleet room or let the service
+            shrink; `docker service ps {{ $labels.service }}` names the stuck
+            task.
+
       # Compare against the exported ceiling, never a literal.
       #
       # The two extra conjuncts are load-bearing. A FIXED-replica component sits
