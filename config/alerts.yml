@@ -413,8 +413,16 @@ groups:
       # 30m because a dependency having a bad ten minutes is not a page, and
       # because the thing being alerted on is by definition not something the
       # cluster can fix by itself.
+      # `unless` is what keeps this from being noise. Every service whose
+      # dependency HAS a name is answered by ThrottledByNamedDependency below,
+      # and firing both means the reader gets the specific alert alongside a
+      # vaguer copy of itself — which is how the useful one gets ignored. This
+      # rule is now only for the case with nothing to name: an unowned cause
+      # with no target, where "we do not know which" IS the finding.
       - alert: ThrottledByUnownedDependency
-        expr: overseer_signal_unowned == 1
+        expr: |
+          overseer_signal_unowned == 1
+            unless on (service, cause) overseer_service_dependency
         for: 30m
         labels: { severity: warning }
         annotations:
