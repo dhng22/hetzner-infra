@@ -72,6 +72,10 @@ class _Cache:
 _latency = _Cache()
 _dependencies = _Cache()
 
+#: The latency STATISTIC last discovered for each service, so a change of
+#: statistic can be announced. See the warning in `discover_latency`.
+_kinds = {}
+
 
 def discover_latency(service_names, on_missing=None):
     """
@@ -112,6 +116,31 @@ def discover_latency(service_names, on_missing=None):
         out[svc] = (hit[1], hit[2], hit[3]) if hit else None
         if hit:
             log.info("%s: latency signal is %s from %s", svc, hit[2], hit[3])
+            was = _kinds.get(svc)
+            _kinds[svc] = hit[2]
+            if was and was != hit[2]:
+                # THE SLO NOW MEANS SOMETHING ELSE. Both statistics are compared
+                # against the same `autoscale.slo_p95_ms`, and a mean sits far
+                # below the tail it is standing in for: this service's mean ran
+                # at 92ms for weeks while its real p95 was 497ms. Shipping
+                # histogram buckets is a one-line library change with no visible
+                # connection to scaling, and the moment it lands the reported
+                # number can jump fivefold with the application untouched.
+                #
+                # Worth a warning rather than the INFO above, because the
+                # dangerous half is silent. An SLO calibrated against a mean is
+                # usually far under the same service's p95, so the DOWN
+                # threshold (`slo x down_p95_ratio`) becomes unreachable and the
+                # service can never shrink again — it holds whatever count it
+                # happened to be at, forever, and nothing reports a fault.
+                log.warning(
+                    "%s: latency signal changed from %s to %s. Both are compared "
+                    "against the same autoscale.slo_p95_ms, and a p95 sits well "
+                    "above a mean, so that number now means something stricter "
+                    "than it did. Check it still describes what you want, "
+                    "especially slo x autoscale.down_p95_ratio — if the new "
+                    "reading never falls below it, this service can no longer "
+                    "scale down.", svc, was, hit[2])
         elif on_missing:
             on_missing(svc)
     _latency.store(out)
@@ -155,3 +184,4 @@ def reset_caches():
     """For tests, and for a process that wants a fresh look after a deploy."""
     _latency.value, _latency.at = {}, 0.0
     _dependencies.value, _dependencies.at = {}, 0.0
+    _kinds.clear()

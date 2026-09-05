@@ -520,9 +520,24 @@ def update_status(service_name):
                 started.replace("Z", "+00:00").split(".")[0] + "+00:00").timestamp()
         except ValueError:
             epoch = None
+    verdict = _UPDATE_VERDICT.get(state)
+    # An update that is still "updating" long after any healthy rollout would
+    # have finished is not in progress, it is STUCK — Swarm has accepted the
+    # spec and cannot place a task for it. It reports the same state forever and
+    # will never produce a verdict of its own, so left alone the page says "in
+    # progress" for as long as the condition lasts. It said that here for forty
+    # minutes while a task sat Pending on a full node.
+    #
+    # Deliberately not "failed": nothing was rolled back and the new spec is
+    # still live. Same grace period as the history's, so the banner and the row
+    # below it cannot disagree about when patience runs out.
+    if state == "updating" and epoch is not None:
+        import state as _state
+        if time.time() - epoch > _state.PENDING_GRACE_SECONDS:
+            verdict = _state.STALLED
     return {
         "state": state,
-        "verdict": _UPDATE_VERDICT.get(state),
+        "verdict": verdict,
         "started_epoch": epoch,
         "message": status.get("Message") or "",
         "at": _age(status.get("CompletedAt") or started),

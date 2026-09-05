@@ -1,7 +1,7 @@
 {# Swarm's own verdict on the last rollout, first on the page: it is the answer
    to "did my deploy work", and the history below can only ever say what the
    panel asked for. #}
-{% set tone = {'done': 'ok', 'failed': 'bad'}.get(rollout.verdict, 'warn') %}
+{% set tone = {'done': 'ok', 'failed': 'bad', 'stalled': 'bad'}.get(rollout.verdict, 'warn') %}
 {% if rollout and rollout.state %}
 <section class="panel">
   <div class="panel-head">
@@ -10,6 +10,7 @@
     <span class="pill {{ tone }}">
       {% if rollout.verdict == 'done' %}converged
       {% elif rollout.verdict == 'failed' %}rolled back
+      {% elif rollout.verdict == 'stalled' %}stuck — never placed
       {% else %}in progress{% endif %}
     </span>
   </div>
@@ -28,7 +29,9 @@
         <span class="row-sub">
           {{ rollout.state }} · {{ rollout.at }}{% if rollout.message %} · {{ rollout.message }}{% endif %}
           {% if rollout.verdict == 'failed' %}
-          · the previous version is still serving; check the Logs tab for why the new one exited
+          · Swarm put the previous version back; check the Logs tab for why the new one exited
+          {% elif rollout.verdict == 'stalled' %}
+          · nothing was rolled back — this spec is still live and still waiting for a node to place it
           {% endif %}
         </span>
       </span>
@@ -158,7 +161,7 @@
   </div>
   <div class="rows">
     {% for d in deployments %}
-    {% set row = {'done': 'ok', 'failed': 'bad', 'pending': 'warn'}.get(d.status, 'mute') %}
+    {% set row = {'done': 'ok', 'failed': 'bad', 'stalled': 'bad', 'pending': 'warn'}.get(d.status, 'mute') %}
     <div class="deploy-row {{ row }}">
       <span class="stripe"></span>
       <span class="src">{{ d.source }}</span>
@@ -170,8 +173,13 @@
         </span>
       </span>
       <span class="pill {{ row }}">
+        {#- "rolled back" and "never placed" are opposite facts and were one
+            word. Rolled back: the tasks ran, died, and Swarm restored the old
+            spec — the image is the problem. Never placed: no task ever started,
+            nothing was reverted, and the cluster is the problem. -#}
         {%- if d.status == 'done' %}deployed
         {%- elif d.status == 'failed' %}rolled back
+        {%- elif d.status == 'stalled' %}never placed
         {%- elif d.status == 'pending' %}deploying
         {%- else %}superseded{% endif -%}
       </span>

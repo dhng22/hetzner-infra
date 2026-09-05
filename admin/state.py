@@ -133,8 +133,22 @@ def infra_version():
 
 PENDING = "pending"      # accepted by Swarm, tasks not yet converged
 DONE = "done"            # Swarm reports the rollout completed
-FAILED = "failed"        # rejected outright, or rolled back after failing
+FAILED = "failed"        # rejected outright, or reverted by Swarm after failing
+STALLED = "stalled"      # accepted, never placed; the spec is still the new one
 SUPERSEDED = "superseded"  # another deploy overtook it; its fate is unknowable
+
+# FAILED and STALLED were one status, and collapsing them told you the opposite
+# of what happened. FAILED means Swarm ran the new tasks, they died, and
+# `failure_action: rollback` put the OLD spec back: your image is broken and the
+# cluster is fine. STALLED means Swarm accepted the new spec and never placed a
+# task at all — no node had room, or the image would not pull. Nothing was
+# reverted, the service is still trying, and the running container is the
+# previous image only because the replacement has not started.
+#
+# Different evidence, different person, opposite next move: one is read in the
+# application's logs, the other in `docker service ps` and the fleet's capacity.
+# The page said "rolled back" for both, which sent you to look for a crash that
+# had never happened while a task sat Pending for forty minutes.
 
 
 def status_of(entry):
@@ -201,7 +215,12 @@ def reconcile(name, verdict, started_epoch=None):
             entry["status"] = SUPERSEDED
             changed = True
 
-    if newest is not None and verdict in (DONE, FAILED):
+    # STALLED settles a record too. It arrives from Swarm's own UpdateStatus —
+    # "updating" for longer than any rollout takes — which is observed evidence,
+    # unlike `expire_pending`'s clock, so it is the better of the two paths to
+    # the same conclusion. Without it, a verdict of STALLED would be truthy
+    # enough to skip the expiry call and leave the row "deploying" forever.
+    if newest is not None and verdict in (DONE, FAILED, STALLED):
         # 30s of slack: the record is written just before the CLI call returns,
         # so its timestamp can sit marginally after the rollout Swarm reports.
         if started_epoch is None or started_epoch >= newest.get("epoch", 0) - 30:
@@ -237,11 +256,17 @@ def expire_pending(name, now=None):
         if entry.get("component") != name or status_of(entry) != PENDING:
             continue
         if now - entry.get("epoch", now) > PENDING_GRACE_SECONDS:
-            entry["status"] = FAILED
+            # STALLED, not FAILED. Reaching this line means Swarm never produced
+            # a verdict, which is precisely the case where nothing was rolled
+            # back: the new spec is still live and still waiting.
+            entry["status"] = STALLED
             entry["ok"] = False
             entry["detail"] = ((entry.get("detail") or "") +
                                "\n\nNever converged. Swarm accepted the spec but the "
-                               "tasks did not reach running.")[-2000:]
+                               "tasks did not reach running. Nothing was rolled "
+                               "back — the service is still on this spec, waiting. "
+                               "`docker service ps` names the task and says why "
+                               "it cannot start.")[-2000:]
             changed = True
     if changed:
         _write(HISTORY, entries)

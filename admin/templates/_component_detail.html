@@ -21,7 +21,9 @@
       {% if newest.live %}
         <span class="pill ok plain">live</span>
       {% elif newest.status == 'failed' %}
-        <span class="pill bad plain">not live — last deploy failed</span>
+        <span class="pill bad plain">not live — rolled back</span>
+      {% elif newest.status == 'stalled' %}
+        <span class="pill bad plain">not live — never placed</span>
       {% elif newest.status == 'superseded' %}
         <span class="pill mute plain">overtaken by a later deploy</span>
       {% else %}

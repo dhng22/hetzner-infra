@@ -10,6 +10,7 @@ sake: the panel is a root console, so "does this route refuse what it should
 refuse" is a correctness property worth pinning.
 """
 
+import datetime as _dt
 import errno
 import os
 import importlib.machinery
@@ -17,6 +18,8 @@ import shutil
 import sys
 import tempfile
 import re
+import time
+import types
 import unittest
 
 _ADMIN = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1680,6 +1683,91 @@ class PanelTest(unittest.TestCase):
         last = self.panel.state.history("pendings")[0]
         self.assertEqual(last["status"], self.panel.state.PENDING)
         self.assertEqual(last["source"], "panel")
+
+    def test_a_deploy_that_was_never_placed_is_not_called_rolled_back(self):
+        """
+        Opposite facts, and they were one word. Rolled back means the tasks ran,
+        died, and Swarm restored the previous spec — read the app's logs. Never
+        placed means no task ever started and NOTHING was reverted — read
+        `docker service ps` and the fleet's capacity. Calling the second one
+        "rolled back" sent a human hunting a crash that had not happened while a
+        task sat Pending on a full node for forty minutes.
+        """
+        st = self.panel.state
+        csrf, _ = self.create_app("stuck")
+        real = self.panel.data.deploy_image_async
+        self.panel.data.deploy_image_async = lambda service, image: (True, "accepted")
+        try:
+            self.client.post("/components/stuck/action", data={
+                "csrf": csrf, "action": "deploy-image",
+                "image": "ghcr.io/you/app:sha-5ta11ed"})
+        finally:
+            self.panel.data.deploy_image_async = real
+        self.assertEqual(st.history("stuck")[0]["status"], st.PENDING)
+
+        st.expire_pending("stuck", now=time.time() + st.PENDING_GRACE_SECONDS + 1)
+        row = st.history("stuck")[0]
+        self.assertEqual(row["status"], st.STALLED)
+        self.assertNotEqual(row["status"], st.FAILED)
+        self.assertIn("Nothing was rolled back", row["detail"])
+        self.assertFalse(row["ok"])
+
+    def test_the_history_row_for_a_stalled_deploy_says_never_placed(self):
+        # The status only helps if the PAGE stops printing the other word.
+        st = self.panel.state
+        csrf, _ = self.create_app("stalledrow")
+        real = self.panel.data.deploy_image_async
+        self.panel.data.deploy_image_async = lambda service, image: (True, "accepted")
+        try:
+            self.client.post("/components/stalledrow/action", data={
+                "csrf": csrf, "action": "deploy-image",
+                "image": "ghcr.io/you/app:sha-5ta11ed"})
+        finally:
+            self.panel.data.deploy_image_async = real
+        st.expire_pending("stalledrow",
+                          now=time.time() + st.PENDING_GRACE_SECONDS + 1)
+        rows = st.history("stalledrow")
+        self.assertEqual(rows[0]["status"], st.STALLED)
+
+        # Through the real route and the real template. `fixtures` keeps its own
+        # history list, so the rows have to be handed to the route the way swarm
+        # would hand them over on a cluster.
+        real_d = self.panel.data.deployments
+        self.panel.data.deployments = lambda n, svc, limit=25: (rows, {
+            "state": "updating", "verdict": st.STALLED, "started_epoch": None,
+            "message": "update in progress", "at": "40m",
+            "image": "ghcr.io/you/app:sha-5ta11ed",
+            "image_short": "app:sha-5ta11ed"})
+        try:
+            page = self.client.get(
+                "/components/stalledrow?tab=deployments").data.decode()
+        finally:
+            self.panel.data.deployments = real_d
+        self.assertIn("never placed", page)
+        # The banner says the disclaimer out loud rather than leaving the reader
+        # to notice which word is missing.
+        self.assertIn("nothing was rolled back", page)
+        self.assertIn("still waiting for a node", page)
+        self.assertNotIn("not live — rolled back", page)
+
+    def test_a_stuck_update_is_read_off_the_same_clock_as_the_history(self):
+        """
+        Swarm reports "updating" forever when it cannot place a task and never
+        produces a verdict of its own, so the banner said "in progress" for as
+        long as the condition lasted — forty minutes, here. `update_status` now
+        calls that STALLED off the clock, and it must be the SAME clock the
+        history expires on, or the banner and the row beneath it disagree about
+        when patience has run out.
+
+        Asserted against the source because this suite substitutes `fixtures`
+        for `swarm` at import time, so the real module is never loaded in it.
+        """
+        with open(os.path.join(_ADMIN, "swarm.py")) as fh:
+            source = fh.read()
+        block = source[source.index('if state == "updating"'):][:400]
+        self.assertIn("_state.PENDING_GRACE_SECONDS", block)
+        self.assertIn("_state.STALLED", block)
+        self.assertNotIn("FAILED", block)
 
     def test_the_logs_tab_asks_for_the_depth_you_picked(self):
         self.create_app("noisy")
