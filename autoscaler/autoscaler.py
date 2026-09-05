@@ -618,7 +618,43 @@ RESIZE_MIN_CHANGE = 0.25
 RESIZE_MIN_HISTORY = "2h"
 
 USAGE_CPU_Q = 0.90
+
+#: How long after a container starts its CPU says nothing about what the
+#: service needs. A JVM spends its first minutes loading, linking and JIT-ing
+#: everything it owns, and that burst is the highest CPU it will ever draw —
+#: on the live cluster an idle API measured 0.272 cores at q90 while serving
+#: nothing, purely because it had been restarting. Doubling that for headroom
+#: produced a reservation twenty times its steady appetite.
+#:
+#: RESIZE_MIN_HISTORY was supposed to dilute this, and cannot: a service that
+#: restarts often is one whose window is MOSTLY warm-up, and that is exactly
+#: the service being sized wrongly. Dilution is the wrong instrument — the
+#: samples are not noise to average out, they are measurements of a different
+#: thing. cadvisor publishes when each container started, so they can simply be
+#: left out.
+SIZING_WARMUP_SECONDS = 600
+
+#: Minutes of settled measurement a resize needs before it means anything.
+#: Below this the quantile is a handful of samples wearing a statistic's name,
+#: and the service it describes — one that cannot stay up for half an hour — is
+#: the last thing that should have its reservation rewritten from its own
+#: thrashing. Leaving the size alone until it settles is the honest answer.
+RESIZE_MIN_SETTLED_MINUTES = 30
+
 _last_resize = {}
+
+
+def _settled(inner):
+    """
+    `inner`, with every container still warming up dropped.
+
+    The comparison is evaluated at each step of the surrounding window, not
+    once at query time, so a sample is kept or dropped by how old the container
+    was AT THAT MOMENT. That is what makes this an exclusion of warm-up rather
+    than an exclusion of services that happen to be young right now.
+    """
+    return (f'max by ({_CPU_LABEL}) ({inner} and on (id) '
+            f'(time() - container_start_time_seconds > {SIZING_WARMUP_SECONDS}))')
 
 
 def measure_usage(service_names):
@@ -628,20 +664,38 @@ def measure_usage(service_names):
     Both are per replica: cadvisor reports per container and these aggregate
     with max/quantile across the replicas of a service, so the answer is "what
     does ONE of these need", which is the unit a reservation is in.
+
+    Both are also measured over SETTLED time only, and a service without enough
+    of it is left out entirely rather than sized from what little there is.
     """
+    cpu_series = _settled(f'rate(container_cpu_usage_seconds_total'
+                          f'{{{_CPU_LABEL}!=""}}[5m])')
+    mem_series = _settled(f'container_memory_working_set_bytes'
+                          f'{{{_CPU_LABEL}!=""}}')
     cpu = vm_query_map(
         f'quantile_over_time({USAGE_CPU_Q}, '
-        f'max by ({_CPU_LABEL}) (rate(container_cpu_usage_seconds_total'
-        f'{{{_CPU_LABEL}!=""}}[5m]))[{RESIZE_MIN_HISTORY}:1m])',
-        label=_CPU_LABEL)
+        f'{cpu_series}[{RESIZE_MIN_HISTORY}:1m])', label=_CPU_LABEL)
     mem = vm_query_map(
-        f'max_over_time('
-        f'max by ({_CPU_LABEL}) (container_memory_working_set_bytes'
-        f'{{{_CPU_LABEL}!=""}})[{RESIZE_MIN_HISTORY}:1m])',
+        f'max_over_time({mem_series}[{RESIZE_MIN_HISTORY}:1m])',
         label=_CPU_LABEL)
-    return {name: (cpu.get(name), mem.get(name))
-            for name in service_names
-            if cpu.get(name) is not None and mem.get(name) is not None}
+    settled = vm_query_map(
+        f'count_over_time({cpu_series}[{RESIZE_MIN_HISTORY}:1m])',
+        label=_CPU_LABEL)
+
+    out = {}
+    for name in service_names:
+        if cpu.get(name) is None or mem.get(name) is None:
+            continue
+        minutes = settled.get(name) or 0
+        if minutes < RESIZE_MIN_SETTLED_MINUTES:
+            # Said out loud, because "the reservation never changed" is
+            # otherwise indistinguishable from "the reservation is correct",
+            # and the reason is a fact about the service worth knowing.
+            log.info("not resizing %s: only %d minute(s) of settled "
+                     "measurement — it keeps restarting", name, int(minutes))
+            continue
+        out[name] = (cpu[name], mem[name])
+    return out
 
 
 def measure_throttling(service_names):

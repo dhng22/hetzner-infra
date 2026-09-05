@@ -480,5 +480,66 @@ class ManagedServiceRefusalTest(unittest.TestCase):
         self.assertFalse(A.refuse_if_managed("api_app"))
 
 
+class SettledMeasurementTest(unittest.TestCase):
+    """
+    What a reservation is allowed to be measured FROM.
+
+    A JVM's first minutes are the most CPU it will ever draw — classloading,
+    linking and JIT — and they say nothing about serving requests. On the live
+    cluster an API that idles at 1% measured 0.272 cores at q90 and was sized
+    to 0.543, because it had spent the window restarting rather than running.
+    """
+
+    def setUp(self):
+        self.real = A.vm_query_map
+        self.asked = []
+
+    def tearDown(self):
+        A.vm_query_map = self.real
+
+    def answer(self, cpu, mem, settled):
+        def fake(expr, label=None):
+            self.asked.append(expr)
+            if "quantile_over_time" in expr:
+                return dict(cpu)
+            if "count_over_time" in expr:
+                return dict(settled)
+            return dict(mem)
+        A.vm_query_map = fake
+
+    def test_warming_containers_are_excluded_from_every_reading(self):
+        # Not diluted — excluded. A service that restarts often is one whose
+        # window is MOSTLY warm-up, so a longer window cannot rescue it, and
+        # that is precisely the service being sized wrongly.
+        self.answer({"api": 0.02}, {"api": 1 << 20}, {"api": 90})
+        A.measure_usage(["api"])
+        self.assertEqual(len(self.asked), 3)
+        for expr in self.asked:
+            self.assertIn("container_start_time_seconds", expr)
+            self.assertIn(str(A.SIZING_WARMUP_SECONDS), expr)
+
+    def test_a_service_that_keeps_restarting_is_not_sized_at_all(self):
+        """
+        Below a floor of settled minutes the quantile is a handful of samples
+        wearing a statistic's name. Leaving the reservation alone is the honest
+        answer — the alternative is rewriting it from the service's own
+        thrashing, which is how this went wrong in the first place.
+        """
+        self.answer({"api": 0.9}, {"api": 1 << 20},
+                    {"api": A.RESIZE_MIN_SETTLED_MINUTES - 1})
+        self.assertEqual(A.measure_usage(["api"]), {})
+
+    def test_enough_settled_history_is_sized_normally(self):
+        self.answer({"api": 0.04}, {"api": 1 << 20},
+                    {"api": A.RESIZE_MIN_SETTLED_MINUTES})
+        self.assertEqual(A.measure_usage(["api"]), {"api": (0.04, 1 << 20)})
+
+    def test_a_service_with_no_settled_samples_at_all_is_skipped(self):
+        # The count returns nothing rather than zero when every sample was
+        # filtered out, and a missing count must not read as "fine".
+        self.answer({"api": 0.9}, {"api": 1 << 20}, {})
+        self.assertEqual(A.measure_usage(["api"]), {})
+
+
 if __name__ == "__main__":
     unittest.main()
