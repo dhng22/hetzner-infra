@@ -81,7 +81,15 @@ services:
         condition: any
         delay: 10s
       resources:
-        limits:       { cpus: "0.5", memory: 256M }
+        # The CEILING is 1.0 because rendering a page is a BURST: this service
+        # averages under 0.2 of a core and still spent 61% of its scheduling
+        # periods stopped at a 0.5 ceiling, which is what made the panel feel
+        # slow. A ceiling is not a reservation — Swarm packs on the line below,
+        # so raising this occupies nothing and only decides how fast a burst may
+        # be served. The autoscaler right-sizes application services on exactly
+        # this evidence, but it manages nothing in the infrastructure stacks, so
+        # this number is set here or it is never set at all.
+        limits:       { cpus: "1.0", memory: 256M }
         # Reserved so the autoscaler's capacity model knows the master is
         # running a panel, not sitting idle.
         reservations: { cpus: "0.07", memory: 96M }

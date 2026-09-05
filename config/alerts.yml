@@ -266,9 +266,11 @@ groups:
             kernel stopping it because it has used its CPU quota. Every request
             being served at that moment waits for the next period, which turns
             milliseconds of work into hundreds of milliseconds of latency. The
-            autoscaler raises the cap on its own when it sees this; if the alert
-            persists, it has run out of node to give or something is re-applying
-            a smaller limit.
+            For an application service the autoscaler raises the cap on its
+            own using this same signal; if the alert persists there, it has run
+            out of node to give. For anything in the monitoring, ingress or
+            admin stacks it raises nothing — those are not autoscaled, and their
+            limits live in stacks/*.yml, so this one waits for a human.
 
       # A SERVICE TOO BIG TO REDEPLOY.
       #
