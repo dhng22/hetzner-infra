@@ -2119,7 +2119,11 @@ class DatabaseHarness:
         csrf = self.login()
         form = {"csrf": csrf, "type": "redis", "name": name,
                 "version": "7.4-alpine",
-                "maxmemory_mb": "256", "maxmemory_policy": "allkeys-lru",
+                # Both stated: the reservation must exceed max memory, so a
+                # fixture that names one and inherits the other stops creating
+                # anything the day the default moves.
+                "maxmemory_mb": "256", "memory_reservation_mb": "320",
+                "maxmemory_policy": "allkeys-lru",
                 "placement_mode": "auto", "lag_budget_seconds": "10",
                 "__bool__": ["exporter", "visualizer", "dataguard", "appendonly"],
                 "visualizer": "true", "dataguard": "true"}

@@ -176,7 +176,14 @@ class MongoComponent(Component):
                   help="A DNS name on a domain in your Cloudflare account, which you invent — `docs.example.com`. Setting it here does not create it: the Credentials tab then gives you four steps, and until you have done them nothing outside the cluster can reach this database. Leave it empty to keep it in-cluster only."),
             Field("cpu_reservation", "CPU reserved", "cpu", 0.3, required=True,
                   minimum=0.01, maximum=32),
-            Field("memory_reservation_mb", "Memory reserved (MB)", "memory", 768,
+            # 512, not 768. Must stay above the WiredTiger cache — the rule is
+            # enforced in validate() — and the cache defaults to 256, so this is
+            # twice it rather than three times. Mongo genuinely needs room above
+            # its cache for connections, sorts and index builds; measured here
+            # under production traffic it peaked at 285MB against a 256MB cache,
+            # so 512 keeps a real margin while returning 256MB to the cluster
+            # that the old default was holding for nothing.
+            Field("memory_reservation_mb", "Memory reserved (MB)", "memory", 512,
                   required=True, minimum=64, maximum=131072,
                   help="Must exceed the WiredTiger cache with room for connections, "
                        "indexes being built and the server itself."),

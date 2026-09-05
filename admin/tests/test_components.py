@@ -753,7 +753,12 @@ class ComponentTest(ComponentCase):
         Unset, WiredTiger sizes itself from the HOST's memory and ignores the
         container limit entirely — which is an OOM kill, not a slow query.
         """
-        command = self.make_mongo(cache_mb=512).render()["services"]["mongo-1"]["command"][2]
+        # The reservation is stated rather than inherited: `validate()` requires
+        # it to exceed the cache, so a test that leans on whatever the default
+        # happens to be breaks the day the default is tuned — which is what it
+        # did.
+        command = self.make_mongo(cache_mb=512, memory_reservation_mb=768
+                                  ).render()["services"]["mongo-1"]["command"][2]
         self.assertIn("--wiredTigerCacheSizeGB 0.5", command)
 
     def test_mongo_cache_must_leave_headroom(self):

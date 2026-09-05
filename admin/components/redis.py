@@ -112,11 +112,22 @@ class RedisComponent(Component):
                   choices=("7.4-alpine", "7.2-alpine", "6.2-alpine"),
                   help="Changing this restarts the replicas one at a time. The "
                        "volumes survive."),
-            Field("maxmemory_mb", "Max memory (MB)", "memory", 512, required=True,
+            # 128, not 512. This is the size of the CACHE, and the memory
+            # reservation below is required to exceed it — so this number is
+            # what a new Redis costs the cluster from the moment it is created,
+            # whether or not anything is stored in it. A 512MB default meant a
+            # 640MB reservation, and on a 4GB master that is a sixth of the
+            # machine held for a cache which, measured here after weeks of
+            # production, was holding 39MB. Raising it later is one field and a
+            # rolling restart; getting it back is the same. Starting high is the
+            # only version of that trade you cannot undo without noticing.
+            Field("maxmemory_mb", "Max memory (MB)", "memory", 128, required=True,
                   minimum=16, maximum=65536,
                   help="Redis evicts above this. Keep it below the memory limit or "
                        "the container is OOM-killed before Redis ever starts "
-                       "evicting. Applies to every replica."),
+                       "evicting. Applies to every replica. It also sets the floor "
+                       "for the reservation below, so it is what this cache costs "
+                       "the cluster even while empty."),
             Field("maxmemory_policy", "Eviction policy", "choice", "allkeys-lru",
                   choices=("allkeys-lru", "allkeys-lfu", "volatile-lru",
                            "volatile-ttl", "noeviction"),
@@ -132,11 +143,14 @@ class RedisComponent(Component):
                   help="A DNS name on a domain in your Cloudflare account, which you invent — `cache.example.com`. Setting it here does not create it: the Credentials tab then gives you three steps, and until you have done them nothing outside the cluster can reach this database. Leave it empty to keep it in-cluster only."),
             Field("cpu_reservation", "CPU reserved", "cpu", 0.2, required=True,
                   minimum=0.01, maximum=32),
-            Field("memory_reservation_mb", "Memory reserved (MB)", "memory", 640,
+            Field("memory_reservation_mb", "Memory reserved (MB)", "memory", 192,
                   required=True, minimum=32, maximum=131072,
                   help="Must exceed max memory with room for Redis itself and, with "
                        "AOF on, for its rewrite buffer — or eviction never gets the "
-                       "chance to run."),
+                       "chance to run. This is real capacity taken out of the "
+                       "cluster's placement budget the moment the component is "
+                       "created, used or not, so it tracks max memory rather than "
+                       "sitting far above it."),
 
             Field("exporter", "Metrics exporter", "bool", True,
                   group="observability", switch=True,

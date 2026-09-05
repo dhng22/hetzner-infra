@@ -144,7 +144,13 @@ services:
       <<: *manager-only
       resources:
         limits:       { memory: 1500M }
-        reservations: { cpus: "0.02", memory: 352M }
+        # 448M, raised from 352M. Measured 24h peak here was 346M — six
+        # megabytes of margin on the one service that grows with retention,
+        # and the only one whose death takes every metric and every alert
+        # with it. An under-reservation is not free capacity, it is an
+        # overcommitted node that OOM-kills the thing you would use to find
+        # out why.
+        reservations: { cpus: "0.02", memory: 448M }
 
   # --- scraper with Swarm service discovery ---------------------------------
   # Discovers new nodes and app tasks automatically. This is why adding a
@@ -163,7 +169,8 @@ services:
       replicas: 1
       <<: *manager-only   # dockerswarm_sd requires a manager socket
       resources:
-        reservations: { cpus: "0.03", memory: 64M }
+        # 48M, from 64M: measured 24h peak 36M.
+        reservations: { cpus: "0.03", memory: 48M }
 
   # --- alerting -------------------------------------------------------------
   vmalert:
@@ -232,7 +239,8 @@ services:
       replicas: 1
       <<: *manager-only
       resources:
-        reservations: { cpus: "0.02", memory: 224M }
+        # 160M, from 224M: measured 24h peak 125M.
+        reservations: { cpus: "0.02", memory: 160M }
 
   # --- dashboards -----------------------------------------------------------
   grafana:
@@ -268,7 +276,8 @@ services:
       replicas: 1
       <<: *manager-only
       resources:
-        reservations: { cpus: "0.02", memory: 112M }
+        # 96M, from 112M: measured 24h peak 60M.
+        reservations: { cpus: "0.02", memory: 96M }
 
   # --- per-node exporters (global = every current AND future node) ----------
   node-exporter:
@@ -287,7 +296,8 @@ services:
     deploy:
       mode: global
       resources:
-        reservations: { cpus: "0.02", memory: 32M }
+        # 24M, from 32M: measured 24h peak 11M.
+        reservations: { cpus: "0.02", memory: 24M }
 
   cadvisor:
     # >= v0.55 is load-bearing, and the failure it fixes is silent.
@@ -319,7 +329,10 @@ services:
     deploy:
       mode: global
       resources:
-        reservations: { cpus: "0.04", memory: 96M }
+        # 128M, raised from 96M: the measured 24h peak is 90M. cadvisor is
+        # where every per-container CPU and memory number comes from, so
+        # losing it silently blinds right-sizing and scale-down at once.
+        reservations: { cpus: "0.04", memory: 128M }
 
   # --- the overseer ---------------------------------------------------------
   # What is happening, what it means, and what the fleet should be.
@@ -364,7 +377,9 @@ services:
       resources:
         # Larger than the dispatcher's, because the packer, the Hetzner
         # catalogue cache and the resize machine all live here now.
-        reservations: { cpus: "0.04", memory: 96M }
+        # 64M, from 96M: measured 24h peak 33M. It holds the fleet model and
+        # the capacity arithmetic, neither of which is large.
+        reservations: { cpus: "0.04", memory: 64M }
       restart_policy:
         condition: any
         delay: 30s
