@@ -2954,9 +2954,38 @@ def judge(watched):
 
 
 def dispatch(decided):
+    """
+    Hand every verdict to whoever can act on it.
+
+    A manager claiming a NON-local cause is a specialist: dataguard wants the
+    services whose slowness it might be, and nothing else. Cause routing is
+    exactly right for those.
+
+    A manager claiming `local` is not a specialist. It is the service's own
+    scaler, it owns the replica count for every autoscaled service, and this
+    module's header already promises it the ceiling "dispatched per service"
+    every loop. Filtering it by cause broke that promise: the moment a service
+    was slow for a reason that was not its own replicas, its verdict went to
+    dataguard INSTEAD, and the autoscaler was told nothing at all — not the
+    direction, not the ceiling, not the latency and CPU it re-exports.
+
+    The result looked like the overseer had died. `api_app` sat at "no verdict",
+    `autoscaler_services_awaiting_dispatch` went to 1 and
+    `autoscaler_service_cpu_signal_present` to 0, so OverseerSilent and
+    AutoscalerSignalMissing both fired — two alerts naming healthy processes and
+    a working cadvisor, while the actual fault was a third-party HTTP call
+    hanging for four minutes.
+
+    Sending it everything is safe because the cause is IN the verdict and the
+    decision was never the autoscaler's to make: `classify.decide` already
+    refuses to scale up on latency unless the replicas themselves are busy, so a
+    verdict caused by an upstream arrives as HOLD. It holds, knowing why, which
+    is what it was doing anyway — the difference is that now it can say so.
+    """
     known = managers()
     for m in known:
-        payload = [v for v in decided.values() if v["cause"] in m.causes]
+        payload = [v for v in decided.values()
+                   if v["cause"] in m.causes or classify.CAUSE_LOCAL in m.causes]
         if payload:
             deliver(m, payload)
 

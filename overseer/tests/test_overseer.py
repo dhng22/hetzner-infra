@@ -302,7 +302,7 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual(
             D.G_DELIVERY.labels(manager="monitoring_autoscaler")._value.get(), 1)
 
-    def test_a_manager_only_receives_the_causes_it_claims(self):
+    def _two_managers(self):
         D.requests.post = self.ok
         D.dkr = types.SimpleNamespace(services=types.SimpleNamespace(list=lambda: [
             raw_service("api_app"),
@@ -310,18 +310,30 @@ class DeliveryTest(unittest.TestCase):
                                                 "infra.handles.port": "9201"}),
             raw_service("dbmanager", **{"infra.handles": "database",
                                         "infra.handles.port": "9300"})]))
-        decided = {
+        return {
             "api_app": {"service": "api_app", "cause": "local", "direction": "up"},
             "web_app": {"service": "web_app", "cause": "database", "direction": "hold"},
         }
-        for m in D.managers():
-            payload = [v for v in decided.values() if v["cause"] in m.causes]
-            if payload:
-                D.deliver(m, payload)
+
+    def test_a_specialist_only_receives_the_causes_it_claims(self):
+        D.dispatch(self._two_managers())
         by_url = {url: body for url, body in self.sent}
-        self.assertEqual([s["service"] for s in
-                          by_url["http://monitoring_autoscaler:9201/signal"]["signals"]],
-                         ["api_app"])
         self.assertEqual([s["service"] for s in
                           by_url["http://dbmanager:9300/signal"]["signals"]],
                          ["web_app"])
+
+    def test_the_scaler_receives_every_service_whatever_the_cause(self):
+        # It owns the replica count for both of these, and the header promises
+        # it the ceiling per service every loop. Routing it by cause broke that:
+        # `web_app` went to dataguard INSTEAD, so the autoscaler reported "no
+        # verdict" and raised OverseerSilent about a healthy overseer.
+        #
+        # Handing it a foreign cause is safe because `classify.decide` has
+        # already refused to scale up on latency with idle replicas, so the
+        # verdict arrives as `hold`. It holds either way; now it knows why.
+        D.dispatch(self._two_managers())
+        by_url = {url: body for url, body in self.sent}
+        self.assertEqual(
+            sorted(s["service"] for s in
+                   by_url["http://monitoring_autoscaler:9201/signal"]["signals"]),
+            ["api_app", "web_app"])
