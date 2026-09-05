@@ -115,6 +115,35 @@ class AttributionTest(unittest.TestCase):
         self.assertEqual(D.attribute(self.s, 3.0, 4.0, deps),
                          (classify.CAUSE_UNKNOWN, None))
 
+    def test_a_dependency_under_the_budget_still_names_it_if_it_ate_the_request(self):
+        """
+        The old test was "does this dependency alone exceed the whole latency
+        budget", and it is far too strict to fire in the case it exists for.
+
+        Live: an API breaching its 400ms budget, its own work taking 4ms, and
+        344ms spent waiting on one third-party host. 344 < 400, so the
+        dependency was skipped and the verdict came out `unknown` — "your API is
+        slow and nobody knows why" — with the answer sitting in a timer the
+        application was already publishing. A dependency does not have to blow
+        the budget on its own to be where the time went.
+        """
+        D.query.vm_query_map = lambda expr, label=None: {"media.example": 344.0}
+        deps = {"api_app": [(classify.CAUSE_UPSTREAM, "e",
+                             "http_client_requests_seconds", "host")]}
+        self.assertLess(344.0, self.s.budget_ms)          # under the old bar
+        self.assertEqual(D.attribute(self.s, 3.0, 4.0, deps, latency_ms=466.0),
+                         (classify.CAUSE_UPSTREAM, "media.example"))
+
+    def test_a_minor_dependency_is_still_not_blamed(self):
+        # Below half the request, something else is the bigger story and naming
+        # this one sends somebody to read the wrong log — which is the mistake
+        # `unknown` exists to avoid.
+        D.query.vm_query_map = lambda expr, label=None: {"media.example": 40.0}
+        deps = {"api_app": [(classify.CAUSE_UPSTREAM, "e",
+                             "http_client_requests_seconds", "host")]}
+        self.assertEqual(D.attribute(self.s, 3.0, 4.0, deps, latency_ms=466.0),
+                         (classify.CAUSE_UNKNOWN, None))
+
     def test_the_worst_dependency_wins_when_several_are_over_budget(self):
         readings = {"db": [(classify.CAUSE_DATABASE, "e1", "mongodb_driver_commands_seconds", "host")],
                     }
@@ -140,7 +169,8 @@ class AttributionTest(unittest.TestCase):
         # moment somebody re-added it as a fallback.
         import inspect
         self.assertEqual(list(inspect.signature(D.attribute).parameters),
-                         ["service", "cpu_pct", "mem_pct", "dependencies"])
+                         ["service", "cpu_pct", "mem_pct", "dependencies",
+                          "latency_ms"])
         self.assertNotIn("busy_components", inspect.getsource(D))
 
 

@@ -680,7 +680,26 @@ def measure(services):
     return out
 
 
-def attribute(service, cpu_pct, mem_pct, dependencies):
+#: How much of a slow request must be spent inside ONE dependency before that
+#: dependency is named as the cause.
+#:
+#: The test used to be "does this dependency alone exceed the service's whole
+#: latency budget", and that is far too strict to ever fire in the case it
+#: exists for. Live: an API breaching a 400ms budget, its own work taking 4ms,
+#: waiting 344ms on one third-party host on half its requests. 344 is less than
+#: 400, so the dependency was skipped and the verdict came out `unknown` — "your
+#: API is slow, nobody knows why" — while the answer was sitting in a timer the
+#: application was publishing.
+#:
+#: A dependency does not have to blow the whole budget on its own to be the
+#: reason. It has to be where the time went. Half is a deliberate floor rather
+#: than a tuned number: below half, something else in the request is the bigger
+#: story and naming this one sends somebody to read the wrong log, which is the
+#: mistake `unknown` exists to avoid.
+DEPENDENCY_SHARE = 0.5
+
+
+def attribute(service, cpu_pct, mem_pct, dependencies, latency_ms=None):
     """
     Why is this service slow? Returns (cause, target or None).
 
@@ -719,6 +738,15 @@ def attribute(service, cpu_pct, mem_pct, dependencies):
     if classify.saturated(service.busy_cpu, service.busy_mem, cpu_pct, mem_pct):
         return classify.CAUSE_LOCAL, None
 
+    # This is only ever reached for a service already OVER its budget with idle
+    # replicas — the one HOLD that carries a reason — so "which dependency ate
+    # this request" is a question we know is worth asking. Comparing a
+    # dependency's MEAN against the service's latency is conservative when that
+    # latency is a p95: it understates the dependency's share, never inflates it.
+    threshold = service.budget_ms
+    if latency_ms:
+        threshold = min(threshold, latency_ms * DEPENDENCY_SHARE)
+
     worst = None
     for cause, expr, base, target_label in dependencies.get(service.name, ()):
         if target_label:
@@ -727,7 +755,7 @@ def attribute(service, cpu_pct, mem_pct, dependencies):
         else:
             readings = {base: query.vm_query(expr)}
         for key, value in readings.items():
-            if value is None or value <= service.budget_ms:
+            if value is None or value <= threshold:
                 continue
             if worst is None or value > worst[2]:
                 worst = (cause, key, value)
@@ -3023,12 +3051,13 @@ def judge(watched):
                            "mem_peak_pct": peak_mem,
                            "enabled": s.enabled}
         if direction == classify.DIRECTION_HOLD and reason:
-            needs_cause.append((s, cpu, mem))
+            needs_cause.append((s, cpu, mem, lat))
 
     if needs_cause:
-        dependencies = discovery.discover_dependencies([s.name for s, _, _ in needs_cause])
-        for s, cpu, mem in needs_cause:
-            cause, target = attribute(s, cpu, mem, dependencies)
+        dependencies = discovery.discover_dependencies(
+            [s.name for s, _, _, _ in needs_cause])
+        for s, cpu, mem, lat in needs_cause:
+            cause, target = attribute(s, cpu, mem, dependencies, lat)
             decided[s.name].update(cause=cause, target=target)
 
     for s in watched:
