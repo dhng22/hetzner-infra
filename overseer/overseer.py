@@ -371,6 +371,22 @@ G_UNOWNED = Gauge("overseer_signal_unowned",
                   "1 when a cause has no handler and is not muted", _SVC + ["cause"])
 G_LATENCY = Gauge("overseer_service_latency_ms",
                   "Sustained request latency, as the autoscaler reads it", _SVC)
+#: WHICH STATISTIC `overseer_service_latency_ms` is, for this service, right now.
+#:
+#: It is not a constant. Discovery prefers a real histogram and falls back to a
+#: mean, so the same series is a p95 for a service that publishes buckets and an
+#: average for one that does not — and it changes under a running service the
+#: day somebody ships a percentile-capable library.
+#:
+#: Exported because the panel was captioning this number "p95 per service" in
+#: hand-typed text. That was wrong for every service without buckets, and it was
+#: wrong invisibly: the caption stayed put while the meaning moved, so an app
+#: whose average had read 92ms for weeks appeared to get five times slower
+#: overnight when the number finally became the p95 the label had always
+#: claimed. The caption now reads this.
+G_LATENCY_KIND = Gauge("overseer_service_latency_signal",
+                       "1 for the statistic overseer_service_latency_ms currently is",
+                       _SVC + ["kind"])
 G_CLAIMS = Gauge("overseer_claimed_causes", "Causes some service claims", ["cause"])
 G_LOOP = Gauge("overseer_last_loop_timestamp_seconds", "Unix time of the last loop")
 G_SERVICES = Gauge("overseer_watched_services", "Application services being watched")
@@ -620,6 +636,11 @@ def measure(services):
     if not services:
         return out
     found = discovery.discover_latency([s.name for s in services])
+    for s in services:
+        hit = found.get(s.name)
+        for kind in ("p95", "mean"):
+            G_LATENCY_KIND.labels(service=s.name, kind=kind).set(
+                1 if hit and hit[1] == kind else 0)
 
     util = {}
     for aggregate, windows in (("min_over_time", {s.sustain_up for s in services}),

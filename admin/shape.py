@@ -609,6 +609,8 @@ Q_ERROR_RATIO = (
 Q_REQUEST_RATE = 'sum(rate(cloudflared_tunnel_response_by_code[5m]))'
 Q_LATENCY = 'overseer_service_latency_ms'
 Q_SLO = 'max(autoscaler_service_slo_p95_ms)'
+#: WHICH STATISTIC Q_LATENCY currently is. Not decorative — see `_latency_note`.
+Q_LATENCY_KIND = 'overseer_service_latency_signal == 1'
 
 #: Utilisation, one row per node per resource.
 Q_UTILISATION = (
@@ -674,6 +676,38 @@ def _window(span, *exprs):
     return " · ".join(parts)
 
 
+def _latency_note(kinds):
+    """
+    What the Duration card is actually showing, read from the cluster.
+
+    This used to be the hand-typed string "p95 per service, against the SLO it
+    is judged by", and it was wrong for every service that publishes no
+    percentile buckets — which is most of them, and was this cluster's only
+    application for weeks. `overseer_service_latency_ms` is a p95 when a real
+    histogram exists and an AVERAGE when it does not, and it changes underneath
+    a running service the day somebody ships a percentile-capable library.
+
+    A caption that cannot be wrong is worth more than a precise one that can.
+    The same argument `_window` makes about time spans, one line below, and this
+    was the line that had not learned it: the window was read from the query
+    while the statistic was typed beside it. When this app started publishing
+    buckets, its number went from a 92ms average to a 497ms p95 in one step
+    under a caption that never moved, and it read as the app getting five times
+    slower overnight.
+    """
+    kinds = {k for k, points in (kinds or {}).items() if points}
+    if kinds == {"p95"}:
+        return "p95 per service, against the SLO it is judged by"
+    if kinds == {"mean"}:
+        return ("AVERAGE per service — no service here publishes percentile "
+                "buckets, so this sits well below the slow requests, and the "
+                "SLO line is being judged against it")
+    if kinds:
+        return ("p95 where a service publishes percentile buckets, AVERAGE "
+                "where it does not — judged against the same SLO line")
+    return "per service, against the SLO it is judged by"
+
+
 def _card(title, note, body, window="", summary=""):
     """
     One card: what it is, what it draws, and the one line under it.
@@ -735,6 +769,7 @@ def observability(vm_range, vm_query, charts):
 
     latency = rng(Q_LATENCY, "service")
     slo = vm_query(Q_SLO)
+    latency_note = _latency_note(rng(Q_LATENCY_KIND, "kind"))
     errors = _as_percent(rng(Q_ERROR_RATIO))
 
     status = rng(Q_STATUS_CLASS, "class")
@@ -742,7 +777,7 @@ def observability(vm_range, vm_query, charts):
     error_points = _points(errors)
 
     red = [
-        _card("Duration", "p95 per service, against the SLO it is judged by",
+        _card("Duration", latency_note,
               charts.line(latency, "ms", reference=slo, band=slo,
                           empty="no service is publishing a timer yet"),
               _window(RANGE_SPAN, Q_LATENCY),

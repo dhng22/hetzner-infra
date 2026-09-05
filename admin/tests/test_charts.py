@@ -352,6 +352,47 @@ class WindowTest(unittest.TestCase):
         self.assertTrue(cards[("red", "Duration")].startswith(shape.RANGE_SPAN))
 
 
+class LatencyCaptionTest(unittest.TestCase):
+    """
+    The Duration card must say WHICH latency it is drawing.
+
+    It used to say "p95 per service" in hand-typed text while the number
+    underneath was whatever the overseer could find — a real p95 for a service
+    publishing histogram buckets, and a plain AVERAGE for one that is not. Most
+    services are the second kind. This cluster's only application was, for
+    weeks, at a 92ms average under a caption promising a p95; the morning it
+    shipped buckets the same caption sat over a 497ms p95 and the app looked
+    five times slower overnight. Nothing had changed but the statistic.
+    """
+
+    def note(self, kinds):
+        ranges = {shape.Q_LATENCY_KIND: {k: series(1.0, 1.0) for k in kinds}}
+        sections = shape.observability(
+            lambda expr, minutes, step, label=None: ranges.get(expr, {}),
+            lambda expr: None, charts)
+        cards = {c["title"]: c for s in sections for c in s["cards"]}
+        return cards["Duration"]["note"]
+
+    def test_a_real_histogram_is_called_a_p95(self):
+        self.assertIn("p95", self.note(["p95"]))
+        self.assertNotIn("AVERAGE", self.note(["p95"]))
+
+    def test_an_average_is_never_captioned_as_a_p95(self):
+        note = self.note(["mean"])
+        self.assertIn("AVERAGE", note)
+        self.assertIn("below the slow requests", note)
+
+    def test_a_mixed_cluster_says_so_rather_than_picking_one(self):
+        note = self.note(["p95", "mean"])
+        self.assertIn("p95", note)
+        self.assertIn("AVERAGE", note)
+
+    def test_nothing_reporting_claims_neither(self):
+        note = self.note([])
+        self.assertNotIn("p95", note)
+        self.assertNotIn("AVERAGE", note)
+
+
 class ColumnTest(unittest.TestCase):
     """The assembled RED / USE / Golden column."""
 
