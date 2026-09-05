@@ -892,29 +892,19 @@ def ensure_tls(component):
     replica set, it stops it: members refuse each other, there is no primary,
     and every write fails. So that starts a month out.
 
-    The other is the SAN, and it is the one that was missing. A member is dialled
-    by its service name, by the per-task name, and by the alias that makes the
-    connection string permanent — and a certificate that does not carry the name
-    a client dialled fails the handshake, while the set goes on replicating
-    perfectly and every internal check goes on passing. Nothing anywhere says
-    why the database stopped answering its own connection string.
-
-    Reconciling both here is what makes that self-healing. The panel fixes it at
-    deploy time; this is the loop, so it fixes it without anybody being told to
-    go and redeploy. One member per loop either way, because applying a reissue
-    restarts that member.
-
-    `pki.member_names` is the list, shared with the panel. It used to be written
-    out in both places, and the copy here knew only the service name — so at
-    thirty days out a renewal SHORTENED the certificate and broke exactly the
-    names this now repairs.
+    The other is the SAN. A certificate that does not carry the name a client
+    dialled fails the handshake while the set replicates perfectly and every
+    internal check passes — so nothing says why the database stopped answering
+    its own connection string. `pki.member_names` is that list, shared with the
+    panel so the two writers cannot disagree; reconciling against it here is
+    what makes a certificate that has fallen behind repair itself rather than
+    waiting a year. One member per loop, because applying a reissue restarts
+    that member.
 
     A component whose authority is missing is REPORTED, not repaired. The panel
     creates it; inventing one here would silently replace the material every
-    member is already using and take the set down. A component that has no TLS
-    directory at all is not missing anything — Redis holds no certificates — and
-    is passed over in silence rather than told to redeploy something that is
-    working.
+    member is already using and take the set down. A component with no TLS
+    directory holds no certificates — Redis — and is passed over in silence.
     """
     directory = tls_dir(component)
     if not os.path.isdir(directory):

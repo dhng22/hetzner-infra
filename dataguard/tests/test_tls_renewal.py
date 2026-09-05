@@ -3,22 +3,13 @@ Keeping every member certificate correct, and what "correct" means.
 
     python3 -m unittest discover -s dataguard/tests -v
 
-TWO REASONS TO REISSUE, and only the first one used to be here.
-
-Expiry is the obvious one. The other is the SAN, and it is the one that failed
-silently. A member is dialled by its service name, by its per-task name, by the
-alias that makes the connection string permanent, and — by a client outside the
-cluster — on loopback, because the tunnel helper listens there and TLS is
-forwarded rather than terminated. A certificate that does not carry the name a
-client dialled fails the handshake, while the set replicates perfectly and every
-internal check goes on passing. Nothing anywhere says why the database stopped
-answering its own connection string.
-
-The bug had both halves. The renewal here rebuilt the name list from the service
-name alone, so at thirty days out the alias was DROPPED; and nothing reissued
-when a name was ADDED, so a certificate that had fallen behind stayed behind
-until it expired. `pki.member_names` is now the one definition, and this loop
-reconciles against it rather than against the calendar.
+TWO REASONS TO REISSUE. Expiry is the obvious one. The other is the SAN: a
+certificate that does not carry the name a client dialled fails the handshake
+while the set replicates perfectly and every internal check passes, so nothing
+anywhere says why the database stopped answering its own connection string.
+`pki.member_names` is the one definition of that list — shared with the panel,
+which is the other writer — and this loop reconciles against it rather than
+against the calendar.
 """
 
 import datetime
@@ -102,16 +93,12 @@ class ExpiryTest(TLSCase):
 
 class SanReconcileTest(TLSCase):
     """
-    The half that had no mechanism at all: a name being MISSING.
-
-    Nothing here is close to expiring. The certificate is simply short of a name
-    the member is dialled by, and the loop is what notices — rather than the
-    name staying missing until the thing expires a year later.
+    A name MISSING, with nothing close to expiring. The loop is what notices,
+    rather than the name staying missing until the certificate expires.
     """
 
     def test_a_certificate_short_of_a_name_is_reissued_at_once(self):
-        # What the old renewal used to leave behind: the service name and the
-        # loopback pair, with the alias missing.
+        # Short by the alias — the name the connection string uses.
         self.issue(["docs_mongo-1", "tasks.docs_mongo-1", "localhost", "127.0.0.1"])
         renewed = self.reissued()
         self.assertIsNotNone(renewed, "a short certificate was never repaired")

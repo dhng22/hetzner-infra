@@ -274,20 +274,13 @@ def member_names(service, alias=""):
         tasks.<...>          the per-task record, for a direct connection
         <name>-<kind>        the alias every member answers to, which is what
                              makes the connection string permanent
-        localhost 127.0.0.1  mongod's own health check inside the container —
-                             and, as it happens, a client outside the cluster,
-                             which reaches this member through a tunnel helper
-                             listening on its own loopback. TLS is forwarded
-                             rather than terminated, so the address the client
-                             dialled is the one the member has to prove.
+        localhost 127.0.0.1  mongod's own health check, inside the container
 
-    This list lived in two places, and they knew different things. The panel
-    issued the full one; dataguard renewed with the service name alone. So at
-    thirty days out the alias silently left the certificate, and the symptom was
-    a set that replicated perfectly and stopped answering its own connection
-    string. One function is the fix — and it is what lets dataguard RECONCILE
-    the SAN rather than only its expiry, so a name that was missing is repaired
-    by the loop instead of by remembering to redeploy.
+    ONE function because there are two writers. The panel issues this material
+    and dataguard renews it, and a renewal built from a shorter list drops names
+    silently: the set replicates perfectly, every internal check passes, and the
+    database stops answering its own connection string. It is also what lets
+    dataguard reconcile the SAN rather than only the expiry.
     """
     out = [service, f"tasks.{service}"]
     if alias:

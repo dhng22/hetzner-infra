@@ -129,16 +129,7 @@ class RedisComponent(Component):
                        "up, so the backup fields below stop meaning anything."),
             Field("external_hostname", "Tunnel hostname", "text", "",
                   placeholder="cache.example.com",
-                  help="Optional, and it is what makes this database reachable "
-                       "from OUTSIDE the cluster. Add the hostname to your "
-                       "Cloudflare tunnel — the Credentials tab gives you the "
-                       "target to paste — and put an Access policy in front of "
-                       "it, because a hostname on the tunnel is reachable by "
-                       "anyone who knows it. Nothing is published on a host port "
-                       "and no firewall is opened: your client runs "
-                       "`cloudflared access tcp`, which gives it a local port. "
-                       "Leave it empty and this database is reachable only from "
-                       "inside the cluster."),
+                  help="A DNS name on a domain in your Cloudflare account, which you invent — `cache.example.com`. Setting it here does not create it: the Credentials tab then gives you three steps, and until you have done them nothing outside the cluster can reach this database. Leave it empty to keep it in-cluster only."),
             Field("cpu_reservation", "CPU reserved", "cpu", 0.2, required=True,
                   minimum=0.01, maximum=32),
             Field("memory_reservation_mb", "Memory reserved (MB)", "memory", 640,
@@ -312,15 +303,10 @@ class RedisComponent(Component):
         rather than as a URL, and handing somebody only the scheme their client
         cannot parse is not help.
 
-        THE EXTERNAL FORM IS A PLAIN `redis://` AND THAT IS DELIBERATE, not the
-        gap it looks like. A sentinel URL cannot work from outside: sentinel
-        answers "the primary is `cache_redis-2`", which is Swarm service DNS and
-        resolves on the overlay network only, so a client that spoke the
-        protocol perfectly would be sent to an address it cannot reach. The
-        gateway asks that question from inside the cluster instead and forwards
-        to the answer — so this one address is always the current primary, a
-        failover changes nothing about it, and the client needs no sentinel
-        support at all. See `_gateway`.
+        The external form is a plain `redis://` to one address, and the gateway
+        makes that address always the current primary — so a failover changes
+        nothing about it and the client needs no sentinel support. See
+        `_gateway` for why sentinel cannot serve a client outside the cluster.
         """
         if host:
             return (f"redis://default:{quote(self.password(), safe='')}@"
@@ -357,10 +343,10 @@ class RedisComponent(Component):
             "external_target": f"tcp://{self.stack}_gateway:6379",
             "external_command": base.access_command(hostname, 6379) if hostname else "",
             "external_url": self.connection_url("127.0.0.1", 6379) if hostname else "",
+            "external_steps": self._external_steps(hostname) if hostname else [],
             "external_notes": self._external_notes(),
-            # Only to offer closing it: this database used to be published on a
-            # host port, that rule is still in the master's firewall, and now
-            # nothing is listening behind it.
+            # The port an older cluster published on, so the panel can offer to
+            # close the firewall rule that is still standing in front of it.
             "legacy_port": self.spec.get("external_port"),
             "sentinels": self.sentinel_hosts(),
             "master_name": self.stack,
@@ -385,15 +371,39 @@ class RedisComponent(Component):
             ],
         }
 
-    def _external_notes(self):
-        # SHORT. Anything that needs a paragraph belongs in the README or in the
-        # comment beside the code that does it — a page nobody finishes reading
-        # is a page that has told nobody anything.
+    def _external_steps(self, hostname):
+        """
+        What to DO, in order, each note saying what happens if you skip it.
+
+        Built here rather than in the template so an engine that needs a
+        different step can have one without the template learning its name. The
+        panel numbers whatever comes back.
+        """
         return [
-            "Always the current primary. Your client needs no sentinel support.",
-            "Put a Cloudflare Access policy on that hostname. It is the only door.",
-            "Your app connects to 127.0.0.1 — the hostname belongs to the helper.",
-            "Redis has no TLS here; the tunnel encrypts the hop across the internet.",
+            {"title": "Route this hostname to your tunnel",
+             "code": f"tcp://{self.stack}_gateway:6379",
+             "note": f"In the Cloudflare Zero Trust dashboard, add {hostname} to "
+                     "this cluster's tunnel with that target. PUT AN ACCESS POLICY "
+                     "ON IT: without one, anyone who knows the name reaches this "
+                     "database, with only the password in the way."},
+            {"title": "Install cloudflared where your app runs, and keep this running",
+             "code": base.access_command(hostname, 6379),
+             "note": "It holds the tunnel open and listens on 127.0.0.1:6379. "
+                     "Nothing can connect while it is stopped."},
+            {"title": "Point your application at this",
+             "code": self.connection_url("127.0.0.1", 6379),
+             "note": "Your application talks to the helper from step 2, which is "
+                     "running beside it and listening on this port; the helper "
+                     "carries the traffic through the tunnel. That is why this is "
+                     "a local address and not the hostname."},
+        ]
+
+    def _external_notes(self):
+        return [
+            "Whatever it reaches is the current primary; a failover changes "
+            "nothing here, and your client needs no sentinel support.",
+            "Redis has no TLS of its own. The tunnel encrypts the hop across the "
+            "internet; the short hops at each end are in the clear.",
         ]
 
     # --- validation ---------------------------------------------------------
@@ -612,12 +622,6 @@ class RedisComponent(Component):
                 "resources": self.resources(),
             },
         }
-        # NO `ports` HERE, and that is the fix rather than an omission. Member 1
-        # is the copy on the master: it is a SECONDARY as soon as the set has
-        # grown, and `plan.next_action` removes it outright once the set no
-        # longer needs the master — so a port published on it reached a
-        # read-only server and then nothing at all. The published port belongs
-        # to the gateway, which is not a member and never moves.
         return service
 
     def _gateway(self):
@@ -632,13 +636,10 @@ class RedisComponent(Component):
         pinned to the old primary so the client reconnects into the new one
         instead of sitting on a server that now refuses writes.
 
-        This is what a client outside the cluster gets INSTEAD of sentinel, and
-        it is not a downgrade — it is the only thing that can work. Sentinel
-        answers "the primary is `cache_redis-2`", a name that exists on the
-        overlay network and nowhere else, so an external client that spoke
-        sentinel perfectly would be told to connect to an address it cannot
-        resolve. The proxy asks the question from inside, where the answer means
-        something.
+        Sentinel cannot do this job from outside — it answers "the primary is
+        `cache_redis-2`", a name that resolves on the overlay network and
+        nowhere else — so the proxy asks from inside, where the answer means
+        something, and the external client needs no sentinel support.
 
         The AUTH is sent as RESP hex rather than as text. `tcp-check send` would
         need the password escaped for HAProxy's parser, and it would need it

@@ -971,72 +971,40 @@ def quote(value):
 # =============================================================================
 # THE EXTERNAL ENDPOINT
 # =============================================================================
-# A database's INTERNAL address is permanent by construction: Mongo's seed alias
-# resolves to whichever members are running, Redis's sentinel URL names watchers
-# that answer "who is the primary" — so an application inside the cluster is
-# given one string on the first day and never told about a failover, a new
-# member or a move onto dedicated machines.
+# A client outside the cluster reaches a database in two hops, and they answer
+# two different questions.
 #
-# The external address had none of that, and could not: it was a host port on
-# member 1's service, and every one of those words was a problem.
+# WHICH COPY — a TCP proxy on the edge network, which asks every member whether
+# it is the primary and forwards to the one that says yes. A discovery protocol
+# cannot answer this from outside: sentinel replies `<stack>_redis-2` and a
+# replica set replies `<stack>_mongo-3:27017`, names that resolve on the overlay
+# network and nowhere else. So the proxy asks from in here, and the external
+# string carries no discovery of its own. HAProxy rather than something written
+# here, because "find the primary" is a health check; each engine supplies the
+# question — `INFO replication` for Redis, an `isMaster` handshake for Mongo.
 #
-#   * A DISCOVERY PROTOCOL CANNOT CROSS THE BOUNDARY. Sentinel answers with
-#     `<stack>_redis-2`; a replica set's `hello` answers with
-#     `<stack>_mongo-3:27017`. Those names exist on the overlay network and
-#     nowhere else, so a client outside that follows the protocol is handed an
-#     address it cannot resolve — which is why publishing the sentinels, or
-#     naming `replicaSet=` in an external URL, does not work and cannot be made
-#     to.
-#   * MEMBER 1 IS NOT THE PRIMARY. Once a set has grown, the copy on the master
-#     is a secondary, so the published port reached a server that refuses every
-#     write.
-#   * MEMBER 1 DOES NOT ALWAYS EXIST. `plan.next_action` removes the master's
-#     copy when the set no longer needs it, and the port went with it. A
-#     connection string handed out on Monday was dead by the time dataguard
-#     finished moving the database.
-#   * AND THE PORT WAS ON THE MASTER. Host-mode publishing binds the node the
-#     task runs on, member 1 is pinned to the manager, and there is one manager.
-#     So losing that machine took the external path with it — while the
-#     applications inside the cluster carried on, because their address is peer
-#     discovery and needs no master at all.
+# WHICH MACHINE — the tunnel, which is the same answer this cluster gives every
+# application. The connector dials OUT to Cloudflare, so there is no address on
+# this side to lose and no port to open, and Cloudflare stops routing to a
+# connector the moment its machine goes. The proxy is therefore GLOBAL, one per
+# node like the connector itself, and is reached over the edge network.
 #
-# TWO PIECES FIX FOUR PROBLEMS, and they are different pieces.
+# What it costs the client: `cloudflared access tcp`, which gives it a local
+# port, and a few milliseconds per round trip.
 #
-# WHICH COPY — a TCP proxy of its own, doing the discovery the client cannot do
-# and forwarding to whichever member is the primary right now. HAProxy rather
-# than something written here, because "find the primary" is a health check and
-# HAProxy has been doing exactly this since before Sentinel existed. Each engine
-# supplies the question — `INFO replication` for Redis, an `isMaster` handshake
-# for Mongo — so a failover is one check that starts failing and another that
-# starts passing, with no state kept anywhere.
+# WHERE TLS STARTS differs by direction, and that is a trade. An application
+# INSIDE the cluster keeps its session end to end to the member. An external one
+# does not: it dials `127.0.0.1` through the helper, so an end-to-end session
+# would be verified against this component's own private authority — every
+# consumer, in every language, obtaining that file and naming it in a URL, for a
+# hop Cloudflare has already encrypted across the internet and the IPsec overlay
+# encrypts inside the cluster. So the proxy holds the TLS session to the member,
+# and the external URL carries no certificate options. mongod never sees
+# plaintext either way: `requireTLS` is untouched.
 #
-# WHICH MACHINE — the tunnel, which is the same answer this cluster already
-# gives for every application. Nothing is published on a host port and no
-# firewall is opened: the connector dials OUT to Cloudflare, so there is no
-# address on this side to lose, and Cloudflare stops routing to a connector the
-# moment its machine goes. That is why an app survives losing the master today,
-# and it is the only way a database can. The proxy is therefore GLOBAL, one per
-# node like the connector itself, and is reached over the edge network rather
-# than through the host.
-#
-# What it costs: the client runs `cloudflared access tcp`, which gives it a local
-# port to connect to. So the connection string is a local address plus a helper,
-# rather than a public address on its own — and the traffic detours through
-# Cloudflare, which is a few milliseconds on every round trip. That trade was
-# taken deliberately; the alternative that keeps a plain public address is a
-# floating IP, which costs money and still has to be moved by hand.
-#
-# The traffic is PASSED THROUGH end to end, never terminated. For Mongo that
-# means the client's TLS session ends at the member holding the data — neither
-# this proxy nor the connector nor Cloudflare can read a query. The client dials
-# `127.0.0.1`, which every member certificate already carries because mongod's
-# own health check uses it, so nothing about the certificates depends on where
-# the client is.
-#
-# ACCESS IS WHAT REPLACES THE FIREWALL. A hostname routed to this tunnel is
-# reachable by anyone who knows it, with only the database password in the way.
-# Put a Cloudflare Access policy with a service token in front of it; that is the
-# door, and it is the one the panel keeps telling you about.
+# ACCESS IS THE DOOR. A hostname routed to this tunnel is reachable by anyone
+# who knows it, with only the database password in the way. Put a Cloudflare
+# Access policy with a service token in front of it.
 HAPROXY_IMAGE = "haproxy:3.0-alpine"
 
 #: The listen block, the resolver and the timeouts, which are the same whatever
@@ -1098,7 +1066,7 @@ resolvers swarm init-addr none on-marked-down shutdown-sessions
 
 
 def gateway_service(*, name, port, backends, check, labels, logging,
-                    server_options="", inter="2s"):
+                    server_options="", inter="2s", secrets=()):
     """
     The compose service for one database's external endpoint.
 
@@ -1133,28 +1101,22 @@ def gateway_service(*, name, port, backends, check, labels, logging,
         raise store.ComponentError(
             "the gateway configuration contains a '$', which compose would "
             "interpolate away before docker ever read the file")
-    return {
+    service = {
         "image": HAPROXY_IMAGE,
         "command": ["sh", "-c",
                     f'set -e; printf %s "{conf}" > /tmp/haproxy.cfg; '
                     'exec haproxy -f /tmp/haproxy.cfg'],
-        # NO `ports`. Nothing is published on a host interface and no firewall
-        # rule is needed, because the only thing that connects to this is the
-        # tunnel connector, and it is on the edge network already.
         "networks": [EDGE_NETWORK],
         "logging": logging,
         "deploy": {
             # GLOBAL, WITH NO CONSTRAINT, exactly like the connector in
-            # stacks/ingress.yml and for exactly the same reason: one per node,
-            # so losing a node loses one of them rather than the only one. A
-            # single replica pinned to the manager is what this used to be, and
-            # it made the external path die with the master — which is the
-            # failure the tunnel exists to remove. Do not add a constraint here.
+            # stacks/ingress.yml and for the same reason: one per node, so
+            # losing a node loses one of them rather than the only one. Do not
+            # add a constraint here.
             #
-            # At the resting state of this cluster there are no workers, so
-            # global is one task on the master and the redundancy is nil. That
-            # is the same guarantee the connector gives, and it grows the same
-            # way: the moment a worker exists, so does a second door.
+            # At rest this cluster has no workers, so global is one task on the
+            # master. That is the guarantee the connector gives too, and it
+            # grows the same way.
             "mode": "global",
             "labels": labels,
             "restart_policy": {"condition": "any", "delay": "5s"},
@@ -1163,6 +1125,12 @@ def gateway_service(*, name, port, backends, check, labels, logging,
             "resources": {"reservations": {"cpus": "0.02", "memory": "32M"}},
         },
     }
+    if secrets:
+        # Mongo's authority: this proxy speaks TLS to the member on the client's
+        # behalf, so it is the thing that has to verify the member. Redis has no
+        # certificates and passes nothing.
+        service["secrets"] = list(secrets)
+    return service
 
 
 #: A bare hostname. Not an address: what goes here is the public hostname you

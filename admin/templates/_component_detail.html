@@ -303,9 +303,7 @@
              told about. They are the difference between a string you can copy
              and a string you can use. #}
           {% if creds.notes %}
-          {# FOLDED. These are reference — what a specific driver needs, what a
-             specific one gets wrong — and printing them open turned the tab into
-             a page nobody finishes. Open when something does not connect. #}
+          {# Reference, so folded: open it when something will not connect. #}
           <details class="ca">
             <summary>Client notes</summary>
             <ul class="hint notes">
@@ -325,38 +323,34 @@
         </div>
         <div class="panel-body stack">
           {% if creds.external_hostname %}
-          {# Three things, in the order you need them: what to tell Cloudflare,
-             what to run beside your application, and what your application then
-             connects to. The last one is a LOCAL address and that surprises
-             people — the hostname belongs to the helper, not to the driver. #}
+          {% for step in creds.external_steps %}
           <div>
-            <div class="eyebrow">1 &middot; Point the tunnel at this</div>
+            <div class="eyebrow">{{ loop.index }} &middot; {{ step.title }}</div>
+            {% if step.code %}
             <div class="conn">
-              <code>{{ creds.external_target }}</code>
+              <code>{{ step.code }}</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="{{ creds.external_target }}">Copy</button>
+                      data-copy-text="{{ step.code }}">Copy</button>
             </div>
-            <p class="hint">
-              Add <code>{{ creds.external_hostname }}</code> to this cluster's tunnel
-              with that target, behind an Access policy.
+            {% endif %}
+            <p class="hint">{{ step.note }}</p>
+            {% if step.file is defined %}
+            {% if step.file %}
+            <div class="conn">
+              <pre class="mono">{{ step.file }}</pre>
+              <button class="btn btn-sm" type="button" data-copy
+                      data-copy-text="{{ step.file }}">Copy</button>
+            </div>
+            <p class="hint">Save it as <code>{{ step.filename }}</code>.</p>
+            {% else %}
+            <p class="hint is-bad">
+              It does not exist yet — this component has never been deployed. It
+              appears here the first time it is.
             </p>
+            {% endif %}
+            {% endif %}
           </div>
-          <div>
-            <div class="eyebrow">2 &middot; Run this beside your application</div>
-            <div class="conn">
-              <code>{{ creds.external_command }}</code>
-              <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="{{ creds.external_command }}">Copy</button>
-            </div>
-          </div>
-          <div>
-            <div class="eyebrow">3 &middot; Connection URL</div>
-            <div class="conn">
-              <code>{{ creds.external_url }}</code>
-              <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="{{ creds.external_url }}">Copy</button>
-            </div>
-          </div>
+          {% endfor %}
           {% else %}
           <p class="muted">
             Inside the cluster only. Set a tunnel hostname in Settings to reach it
@@ -370,27 +364,7 @@
           </ul>
           {% endif %}
 
-          {% if creds.ca_certificate %}
-          <details class="ca">
-            <summary>CA certificate</summary>
-            <p class="hint">
-              Nothing public signs this. Save it and point <code>tlsCAFile=</code> at
-              it. Apps inside the cluster already have it mounted.
-            </p>
-            <div class="conn">
-              <pre class="mono">{{ creds.ca_certificate }}</pre>
-              <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="{{ creds.ca_certificate }}">Copy</button>
-            </div>
-          </details>
-          {% endif %}
-
           {% if creds.legacy_port and firewall and firewall.open %}
-          {# LEFT OVER, and worth saying out loud. This database used to be
-             published on a host port with a firewall rule opened by hand. It is
-             reached through the tunnel now, so nothing is listening there — but
-             the rule is still in the master's firewall, and an open port with
-             nothing behind it is exactly the kind of thing nobody finds again. #}
           <div class="panel-note is-bad">
             Port {{ creds.legacy_port }} is still open in the master's firewall.
             Nothing listens on it.

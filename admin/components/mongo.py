@@ -173,16 +173,7 @@ class MongoComponent(Component):
                        "machine. Applies to every member."),
             Field("external_hostname", "Tunnel hostname", "text", "",
                   placeholder="docs.example.com",
-                  help="Optional, and it is what makes this database reachable "
-                       "from OUTSIDE the cluster. Add the hostname to your "
-                       "Cloudflare tunnel — the Credentials tab gives you the "
-                       "target to paste — and put an Access policy in front of "
-                       "it, because a hostname on the tunnel is reachable by "
-                       "anyone who knows it. Nothing is published on a host port "
-                       "and no firewall is opened: your client runs "
-                       "`cloudflared access tcp`, which gives it a local port, "
-                       "and TLS still runs end to end from your driver to the "
-                       "member holding the data."),
+                  help="A DNS name on a domain in your Cloudflare account, which you invent — `docs.example.com`. Setting it here does not create it: the Credentials tab then gives you four steps, and until you have done them nothing outside the cluster can reach this database. Leave it empty to keep it in-cluster only."),
             Field("cpu_reservation", "CPU reserved", "cpu", 0.3, required=True,
                   minimum=0.01, maximum=32),
             Field("memory_reservation_mb", "Memory reserved (MB)", "memory", 768,
@@ -492,8 +483,13 @@ class MongoComponent(Component):
             # No `readPreference` either: this address is the primary by
             # construction, and asking it for a secondary read would be asking
             # for something the proxy has no way to offer.
+            # NO `tls=true`, AND NO `tlsCAFile`. The gateway holds the TLS
+            # session to the member; what reaches this address has already been
+            # encrypted by Cloudflare for the whole of its journey across the
+            # internet. Requiring it here would buy one more encrypted hop and
+            # cost every consumer a certificate file to obtain and install.
             return (f"mongodb://{user}:{secret}@{host}:{port or 27017}/"
-                    f"?directConnection=true&{'&'.join(common)}")
+                    f"?directConnection=true&{'&'.join(o for o in common if o != 'tls=true')}")
 
         # The authority is this component's own, so nothing can verify it from
         # the public root store — which is why every consumer needed a
@@ -533,19 +529,45 @@ class MongoComponent(Component):
             "external_target": f"tcp://{self.stack}_gateway:27017",
             "external_command": base.access_command(hostname, 27017) if hostname else "",
             "external_url": self.connection_url("127.0.0.1", 27017) if hostname else "",
+            "external_steps": self._external_steps(hostname) if hostname else [],
             "external_notes": self._external_notes(),
             "legacy_port": self.spec.get("external_port"),
-            "ca_certificate": self.ca_certificate(),
             "notes": self._credential_notes(),
         }
 
-    def _external_notes(self):
-        # SHORT — see the note on RedisComponent._external_notes.
+    def _external_steps(self, hostname):
+        """
+        What to DO, in order, each note saying what happens if you skip it.
+
+        Built here rather than in the template so an engine that needs a
+        different step can have one without the template learning its name. The
+        panel numbers whatever comes back.
+        """
         return [
-            "Always the current primary, so external reads never hit a secondary.",
-            "Put a Cloudflare Access policy on that hostname. It is the only door.",
-            "Your driver connects to 127.0.0.1 — the hostname belongs to the helper.",
-            "Keep `directConnection=true`, and add `tlsCAFile=` for the CA below.",
+            {"title": "Route this hostname to your tunnel",
+             "code": f"tcp://{self.stack}_gateway:27017",
+             "note": f"In the Cloudflare Zero Trust dashboard, add {hostname} to "
+                     "this cluster's tunnel with that target. PUT AN ACCESS POLICY "
+                     "ON IT: without one, anyone who knows the name reaches this "
+                     "database, with only the password in the way."},
+            {"title": "Install cloudflared where your app runs, and keep this running",
+             "code": base.access_command(hostname, 27017),
+             "note": "It holds the tunnel open and listens on 127.0.0.1:27017. "
+                     "Nothing can connect while it is stopped."},
+            {"title": "Point your application at this",
+             "code": self.connection_url("127.0.0.1", 27017),
+             "note": "Your application talks to the helper from step 2, which is "
+                     "running beside it and listening on this port; the helper "
+                     "carries the traffic through the tunnel. That is why this is "
+                     "a local address and not the hostname."},
+        ]
+
+    def _external_notes(self):
+        return [
+            "Whatever it reaches is the current primary, so an external read "
+            "never comes from a secondary however that switch is set.",
+            "Keep `directConnection=true`. Without it the driver goes looking for "
+            "the other members, at names that only resolve inside this cluster.",
         ]
 
     def ca_certificate(self):
@@ -578,10 +600,10 @@ class MongoComponent(Component):
             "cluster — but only as of its next deploy, so an app that was "
             "running before this database existed has to be redeployed once "
             "before it can connect.",
-            "A client OUTSIDE the cluster downloads the CA certificate below and "
-            "adds `tlsCAFile=` pointing at wherever it saved it. The external "
-            "URL leaves that option out precisely because only you know that "
-            "path — everything else about that URL is on the External panel.",
+            "ALL OF THIS IS ABOUT THE STRING ABOVE, which is the in-cluster one. "
+            "A client outside the cluster needs none of it: the External panel's "
+            "URL carries no TLS options at all, because the gateway holds that "
+            "session on its behalf.",
             "THE JAVA DRIVER IS THE EXCEPTION, and it fails quietly. It does not "
             "implement `tlsCAFile` — it logs \"Connection string contains "
             "unsupported option 'tlscafile'\" at WARN, uses the JVM's own trust "
@@ -699,14 +721,9 @@ class MongoComponent(Component):
         """
         Every name this member may be dialled by, for its certificate SAN.
 
-        NOTHING HERE DEPENDS ON WHERE THE CLIENT IS, and that is worth saying
-        because it nearly did. TLS is passed through the gateway rather than
-        terminated at it — the client's handshake ends at the member holding the
-        data, which is the whole point — so the member must prove it is the name
-        the client dialled. A client outside the cluster dials `127.0.0.1`,
-        because the tunnel helper listens there, and `127.0.0.1` is already in
-        this list for mongod's own health check. So a database published today
-        and unpublished tomorrow needs no certificate work at all.
+        Nothing here depends on where a client is: the gateway holds the TLS
+        session for anything outside, so these are the names members are dialled
+        by from inside the cluster and nothing else.
 
         The list itself is `pki.member_names`, which dataguard renews from as
         well — one definition, so a renewal cannot quietly issue a shorter one,
@@ -875,47 +892,37 @@ class MongoComponent(Component):
                 "resources": self.resources(),
             },
         }
-        # NO `ports` HERE, and that is the fix rather than an omission. Member 1
-        # is the copy on the master: it is a SECONDARY as soon as the set has
-        # grown, and `plan.next_action` removes it outright once the set no
-        # longer needs the master — so a port published on it reached a member
-        # that refuses every write, and then reached nothing. The published port
-        # belongs to the gateway, which is not a member and never moves.
         return service
 
     def _gateway(self):
         """
         The external endpoint: one address that is always the current primary.
 
-        A replica set is DISCOVERED, and that is exactly why it could not be
-        published. Handing an outside client `replicaSet=` makes the driver ask
-        the seed for the set's members and then throw the seed away — and the
-        answer is `docs_mongo-2:27017`, Swarm service DNS that resolves on the
-        overlay network and nowhere else. So the string worked for as long as
-        there was one member and stopped the day a second one appeared, which is
-        the "no multi-member support" this replaces.
-
-        The proxy does the discovery instead, from inside, where those names
-        mean something. Every member is asked the handshake question and only
-        the primary answers `ismaster: true`, so it is the only backend traffic
-        goes to; the client is told `directConnection=true` and treats this one
-        address as a server. Failover, growth onto dedicated machines and the
-        master's copy being dropped are then all invisible to it.
+        A replica set is DISCOVERED, and a client outside the cluster cannot do
+        that: the set answers with `docs_mongo-2:27017`, Swarm service DNS that
+        resolves on the overlay network and nowhere else. So the proxy discovers
+        from inside — every member is asked the handshake question and only the
+        primary answers `ismaster: true` — and the client is told
+        `directConnection=true` and treats this one address as a server.
 
         THE CHECK IS AN OP_QUERY, and that is not legacy sloppiness. Every driver
         must open with `isMaster`/`hello` over OP_QUERY — it is how the wire
         protocol is negotiated before anything else can be spoken — so it is the
         one message shape mongod is required to keep answering, and it needs no
-        authentication. It is built here from bytes rather than typed as a hex
+        authentication. It is built from bytes rather than typed as a hex
         literal so it can be read and tested rather than trusted.
 
-        TLS IS PASSED THROUGH, NOT TERMINATED. The client's session ends at the
-        member holding the data, exactly as an in-cluster client's does, and this
-        proxy never sees a query. `check-ssl` gives the health check its own TLS
-        connection alongside that; `verify none` on it is deliberate and costs
-        nothing, because the check only asks "are you the primary" and the answer
-        that matters — who this really is — is proved to the CLIENT by the
-        end-to-end handshake against this component's own authority.
+        TLS STARTS HERE RATHER THAN AT THE CLIENT, which is the trade that lets
+        an external consumer install nothing. It dials `127.0.0.1`, so an
+        end-to-end session would be verified against this component's private
+        authority — every consumer, in every language, obtaining that file and
+        naming it in a URL, for a hop Cloudflare has already encrypted across
+        the internet and the IPsec overlay encrypts inside the cluster. So this
+        speaks TLS to the member (`verify required` against the component's own
+        authority, `verifyhost` against the alias every member carries) and
+        takes the client's connection in the clear. mongod never sees plaintext;
+        `requireTLS` is untouched, and an application INSIDE the cluster keeps
+        its end-to-end session.
         """
         return base.gateway_service(
             name="mongo",
@@ -929,7 +936,14 @@ class MongoComponent(Component):
                 # match, which is the entire decision.
                 f"tcp-check expect binary {_ISMASTER_TRUE}",
             ],
-            server_options="check-ssl verify none",
+            server_options=("ssl verify required "
+                            f"ca-file {base.ca_file_for(self.name)} "
+                            # The alias, not the member: every member carries it,
+                            # so one line covers every slot and a new one needs no
+                            # change here.
+                            f"verifyhost {self.seed_alias()}"),
+            secrets=[{"source": self.secret_name("tls-ca"),
+                      "target": f"{self.name}-ca.crt", "mode": 0o444}],
             # Slower than Redis on purpose: each check is a TLS handshake and a
             # connection, and mongod writes a log line at each end of one. Three
             # seconds with `fall 2` takes a demoted primary out well inside the

@@ -2549,7 +2549,7 @@ details.ca .conn pre { margin: 0; overflow-x: auto; font-size: 11px; line-height
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-04T17:34:12Z" data-localtime>2026-09-04T17:34:12Z</time>
+          <time datetime="2026-09-05T03:13:21Z" data-localtime>2026-09-05T03:13:21Z</time>
           
         </div>
       </div>
@@ -3967,7 +3967,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-04T17:34:12Z" data-localtime>2026-09-04T17:34:12Z</time>
+          <time datetime="2026-09-05T03:13:21Z" data-localtime>2026-09-05T03:13:21Z</time>
           
         </div>
       </div>
@@ -5298,7 +5298,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-04T17:34:12Z" data-localtime>2026-09-04T17:34:12Z</time>
+          <time datetime="2026-09-05T03:13:21Z" data-localtime>2026-09-05T03:13:21Z</time>
           
         </div>
       </div>
@@ -5530,9 +5530,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis+sentinel://default:80f6121235b09b0cb1f8d0d83b9b2f13efac406b5f8bb275@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
+              <code>redis+sentinel://default:d88a086b1f896141a4ab7f27b60aad07f8be900f1fda56a2@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis+sentinel://default:80f6121235b09b0cb1f8d0d83b9b2f13efac406b5f8bb275@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
+                      data-copy-text="redis+sentinel://default:d88a086b1f896141a4ab7f27b60aad07f8be900f1fda56a2@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -5543,7 +5543,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="80f6121235b09b0cb1f8d0d83b9b2f13efac406b5f8bb275">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="d88a086b1f896141a4ab7f27b60aad07f8be900f1fda56a2">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -5580,41 +5580,50 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           
           
           <div>
-            <div class="eyebrow">1 &middot; Point the tunnel at this</div>
+            <div class="eyebrow">1 &middot; Route this hostname to your tunnel</div>
+            
             <div class="conn">
               <code>tcp://cache_gateway:6379</code>
               <button class="btn btn-sm" type="button" data-copy
                       data-copy-text="tcp://cache_gateway:6379">Copy</button>
             </div>
-            <p class="hint">
-              Add <code>cache.acme.dev</code> to this cluster's tunnel
-              with that target, behind an Access policy.
-            </p>
+            
+            <p class="hint">In the Cloudflare Zero Trust dashboard, add cache.acme.dev to this cluster&#39;s tunnel with that target. PUT AN ACCESS POLICY ON IT: without one, anyone who knows the name reaches this database, with only the password in the way.</p>
+            
           </div>
+          
           <div>
-            <div class="eyebrow">2 &middot; Run this beside your application</div>
+            <div class="eyebrow">2 &middot; Install cloudflared where your app runs, and keep this running</div>
+            
             <div class="conn">
               <code>cloudflared access tcp --hostname cache.acme.dev --url 127.0.0.1:6379</code>
               <button class="btn btn-sm" type="button" data-copy
                       data-copy-text="cloudflared access tcp --hostname cache.acme.dev --url 127.0.0.1:6379">Copy</button>
             </div>
+            
+            <p class="hint">It holds the tunnel open and listens on 127.0.0.1:6379. Nothing can connect while it is stopped.</p>
+            
           </div>
+          
           <div>
-            <div class="eyebrow">3 &middot; Connection URL</div>
+            <div class="eyebrow">3 &middot; Point your application at this</div>
+            
             <div class="conn">
-              <code>redis://default:80f6121235b09b0cb1f8d0d83b9b2f13efac406b5f8bb275@127.0.0.1:6379</code>
+              <code>redis://default:d88a086b1f896141a4ab7f27b60aad07f8be900f1fda56a2@127.0.0.1:6379</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis://default:80f6121235b09b0cb1f8d0d83b9b2f13efac406b5f8bb275@127.0.0.1:6379">Copy</button>
+                      data-copy-text="redis://default:d88a086b1f896141a4ab7f27b60aad07f8be900f1fda56a2@127.0.0.1:6379">Copy</button>
             </div>
+            
+            <p class="hint">Your application talks to the helper from step 2, which is running beside it and listening on this port; the helper carries the traffic through the tunnel. That is why this is a local address and not the hostname.</p>
+            
           </div>
+          
           
 
           
           <ul class="hint notes">
-            <li>Always the current primary. Your client needs no sentinel support.</li><li>Put a Cloudflare Access policy on that hostname. It is the only door.</li><li>Your app connects to 127.0.0.1 — the hostname belongs to the helper.</li><li>Redis has no TLS here; the tunnel encrypts the hop across the internet.</li>
+            <li>Whatever it reaches is the current primary; a failover changes nothing here, and your client needs no sentinel support.</li><li>Redis has no TLS of its own. The tunnel encrypts the hop across the internet; the short hops at each end are in the clear.</li>
           </ul>
-          
-
           
 
           
@@ -6032,7 +6041,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
            value="cache.acme.dev">
   
 
-  <p class="hint">Optional, and it is what makes this database reachable from OUTSIDE the cluster. Add the hostname to your Cloudflare tunnel — the Credentials tab gives you the target to paste — and put an Access policy in front of it, because a hostname on the tunnel is reachable by anyone who knows it. Nothing is published on a host port and no firewall is opened: your client runs `cloudflared access tcp`, which gives it a local port. Leave it empty and this database is reachable only from inside the cluster.</p>
+  <p class="hint">A DNS name on a domain in your Cloudflare account, which you invent — `cache.example.com`. Setting it here does not create it: the Credentials tab then gives you three steps, and until you have done them nothing outside the cluster can reach this database. Leave it empty to keep it in-cluster only.</p>
 </div>
       
         
@@ -6472,7 +6481,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-04T17:34:12Z" data-localtime>2026-09-04T17:34:12Z</time>
+          <time datetime="2026-09-05T03:13:21Z" data-localtime>2026-09-05T03:13:21Z</time>
           
         </div>
       </div>
@@ -6692,9 +6701,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>mongodb://root:86971bf05152cf9ad1c20dece4606c94d84f5c2f88575e7c@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
+              <code>mongodb://root:fef107358c6f686ee1a0c1170fbb533275321f389448dba5@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:86971bf05152cf9ad1c20dece4606c94d84f5c2f88575e7c@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
+                      data-copy-text="mongodb://root:fef107358c6f686ee1a0c1170fbb533275321f389448dba5@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -6705,7 +6714,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="86971bf05152cf9ad1c20dece4606c94d84f5c2f88575e7c">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="fef107358c6f686ee1a0c1170fbb533275321f389448dba5">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -6724,7 +6733,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <details class="ca">
             <summary>Client notes</summary>
             <ul class="hint notes">
-              <li>Every member is named in the string above, including the ones that do not exist yet. That is deliberate: the driver ignores a seed it cannot resolve and discovers the real set from the ones it can, which is what lets this database move onto its own machines without you changing anything.</li><li>TLS is required, and the string above already names the authority file, so an application on the edge network needs nothing added to it. That file is mounted into every application component in this cluster — but only as of its next deploy, so an app that was running before this database existed has to be redeployed once before it can connect.</li><li>A client OUTSIDE the cluster downloads the CA certificate below and adds `tlsCAFile=` pointing at wherever it saved it. The external URL leaves that option out precisely because only you know that path — everything else about that URL is on the External panel.</li><li>THE JAVA DRIVER IS THE EXCEPTION, and it fails quietly. It does not implement `tlsCAFile` — it logs &#34;Connection string contains unsupported option &#39;tlscafile&#39;&#34; at WARN, uses the JVM&#39;s own trust store instead, and every operation then fails with &#34;PKIX path building failed&#34;. Java&#39;s equivalent is an SSLContext on the client: load this CA into a KeyStore, hand it to MongoClientSettings via applyToSslSettings, and do NOT set -Djavax.net.ssl.trustStore, which would replace trust for the whole process.</li><li>A JAVA CLIENT ALSO HAS TO ALLOW THE HOST NAME. Swarm names every service `&lt;stack&gt;_&lt;service&gt;`, and the JDK rejects a host name containing an underscore before it reads the certificate at all (&#34;Illegal given domain name: documents_mongo-1&#34;), even though that exact name is in the certificate. Set invalidHostNameAllowed on the same SSL settings. It gives up less than it sounds: this authority signs nothing but this component&#39;s own members, so a chain that validates already proves the peer is one of them.</li><li>READS MAY GO TO SECONDARIES, and a secondary can be behind the write that produced what you are reading. To keep read-your-own-writes, use one causally consistent session per request chain and carry its operationTime forward:
+              <li>Every member is named in the string above, including the ones that do not exist yet. That is deliberate: the driver ignores a seed it cannot resolve and discovers the real set from the ones it can, which is what lets this database move onto its own machines without you changing anything.</li><li>TLS is required, and the string above already names the authority file, so an application on the edge network needs nothing added to it. That file is mounted into every application component in this cluster — but only as of its next deploy, so an app that was running before this database existed has to be redeployed once before it can connect.</li><li>ALL OF THIS IS ABOUT THE STRING ABOVE, which is the in-cluster one. A client outside the cluster needs none of it: the External panel&#39;s URL carries no TLS options at all, because the gateway holds that session on its behalf.</li><li>THE JAVA DRIVER IS THE EXCEPTION, and it fails quietly. It does not implement `tlsCAFile` — it logs &#34;Connection string contains unsupported option &#39;tlscafile&#39;&#34; at WARN, uses the JVM&#39;s own trust store instead, and every operation then fails with &#34;PKIX path building failed&#34;. Java&#39;s equivalent is an SSLContext on the client: load this CA into a KeyStore, hand it to MongoClientSettings via applyToSslSettings, and do NOT set -Djavax.net.ssl.trustStore, which would replace trust for the whole process.</li><li>A JAVA CLIENT ALSO HAS TO ALLOW THE HOST NAME. Swarm names every service `&lt;stack&gt;_&lt;service&gt;`, and the JDK rejects a host name containing an underscore before it reads the certificate at all (&#34;Illegal given domain name: documents_mongo-1&#34;), even though that exact name is in the certificate. Set invalidHostNameAllowed on the same SSL settings. It gives up less than it sounds: this authority signs nothing but this component&#39;s own members, so a chain that validates already proves the peer is one of them.</li><li>READS MAY GO TO SECONDARIES, and a secondary can be behind the write that produced what you are reading. To keep read-your-own-writes, use one causally consistent session per request chain and carry its operationTime forward:
     with client.start_session(causal_consistency=True) as s:
         coll.insert_one(doc, session=s)
         token = s.operation_time          # send this to the client
@@ -6748,41 +6757,50 @@ Without that, a user can save a row and not see it on the next page load, and no
           
           
           <div>
-            <div class="eyebrow">1 &middot; Point the tunnel at this</div>
+            <div class="eyebrow">1 &middot; Route this hostname to your tunnel</div>
+            
             <div class="conn">
               <code>tcp://documents_gateway:27017</code>
               <button class="btn btn-sm" type="button" data-copy
                       data-copy-text="tcp://documents_gateway:27017">Copy</button>
             </div>
-            <p class="hint">
-              Add <code>docs.acme.dev</code> to this cluster's tunnel
-              with that target, behind an Access policy.
-            </p>
+            
+            <p class="hint">In the Cloudflare Zero Trust dashboard, add docs.acme.dev to this cluster&#39;s tunnel with that target. PUT AN ACCESS POLICY ON IT: without one, anyone who knows the name reaches this database, with only the password in the way.</p>
+            
           </div>
+          
           <div>
-            <div class="eyebrow">2 &middot; Run this beside your application</div>
+            <div class="eyebrow">2 &middot; Install cloudflared where your app runs, and keep this running</div>
+            
             <div class="conn">
               <code>cloudflared access tcp --hostname docs.acme.dev --url 127.0.0.1:27017</code>
               <button class="btn btn-sm" type="button" data-copy
                       data-copy-text="cloudflared access tcp --hostname docs.acme.dev --url 127.0.0.1:27017">Copy</button>
             </div>
+            
+            <p class="hint">It holds the tunnel open and listens on 127.0.0.1:27017. Nothing can connect while it is stopped.</p>
+            
           </div>
+          
           <div>
-            <div class="eyebrow">3 &middot; Connection URL</div>
+            <div class="eyebrow">3 &middot; Point your application at this</div>
+            
             <div class="conn">
-              <code>mongodb://root:86971bf05152cf9ad1c20dece4606c94d84f5c2f88575e7c@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;tls=true&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority</code>
+              <code>mongodb://root:fef107358c6f686ee1a0c1170fbb533275321f389448dba5@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:86971bf05152cf9ad1c20dece4606c94d84f5c2f88575e7c@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;tls=true&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority">Copy</button>
+                      data-copy-text="mongodb://root:fef107358c6f686ee1a0c1170fbb533275321f389448dba5@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority">Copy</button>
             </div>
+            
+            <p class="hint">Your application talks to the helper from step 2, which is running beside it and listening on this port; the helper carries the traffic through the tunnel. That is why this is a local address and not the hostname.</p>
+            
           </div>
+          
           
 
           
           <ul class="hint notes">
-            <li>Always the current primary, so external reads never hit a secondary.</li><li>Put a Cloudflare Access policy on that hostname. It is the only door.</li><li>Your driver connects to 127.0.0.1 — the hostname belongs to the helper.</li><li>Keep `directConnection=true`, and add `tlsCAFile=` for the CA below.</li>
+            <li>Whatever it reaches is the current primary, so an external read never comes from a secondary however that switch is set.</li><li>Keep `directConnection=true`. Without it the driver goes looking for the other members, at names that only resolve inside this cluster.</li>
           </ul>
-          
-
           
 
           
@@ -7238,7 +7256,7 @@ Without that, a user can save a row and not see it on the next page load, and no
            value="docs.acme.dev">
   
 
-  <p class="hint">Optional, and it is what makes this database reachable from OUTSIDE the cluster. Add the hostname to your Cloudflare tunnel — the Credentials tab gives you the target to paste — and put an Access policy in front of it, because a hostname on the tunnel is reachable by anyone who knows it. Nothing is published on a host port and no firewall is opened: your client runs `cloudflared access tcp`, which gives it a local port, and TLS still runs end to end from your driver to the member holding the data.</p>
+  <p class="hint">A DNS name on a domain in your Cloudflare account, which you invent — `docs.example.com`. Setting it here does not create it: the Credentials tab then gives you four steps, and until you have done them nothing outside the cluster can reach this database. Leave it empty to keep it in-cluster only.</p>
 </div>
       
         
@@ -8535,7 +8553,7 @@ Without that, a user can save a row and not see it on the next page load, and no
            value="">
   
 
-  <p class="hint">Optional, and it is what makes this database reachable from OUTSIDE the cluster. Add the hostname to your Cloudflare tunnel — the Credentials tab gives you the target to paste — and put an Access policy in front of it, because a hostname on the tunnel is reachable by anyone who knows it. Nothing is published on a host port and no firewall is opened: your client runs `cloudflared access tcp`, which gives it a local port. Leave it empty and this database is reachable only from inside the cluster.</p>
+  <p class="hint">A DNS name on a domain in your Cloudflare account, which you invent — `cache.example.com`. Setting it here does not create it: the Credentials tab then gives you three steps, and until you have done them nothing outside the cluster can reach this database. Leave it empty to keep it in-cluster only.</p>
 </div>
       
         
@@ -8958,7 +8976,7 @@ Without that, a user can save a row and not see it on the next page load, and no
            value="">
   
 
-  <p class="hint">Optional, and it is what makes this database reachable from OUTSIDE the cluster. Add the hostname to your Cloudflare tunnel — the Credentials tab gives you the target to paste — and put an Access policy in front of it, because a hostname on the tunnel is reachable by anyone who knows it. Nothing is published on a host port and no firewall is opened: your client runs `cloudflared access tcp`, which gives it a local port, and TLS still runs end to end from your driver to the member holding the data.</p>
+  <p class="hint">A DNS name on a domain in your Cloudflare account, which you invent — `docs.example.com`. Setting it here does not create it: the Credentials tab then gives you four steps, and until you have done them nothing outside the cluster can reach this database. Leave it empty to keep it in-cluster only.</p>
 </div>
       
         
@@ -10952,7 +10970,7 @@ Without that, a user can save a row and not see it on the next page load, and no
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788539652.21429" data-localtime-epoch>1788539652</time>
+              <time datetime="1788574401.806893" data-localtime-epoch>1788574401</time>
             
           </td>
           <td>
@@ -11644,7 +11662,7 @@ Without that, a user can save a row and not see it on the next page load, and no
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788539652.21429" data-localtime-epoch>1788539652</time>
+              <time datetime="1788574401.806893" data-localtime-epoch>1788574401</time>
             
           </td>
           <td>

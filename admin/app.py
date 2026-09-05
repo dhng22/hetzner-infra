@@ -811,14 +811,7 @@ def _newest_deploy(name, view=None):
 
 
 def _firewall_state(component):
-    """
-    Whether a port this component USED to be published on is still open.
-
-    Only that. Databases are reached through the tunnel now — nothing is
-    published on a host interface and no rule is opened for one — so this is
-    here to close the door the old way left standing, on a cluster that was
-    running before the change. A component that never had one reports nothing.
-    """
+    """Whether a port this component was once published on is still open."""
     port = component.spec.get("external_port")
     return {
         "available": True if PREVIEW else hostops.available(),
@@ -1022,15 +1015,7 @@ def save_credentials(name):
 @app.post("/components/<name>/firewall")
 @auth.login_required
 def firewall(name):
-    """
-    Close a port on the master, over the restricted SSH channel.
-
-    CLOSE ONLY. Opening one was the other half of this until databases moved
-    behind the tunnel, and there is nothing left to open: the connector dials
-    out, so no database is reachable through a host interface at all. What
-    remains is the rule an older cluster opened for a published port, still
-    standing in front of nothing.
-    """
+    """Close a port on the master, over the restricted SSH channel."""
     _require_csrf()
     _no_writes_in_preview()
     _load(name)

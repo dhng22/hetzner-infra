@@ -371,17 +371,9 @@ class ComponentTest(ComponentCase):
         self.assertNotIn("redis-exporter", without["services"])
         self.assertEqual(without["services"]["redis-1"]["networks"], ["edge"])
 
-    def test_nothing_is_published_on_a_host_port_any_more(self):
-        """
-        Not by a member, and not by the gateway either.
-
-        Member 1 is the copy on the master: a secondary once the set has grown,
-        gone entirely once dataguard no longer needs the master, and pinned to
-        the one machine this cluster cannot lose. A host port there reached a
-        server that refused writes, then reached nothing, and died with the
-        master besides. The tunnel replaces all three: the connector dials out,
-        so there is no address on this side and no firewall rule to open.
-        """
+    def test_nothing_is_published_on_a_host_port(self):
+        """Not by a member, not by the gateway. The connector dials out, so
+        there is no address on this side and no firewall rule to open."""
         rendered = self.make_redis(external_hostname="cache.example.com").render()
         for service in rendered["services"].values():
             self.assertNotIn("ports", service)
@@ -873,16 +865,17 @@ class TlsTrustTest(ComponentCase):
         self.assertEqual([s["source"] for s in service["secrets"]],
                          ["docs-tls-ca-v2"])
 
-    def test_the_external_url_names_no_path_inside_a_container(self):
-        """
-        A client outside the cluster will never have `/run/secrets`. Handing it
-        that path produces a string whose only possible outcome is a file-not-
-        found, which reads like a broken database rather than a missing CA.
-        """
+    def test_the_external_url_asks_the_client_for_no_certificate_at_all(self):
+        """The gateway holds that session, so neither option belongs in the
+        string an outside client is handed."""
         mongo = self.make_mongo(name="docs")
-        external = mongo.connection_url("203.0.113.10", 27017)
+        external = mongo.connection_url("127.0.0.1", 27017)
         self.assertNotIn("tlsCAFile", external)
-        self.assertIn("tls=true", external)
+        self.assertNotIn("tls=true", external)
+        # The in-cluster string is untouched: it still gets both.
+        internal = mongo.connection_url()
+        self.assertIn("tls=true", internal)
+        self.assertIn("tlsCAFile", internal)
 
 
 class CredentialsAgreeTest(ComponentCase):
@@ -1057,27 +1050,10 @@ class MemberSlotTest(ComponentCase):
 
 class ExternalEndpointTest(ComponentCase):
     """
-    How a client OUTSIDE the cluster reaches a database, and why it is two
-    pieces rather than one.
-
-    The design this replaces published a host port on member 1, and every word
-    of that was a problem:
-
-      * it was advertised on the master's PRIVATE address, which no client
-        outside the cluster has ever been able to reach;
-      * a Redis client got a plain URL to one server with no way to follow a
-        failover, while the sentinel URL beside it cannot work from outside at
-        all — sentinel answers with names that resolve only on the overlay;
-      * a Mongo client got `replicaSet=`, which makes the driver discover the
-        set and connect to those same overlay names, so the string worked while
-        the set was one member and stopped the day it became two;
-      * the port lived on member 1, which dataguard demotes and then removes;
-      * and member 1 is pinned to the master, so the whole external path died
-        with the one machine this cluster cannot replace.
-
-    WHICH COPY is answered by a proxy that asks every member who is in charge.
-    WHICH MACHINE is answered by the tunnel, which is how every application here
-    already survives losing a node.
+    How a client OUTSIDE the cluster reaches a database. Two pieces, because
+    there are two questions: WHICH COPY is answered by a proxy that asks every
+    member who is in charge, and WHICH MACHINE by the tunnel, which is how
+    every application here already survives losing a node.
     """
 
     def gateway_conf(self, component):
@@ -1099,15 +1075,8 @@ class ExternalEndpointTest(ComponentCase):
             self.assertNotIn(f"{component.stack}_gateway", component.services())
 
     def test_the_gateway_is_global_and_unpinned(self):
-        """
-        THE FIX FOR THE ONE THAT MATTERED. It was a single replica pinned to the
-        manager, so the external path died with the master — while the
-        applications inside the cluster carried on, because their address is
-        peer discovery and needs no master at all.
-
-        Global with no constraint is what the tunnel connector does, one per
-        node, for exactly this reason.
-        """
+        """One per node, like the tunnel connector: losing a machine loses one
+        of them rather than the only one."""
         for component in (self.published_redis(), self.published_mongo()):
             deploy = component.render()["services"]["gateway"]["deploy"]
             self.assertEqual(deploy["mode"], "global", component.TYPE)
@@ -1219,18 +1188,26 @@ class ExternalEndpointTest(ComponentCase):
         self.assertIn(f"tcp-check expect binary {mongo._ISMASTER_TRUE}",
                       self.gateway_conf(self.published_mongo()))
 
-    def test_mongo_health_checks_speak_tls_but_the_traffic_is_not_terminated(self):
+    def test_the_gateway_holds_the_tls_session_to_the_member(self):
         """
-        `check-ssl` gives the check its own TLS connection; the data path is
-        plain `mode tcp`, so the client's session ends at the member holding the
-        data and neither this proxy nor the tunnel sees a query.
+        It is what lets an external client install no certificate — so it has to
+        verify the member properly on that client's behalf: the chain against
+        this component's authority, the name against the alias every member
+        carries.
         """
-        conf = self.gateway_conf(self.published_mongo())
-        self.assertIn("check-ssl", conf)
-        self.assertIn("mode tcp", conf)
-        self.assertNotIn("bind :27017 ssl", conf)
+        service = self.published_mongo("docs").render()["services"]["gateway"]
+        conf = service["command"][2]
+        self.assertIn("ssl verify required", conf)
+        self.assertIn("ca-file /run/secrets/docs-ca.crt", conf)
+        self.assertIn("verifyhost docs-mongo", conf)
+        # `verify none` would make the check pass against anything at all.
+        self.assertNotIn("verify none", conf)
+        # ...and the authority has to actually be mounted for that to work.
+        self.assertEqual([x["target"] for x in service["secrets"]], ["docs-ca.crt"])
+
+    def test_redis_needs_no_certificate_anywhere(self):
         self.assertNotIn("secrets",
-                         self.published_mongo("d2").render()["services"]["gateway"])
+                         self.published_redis().render()["services"]["gateway"])
 
     # --- what the page hands you --------------------------------------------
 
@@ -1250,11 +1227,8 @@ class ExternalEndpointTest(ComponentCase):
         self.assertNotIn("docs.example.com", creds["external_url"])
 
     def test_the_mongo_external_url_does_not_ask_the_driver_to_discover(self):
-        """
-        `replicaSet=` was in this string and is the bug: the driver asks the
-        seed who the members are, throws the seed away, and is answered with
-        overlay names. `directConnection=true` is what stops that.
-        """
+        """`replicaSet=` would make the driver connect to overlay names it
+        cannot resolve. `directConnection=true` is what stops that."""
         url = self.published_mongo("docs").credentials()["external_url"]
         self.assertIn("directConnection=true", url)
         self.assertNotIn("replicaSet", url)
@@ -1262,9 +1236,10 @@ class ExternalEndpointTest(ComponentCase):
         # preference for a secondary it has no address for.
         self.assertNotIn("tlsCAFile", url)
         self.assertNotIn("readPreference", url)
-        # ...and TLS and the write concern are still there, because those are
-        # the same guarantees an application inside the cluster gets.
-        self.assertIn("tls=true", url)
+        # No TLS options either — the gateway holds that session.
+        self.assertNotIn("tls", url)
+        # ...and the write concern IS still there, because that is a guarantee
+        # about the data rather than about the connection.
         self.assertIn("w=majority", url)
 
     def test_the_internal_mongo_url_still_discovers(self):
@@ -1282,12 +1257,8 @@ class ExternalEndpointTest(ComponentCase):
         self.assertTrue(creds["internal_url"].startswith("redis+sentinel://"))
 
     def test_no_hostname_means_no_url_rather_than_a_wrong_one(self):
-        """
-        The failure this whole change starts from: the panel printed a
-        confident, copyable URL naming 10.0.0.2. An address nothing outside can
-        reach is worse than a blank, because it sends somebody debugging their
-        own firewall.
-        """
+        """A copyable URL that cannot work is worse than a blank: it sends
+        somebody debugging their own firewall."""
         for component in (self.make_redis("c1"), self.make_mongo("d1")):
             creds = component.credentials()
             self.assertEqual(creds["external_url"], "", component.TYPE)
@@ -1315,13 +1286,9 @@ class ExternalEndpointTest(ComponentCase):
 
     # --- the certificate that makes the mongo URL usable --------------------
 
-    def test_the_members_already_prove_the_address_the_client_dials(self):
-        """
-        The client dials 127.0.0.1, because the tunnel helper listens there, and
-        every member certificate already carries it for mongod's own health
-        check. So publishing a database needs no certificate work at all — which
-        is the version of this that does not have a migration in it.
-        """
+    def test_the_members_carry_the_names_they_are_dialled_by(self):
+        """Its service name, the alias the connection string uses, and the
+        loopback pair mongod's own health check needs."""
         import pki
         mongo = self.published_mongo("docs")
         mongo.render()
@@ -1332,11 +1299,8 @@ class ExternalEndpointTest(ComponentCase):
                                          "docs_mongo-3"]))
 
     def test_the_hostname_never_reaches_a_certificate(self):
-        """
-        It is the tunnel's name, not the database's. Putting it in the SAN would
-        tie the certificates to where the client happens to be, which is the
-        thing that had a migration attached to it.
-        """
+        """It is the tunnel's name, not the database's. In the SAN it would tie
+        the certificates to where the client happens to be."""
         import pki
         mongo = self.published_mongo("docs")
         mongo.render()
@@ -1355,3 +1319,43 @@ class ExternalEndpointTest(ComponentCase):
                 type_name, f"x{index}", {"external_hostname": "203.0.113.10"})
             self.assertTrue(any("not a tunnel hostname" in p for p in problems),
                             f"{type_name}: {problems}")
+
+    def test_every_step_says_what_happens_if_you_skip_it(self):
+        """
+        A step that only says what to type is a step people skip, and one of
+        these is the difference between a database behind a door and a database
+        on the internet with a password.
+        """
+        for component in (self.published_redis(), self.published_mongo()):
+            steps = component.credentials()["external_steps"]
+            self.assertGreaterEqual(len(steps), 3, component.TYPE)
+            for index, step in enumerate(steps, 1):
+                where = f"{component.TYPE} step {index}"
+                self.assertTrue(step["title"], where)
+                self.assertGreater(len(step["note"]), 40, where)
+            # The one that is security rather than plumbing, said in the step
+            # itself rather than in a note underneath the whole panel.
+            self.assertTrue(any("ACCESS POLICY" in s["note"] for s in steps),
+                            component.TYPE)
+
+    def test_the_last_step_says_why_it_is_a_local_address(self):
+        """`127.0.0.1` in a connection string looks like a mistake until the
+        reason is beside it."""
+        for component in (self.published_redis(), self.published_mongo()):
+            last = component.credentials()["external_steps"][-1]
+            self.assertIn("127.0.0.1", last["code"], component.TYPE)
+            self.assertIn("helper", last["note"], component.TYPE)
+
+    def test_neither_engine_asks_the_client_to_install_anything(self):
+        """Three steps, both engines, and no certificate among them."""
+        for component in (self.published_redis(), self.published_mongo()):
+            steps = component.credentials()["external_steps"]
+            self.assertEqual(len(steps), 3, component.TYPE)
+            for step in steps:
+                self.assertNotIn("file", step, component.TYPE)
+                self.assertNotIn("tlsCAFile", step["code"], component.TYPE)
+
+    def test_an_unpublished_database_offers_no_steps(self):
+        for component in (self.make_redis("c1"), self.make_mongo("d1")):
+            self.assertEqual(component.credentials()["external_steps"], [],
+                             component.TYPE)

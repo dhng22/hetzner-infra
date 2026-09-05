@@ -135,16 +135,10 @@ class MemberTest(unittest.TestCase):
 
     def test_one_definition_of_what_a_member_certificate_must_name(self):
         """
-        THE DRIFT THIS EXISTS TO STOP, and it was live.
-
-        Two processes issue this material. The panel knows every name a member
-        may be dialled by — its service name, the per-task name, and the alias
-        that makes the connection string permanent. Dataguard renews it on a
-        loop and used to pass its own shorter list: so at thirty days out the
-        alias silently left the certificate, and the set went on replicating
-        perfectly while its own connection string stopped connecting.
-
-        One function, both callers.
+        Two processes issue this material — the panel creates it, dataguard
+        renews it — and a shorter list on either side drops a name silently: the
+        set replicates perfectly while its own connection string stops
+        connecting. One function, both callers.
         """
         names = pki.member_names("docs_mongo-2", "docs-mongo")
         self.assertEqual(names[0], "docs_mongo-2", "the CN comes first")
@@ -155,12 +149,8 @@ class MemberTest(unittest.TestCase):
 
     def test_the_loopback_names_are_not_decoration(self):
         """
-        mongod's own health check uses them — and so does a client OUTSIDE the
-        cluster, which reaches this member through a tunnel helper listening on
-        its own loopback. TLS is forwarded rather than terminated, so 127.0.0.1
-        is the name that handshake is verified against. Dropping it would break
-        every external connection and nothing internal, which is the worst way
-        for it to be wrong.
+        mongod's own health check dials them, and a member whose certificate
+        does not carry them fails its own liveness probe.
         """
         for name in ("localhost", "127.0.0.1"):
             self.assertIn(name, pki.member_names("docs_mongo-1", "docs-mongo"))
