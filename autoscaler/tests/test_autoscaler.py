@@ -180,7 +180,8 @@ class RightSizingTest(unittest.TestCase):
         # the reservation was the same test. A throttled service now needs a
         # bigger ceiling while its measured usage — capped by that ceiling — has
         # not moved at all, and that resize must still happen.
-        self.assertTrue(A._changed_enough(0.08, A.CPU_LIMIT_RELIEF_FLOOR))
+        self.assertTrue(A._changed_enough(0.08, A.CPU_LIMIT_RELIEF_FLOOR,
+                                          A.RESIZE_MIN_CPU_STEP))
 
     def test_the_real_measurement_fits_on_the_master(self):
         cpu_res, mem_res, _, _ = self.size(0.0658, 151)
@@ -218,12 +219,41 @@ class RightSizingTest(unittest.TestCase):
 
     def test_small_drift_does_not_trigger_a_restart(self):
         """Every resize restarts every replica, so it must not chase noise."""
-        self.assertFalse(A._changed_enough(0.10, 0.11))
-        self.assertTrue(A._changed_enough(0.10, 0.50))
+        step = A.RESIZE_MIN_CPU_STEP
+        self.assertFalse(A._changed_enough(0.10, 0.11, step))
+        self.assertTrue(A._changed_enough(0.10, 0.50, step))
 
     def test_growth_from_nothing_always_counts_as_a_change(self):
-        self.assertTrue(A._changed_enough(0, 0.05))
-        self.assertTrue(A._changed_enough(None, 0.05))
+        self.assertTrue(A._changed_enough(0, 0.05, A.RESIZE_MIN_CPU_STEP))
+        self.assertTrue(A._changed_enough(None, 0.05, A.RESIZE_MIN_CPU_STEP))
+
+    def test_noise_on_a_nearly_idle_service_is_not_a_change(self):
+        """
+        THE RESTART LOOP. A percentage is meaningless near the floor: at 0.02
+        cores, 25% is five thousandths of a core, so ordinary measurement noise
+        reads as a real change and keeps reading as one.
+
+        These are the four consecutive readings the live cluster resized on, in
+        two hours, each one a rolling restart of every replica of a service
+        that was idle the whole time — which from outside looks exactly like
+        the platform spawning and killing containers at random.
+        """
+        step = A.RESIZE_MIN_CPU_STEP
+        for old, new in ((0.04, 0.022), (0.022, 0.028),
+                         (0.028, 0.077), (0.077, 0.031)):
+            with self.subTest(resize=(old, new)):
+                self.assertFalse(A._changed_enough(old, new, step))
+
+    def test_a_change_worth_a_restart_still_happens(self):
+        # The absolute floor is a guard against noise, not a freeze: a service
+        # that genuinely needs a different size still gets one.
+        self.assertTrue(A._changed_enough(0.02, 0.40, A.RESIZE_MIN_CPU_STEP))
+        self.assertTrue(A._changed_enough(512, 128, A.RESIZE_MIN_MEM_STEP_MB))
+
+    def test_a_big_relative_move_that_is_absolutely_tiny_is_refused(self):
+        # Tripling 0.01 cores is a 200% change and three hundredths of a core.
+        # Both tests have to pass, or the relative one is the only one there is.
+        self.assertFalse(A._changed_enough(0.01, 0.03, A.RESIZE_MIN_CPU_STEP))
 
 
 class HandoverNudgeTest(unittest.TestCase):

@@ -613,6 +613,24 @@ CPU_LIMIT_RELIEF_FLOOR = 0.5  # below ~half a core, CFS quantisation dominates l
 #: cluster all day and never converge.
 RESIZE_MIN_CHANGE = 0.25
 
+#: And not for a change this small in ABSOLUTE terms either, whatever the
+#: percentage says. A relative threshold is meaningless near the floor: a
+#: service idling at 0.02 cores crosses 25% at 0.005 of a core, so ordinary
+#: measurement noise on a nearly-idle service reads as a real change, forever.
+#:
+#: The live cluster ran exactly that loop. api_app, idle behind a slow third
+#: party, was resized four times in two hours — 0.04 -> 0.022 -> 0.028 ->
+#: 0.077 -> 0.031 — each one a rolling restart of every replica, all of them
+#: chasing differences of a few hundredths of a core on a 2-core node. From
+#: outside it looks like the platform randomly spawning and killing containers,
+#: which is precisely what it was.
+#:
+#: A restart of every replica has to be justified by a change that MATTERS, so
+#: both tests must pass: big relative to what it was, and big enough to care
+#: about at all.
+RESIZE_MIN_CPU_STEP = 0.05    # a twentieth of a core
+RESIZE_MIN_MEM_STEP_MB = 64
+
 #: How much history a resize needs. Shorter than this and the first sample after
 #: a deploy — a cold JVM compiling everything it owns — becomes the reservation.
 RESIZE_MIN_HISTORY = "2h"
@@ -771,10 +789,19 @@ def right_size(cpu_q, mem_max_bytes, node_cpu, node_mem,
             int(min(mem_res_mb * MEM_LIMIT_MULTIPLE, mem_cap * 2)))
 
 
-def _changed_enough(old, new):
+def _changed_enough(old, new, step):
+    """
+    Is the move from `old` to `new` worth restarting every replica for?
+
+    `step` is the smallest absolute difference that means anything for this
+    quantity. Both tests are required: the relative one stops a large service
+    being churned by small drift, the absolute one stops a small service being
+    churned by noise.
+    """
     if not old:
         return True
-    return abs(new - old) / old >= RESIZE_MIN_CHANGE
+    return (abs(new - old) >= step
+            and abs(new - old) / old >= RESIZE_MIN_CHANGE)
 
 
 def apply_right_sizing(found, usage, node_cpu, node_mem):
@@ -802,9 +829,9 @@ def apply_right_sizing(found, usage, node_cpu, node_mem):
         # function of the reservation, so testing the reservation alone was the
         # same test; now a throttled service can need a bigger ceiling while its
         # measured usage — capped by that very ceiling — has not moved at all.
-        if not (_changed_enough(w.cost.cores, cpu_res)
-                or _changed_enough(w.cost.mb, mem_res)
-                or _changed_enough(w.cpu_limit, cpu_lim)):
+        if not (_changed_enough(w.cost.cores, cpu_res, RESIZE_MIN_CPU_STEP)
+                or _changed_enough(w.cost.mb, mem_res, RESIZE_MIN_MEM_STEP_MB)
+                or _changed_enough(w.cpu_limit, cpu_lim, RESIZE_MIN_CPU_STEP)):
             continue
 
         if DRY_RUN:
