@@ -16,6 +16,7 @@ Stdlib plus PyYAML only. `bin/component` imports this on the master.
 
 import os
 import re
+import time
 import secrets
 import shlex
 import subprocess
@@ -190,6 +191,17 @@ def check_image(ref, allow_floating=False):
     if not allow_floating and name.rsplit(":", 1)[-1] in ("latest",):
         return "Refusing `latest`: the next deploy would be a different build with the same name."
     return None
+
+
+#: Swarm's optimistic-locking refusal: the service's version index moved
+#: between this deploy reading it and writing it. Always someone else's write
+#: landing first, never a problem with what we are trying to apply.
+_CONTENDED = re.compile(r"update out of sequence", re.I)
+#: Bounded: three attempts is enough for a single competing writer to finish,
+#: and a deploy that cannot win in three is contending with something that will
+#: not stop, which is worth reporting rather than looping on.
+DEPLOY_ATTEMPTS = 3
+DEPLOY_RETRY_SECONDS = 3
 
 
 def run(argv, timeout=DOCKER_TIMEOUT, stdin=None):
@@ -810,14 +822,38 @@ class Component:
         It is safe here for the reason the whole component model exists: one
         component owns one stack and nothing else writes to it, so everything
         `--prune` can reach is this component's own.
+
+        NOTHING ELSE writes the STACK. Something else does write the SERVICES:
+        a managed database's members belong to dataguard, which scales, promotes
+        and re-places them on its own loop, and the autoscaler owns replica
+        counts on applications. Swarm versions every service and refuses a write
+        carrying a stale index, so a deploy that reads the whole stack and then
+        applies it service by service can be overtaken mid-flight and stop with
+        `update out of sequence` — with some services updated and the rest not.
+
+        That is optimistic-locking CONTENTION, not a bad spec: the same file
+        applies cleanly the moment nothing else is mid-write. It is retried
+        rather than reported, because reporting it puts a half-applied stack in
+        front of somebody with no way to tell it from a real failure — which is
+        exactly what a Redis showing its new cache size and its old memory
+        reservation looks like.
         """
         try:
             path = self.write_stack()
         except store.ComponentError as exc:
             return False, str(exc)
-        return run(["docker", "stack", "deploy", "--with-registry-auth",
-                    "--resolve-image", "changed", "--prune",
-                    "-c", path, self.stack])
+        argv = ["docker", "stack", "deploy", "--with-registry-auth",
+                "--resolve-image", "changed", "--prune", "-c", path, self.stack]
+        for attempt in range(DEPLOY_ATTEMPTS):
+            ok, out = run(argv)
+            if ok or not _CONTENDED.search(out):
+                return ok, out
+            if attempt + 1 < DEPLOY_ATTEMPTS:
+                # Long enough for the writer that overtook us to finish its own
+                # update. Dataguard and the autoscaler both act once a loop, so
+                # the window is small and does not need waiting out in full.
+                time.sleep(DEPLOY_RETRY_SECONDS)
+        return False, out
 
     def stop(self):
         """
