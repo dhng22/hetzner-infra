@@ -174,6 +174,55 @@ class AttributionTest(unittest.TestCase):
         self.assertNotIn("busy_components", inspect.getsource(D))
 
 
+class DependencyNameTest(unittest.TestCase):
+    """
+    The alert has to say WHICH dependency, not which category.
+
+    "api_app is slow because of upstream, and nothing handles it" names a
+    category and sends the reader to a log to find out which of the service's
+    outbound calls it meant. The hostname was kept out of every gauge because a
+    third-party name is unbounded cardinality — sound, but it made the alert
+    unable to say what it was about.
+    """
+
+    def setUp(self):
+        D._forget_target("api_app")
+        self.s = D.Watched(service())
+
+    def tearDown(self):
+        D._forget_target("api_app")
+
+    def rows(self):
+        return [l for l in list(D.G_TARGET._metrics) if l and l[0] == "api_app"]
+
+    def verdict(self, cause, target):
+        return {"service": "api_app", "cause": cause, "target": target,
+                "direction": classify.DIRECTION_HOLD, "reason": "slow"}
+
+    def test_the_blamed_dependency_is_exported_by_name(self):
+        D.publish(self.s, self.verdict("upstream", "media.example"), None, True)
+        self.assertEqual([l[1:] for l in self.rows()],
+                         [("upstream", "media.example")])
+
+    def test_one_row_per_service_however_often_the_target_changes(self):
+        # Bounded by construction, not by hope: a service whose slow dependency
+        # moves replaces its own row rather than adding to it, so the ceiling is
+        # the number of application services.
+        for host in ("a.example", "b.example", "c.example"):
+            D.publish(self.s, self.verdict("upstream", host), None, True)
+        self.assertEqual(len(self.rows()), 1)
+        self.assertEqual(self.rows()[0][2], "c.example")
+
+    def test_a_cause_with_no_target_exports_nothing(self):
+        D.publish(self.s, self.verdict(classify.CAUSE_LOCAL, None), None, False)
+        self.assertEqual(self.rows(), [])
+
+    def test_a_service_that_goes_quiet_drops_its_row(self):
+        D.publish(self.s, self.verdict("upstream", "media.example"), None, True)
+        D.quiet(self.s)
+        self.assertEqual(self.rows(), [])
+
+
 class OwnershipTest(unittest.TestCase):
     """Who fixes it. Three answers, one of them a human's problem tonight."""
 

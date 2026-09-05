@@ -89,7 +89,14 @@ services:
         # be served. The autoscaler right-sizes application services on exactly
         # this evidence, but it manages nothing in the infrastructure stacks, so
         # this number is set here or it is never set at all.
-        limits:       { cpus: "1.0", memory: 256M }
+        # 2.0, from 1.0. At 0.5 this service was stopped in 61% of its
+        # scheduling periods; at 1.0 it is still stopped in 13%. It averages
+        # under 0.2 of a core, so this is entirely burst — rendering a page,
+        # and re-drawing the signals column every fifteen seconds. A ceiling is
+        # not a reservation and contention is settled by shares, so a high one
+        # occupies nothing and cannot starve anything; the only thing it decides
+        # is whether the console you use to look at the cluster is quick.
+        limits:       { cpus: "2.0", memory: 256M }
         # Reserved so the autoscaler's capacity model knows the master is
         # running a panel, not sitting idle.
         reservations: { cpus: "0.07", memory: 96M }

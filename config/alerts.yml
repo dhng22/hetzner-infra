@@ -418,14 +418,40 @@ groups:
         for: 30m
         labels: { severity: warning }
         annotations:
+          # NAMED, not categorised. This used to say "slow because of upstream"
+          # and send the reader to a log to find out which of the service's
+          # outbound calls that meant. `overseer_service_dependency` carries the
+          # hostname and is bounded to one row per service, so the join adds no
+          # cardinality and the alert can say what it is actually about.
           summary: "{{ $labels.service }} is slow because of {{ $labels.cause }}, and nothing handles it"
           description: >-
             p95 has been over budget for half an hour while the replicas
             themselves are idle, so the autoscaler is deliberately not scaling.
-            The suspected cause is {{ $labels.cause }}; the overseer's log
-            names the specific target. Either give something the
+            The suspected cause is {{ $labels.cause }}. Either give something the
             infra.handles={{ $labels.cause }} label, or mute it on the component
             with autoscale.mute_causes.
+
+      # The same condition, said with the hostname in it. Two rules rather than
+      # one because the join drops any service whose target is not exported —
+      # a `local` or `unknown` cause has no target to name — and losing those
+      # entirely would be worse than a category. This one is the useful page;
+      # the one above is the guarantee that nothing goes unreported.
+      - alert: ThrottledByNamedDependency
+        expr: |
+          overseer_signal_unowned == 1
+            * on (service, cause) group_left (target)
+              overseer_service_dependency
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.service }} is slow because of {{ $labels.target }}, and nothing handles it"
+          description: >-
+            Half an hour over budget with the replicas idle, and the time is
+            going into {{ $labels.target }} ({{ $labels.cause }}). More replicas
+            cannot fix it — nothing in this cluster is on the other end of that
+            call. Either give something the infra.handles={{ $labels.cause }}
+            label, or mute it on the component with
+            autoscale.mute_causes={{ $labels.cause }}:{{ $labels.target }}.
 
       - alert: ReplicaCeiling
         expr: |

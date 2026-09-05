@@ -387,6 +387,22 @@ G_LATENCY = Gauge("overseer_service_latency_ms",
 G_LATENCY_KIND = Gauge("overseer_service_latency_signal",
                        "1 for the statistic overseer_service_latency_ms currently is",
                        _SVC + ["kind"])
+#: WHICH dependency, by name, for the one that is currently being blamed.
+#:
+#: The target was deliberately kept out of every other gauge here, and the
+#: reason is sound: a third-party hostname is unbounded cardinality and one
+#: runaway series takes the metrics store with it. The consequence was that the
+#: alert could say "api_app is slow because of upstream, and nothing handles it"
+#: and stop there — telling somebody a category and making them go and read a
+#: log to find out which of the service's outbound calls it meant.
+#:
+#: Bounded by construction rather than by hope: ONE series per service, the
+#: single worst target, cleared and rewritten every loop by `publish`. A service
+#: whose slow dependency changes hostname replaces its own row instead of adding
+#: to it, so the ceiling is the number of application services in the cluster.
+G_TARGET = Gauge("overseer_service_dependency",
+                 "1 for the dependency currently blamed for this service",
+                 _SVC + ["cause", "target"])
 G_CLAIMS = Gauge("overseer_claimed_causes", "Causes some service claims", ["cause"])
 G_LOOP = Gauge("overseer_last_loop_timestamp_seconds", "Unix time of the last loop")
 G_SERVICES = Gauge("overseer_watched_services", "Application services being watched")
@@ -779,6 +795,12 @@ def publish(service, verdict, handled, alert):
             1 if name == verdict["direction"] else 0)
 
     cause, target = verdict["cause"], verdict["target"]
+    # One row per service, rewritten each loop — see G_TARGET. Clearing first is
+    # what keeps it to one: without it, a dependency that changes hostname
+    # leaves its old row behind claiming to be current.
+    _forget_target(service.name)
+    if target:
+        G_TARGET.labels(service=service.name, cause=cause, target=str(target)).set(1)
     where = f" ({target})" if target else ""
     key = (service.name, cause, target or "", handled or "unowned", verdict["direction"])
     forget({k for k in _said if len(k) == 5 and k[0] == service.name and k != key})
@@ -797,7 +819,15 @@ def publish(service, verdict, handled, alert):
                  service.name, cause, where, cause, classify.MUTE_LABEL)
 
 
+def _forget_target(name):
+    """Drop this service's dependency row, whatever target it named."""
+    for labels in [l for l in list(G_TARGET._metrics)
+                   if l and l[0] == name]:
+        G_TARGET.remove(*labels)
+
+
 def quiet(service):
+    _forget_target(service.name)
     for name in classify.CAUSES:
         G_SIGNAL.labels(service=service.name, cause=name).set(0)
         G_UNOWNED.labels(service=service.name, cause=name).set(0)
