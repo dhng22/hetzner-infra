@@ -383,6 +383,13 @@ G_DELIVERY = Gauge("overseer_delivery_ok",
                    "1 when the last dispatch to this manager succeeded", ["manager"])
 # Per-service capacity verdicts. Safe to export from here rather than the
 # autoscaler because they carry their own `service` label; see the note above.
+#: The most replicas of this service the current nodes can ROLL — the packing
+#: result before the never-shrink floor is applied to it. Below
+#: `overseer_service_replica_ceiling` exactly when the service is already too
+#: big to redeploy, which is the state ServiceAboveRolloutCeiling alerts on and
+#: the one the dispatched ceiling cannot show.
+S_ROLLABLE = Gauge("overseer_service_rollout_ceiling",
+                   "Replicas the current nodes can roll a deploy through", _SVC)
 S_CEILING = Gauge("overseer_service_replica_ceiling",
                   "Most replicas of this service the eligible nodes can hold", _SVC)
 S_WANTED = Gauge("overseer_service_wanted_replicas",
@@ -397,8 +404,8 @@ S_PINNED = Gauge("overseer_service_worker_mode",
                  "1 when this service is pinned to workers", _SVC)
 C_ERRORS = Counter("overseer_errors_total", "Failures by stage", ["stage"])
 
-_PER_SERVICE = [G_LATENCY, S_CEILING, S_WANTED, S_STARVED, S_UNPLACEABLE,
-                S_COST_CPU, S_COST_MEM, S_PINNED]
+_PER_SERVICE = [G_LATENCY, S_CEILING, S_ROLLABLE, S_WANTED, S_STARVED,
+                S_UNPLACEABLE, S_COST_CPU, S_COST_MEM, S_PINNED]
 _exported_services = set()
 
 query.on_error = lambda stage: C_ERRORS.labels(stage=stage).inc()
@@ -1418,7 +1425,20 @@ def admit(found, wants, bins, live_replicas):
     for w in order:
         floor = min(live_replicas.get(w.name, 0), wants.get(w.name, 0))
         admitted[w.name] = max(floor, granted[w.name])
-    return admitted, capped, starved
+
+    # `granted` goes back TOO, because the floor above hides the one thing the
+    # rollout slot exists to expose. A service already running above what its
+    # nodes can roll has floor == live, so `admitted` is raised straight back to
+    # that count and the dispatched ceiling reports it as fine. It is not fine —
+    # it is the frozen state, and it does not clear on its own, because the
+    # floor that hides it is the same rule that stops anything shrinking it.
+    #
+    # So the two numbers are different questions and are exported separately:
+    # `admitted` is what the autoscaler may set, which must never shrink under
+    # it, and `granted` is what the nodes can actually roll, which is what a
+    # human has to be told. Reconciling them by shedding a live replica is a
+    # capacity decision under load, and it is not admission's to make.
+    return admitted, capped, starved, granted
 
 
 def servers_needed(items, worker_bins, new_free, pressured):
@@ -2851,10 +2871,11 @@ def loop():
         bins = list(worker_bins)
         if any(not w.pinned for w in found) or not found:
             bins.append(Bin("master", manager_free, True))
-        ceilings, capped, starved = admit(
+        ceilings, capped, starved, rollable = admit(
             found, {w.name: w.policy.max_replicas for w in found}, bins, live)
         for w in found:
             S_CEILING.labels(w.name).set(ceilings.get(w.name, w.spec_replicas))
+            S_ROLLABLE.labels(w.name).set(rollable.get(w.name, 0))
             S_STARVED.labels(w.name).set(1 if w.name in starved else 0)
             if w.name in starved:
                 C_ERRORS.labels(stage="admission").inc()

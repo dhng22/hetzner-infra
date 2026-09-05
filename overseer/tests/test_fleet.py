@@ -164,7 +164,7 @@ class AdmissionTest(unittest.TestCase):
         # need; 8 never fits. The bin was 1.0 while admission ignored rollouts,
         # which packed the node so full that the service could not be deployed.
         bins = [A.Bin("w", res(1.5, 2000), False)]
-        admitted, capped, starved = A.admit(
+        admitted, capped, starved, _ = A.admit(
             [self.a], {"a": 8}, bins, {"a": 1})
         self.assertEqual(admitted["a"], 2)
         self.assertIn("a", capped)
@@ -175,7 +175,7 @@ class AdmissionTest(unittest.TestCase):
         # 2.0 CPU, not 1.5: two of each is 1.5, and the shared rollout slot is
         # the 0.5 on top. At 1.5 the pair fits exactly and neither could roll.
         bins = [A.Bin("w", res(2.0, 4000), False)]
-        admitted, _, _ = A.admit([self.a, self.b], {"a": 9, "b": 9}, bins,
+        admitted, _, _, _ = A.admit([self.a, self.b], {"a": 9, "b": 9}, bins,
                                  {"a": 1, "b": 1})
         self.assertGreaterEqual(admitted["a"], 2)
         self.assertGreaterEqual(admitted["b"], 2)
@@ -187,7 +187,7 @@ class AdmissionTest(unittest.TestCase):
         # stuck on `Pending — no suitable node`, serving the old image while the
         # panel reports the new one live.
         bins = [A.Bin("w", res(2.0, 4000), False)]
-        admitted, capped, _ = A.admit([self.a], {"a": 10}, bins, {"a": 1})
+        admitted, capped, _, _ = A.admit([self.a], {"a": 10}, bins, {"a": 1})
         self.assertEqual(admitted["a"], 3)       # 4 x 0.5 fits, so 3 may run
         self.assertIn("a", capped)
 
@@ -198,7 +198,7 @@ class AdmissionTest(unittest.TestCase):
         # task stops when its replacement starts, freeing what the second waits
         # for. `b` keeps both replicas even though `a` just gave one back.
         bins = [A.Bin("w", res(2.0, 4000), False)]
-        admitted, _, _ = A.admit([self.a, self.b], {"a": 9, "b": 9}, bins,
+        admitted, _, _, _ = A.admit([self.a, self.b], {"a": 9, "b": 9}, bins,
                                  {"a": 1, "b": 1})
         self.assertEqual((admitted["a"], admitted["b"]), (2, 2))
 
@@ -207,7 +207,7 @@ class AdmissionTest(unittest.TestCase):
         # is a possible one. The slot never takes a replica off the floor.
         a = workload("a", 0.5, 384, min_replicas=2, max_replicas=10)
         bins = [A.Bin("w", res(1.0, 2000), False)]
-        admitted, _, starved = A.admit([a], {"a": 2}, bins, {"a": 2})
+        admitted, _, starved, _ = A.admit([a], {"a": 2}, bins, {"a": 2})
         self.assertEqual(admitted["a"], 2)
         self.assertEqual(starved, set())
 
@@ -215,7 +215,7 @@ class AdmissionTest(unittest.TestCase):
         a = workload("a", 0.5, 384, min_replicas=2, max_replicas=10)
         b = workload("b", 0.25, 256, min_replicas=2, max_replicas=10)
         bins = [A.Bin("w", res(1.5, 4000), False)]
-        admitted, _, starved = A.admit([a, b], {"a": 10, "b": 10}, bins,
+        admitted, _, starved, _ = A.admit([a, b], {"a": 10, "b": 10}, bins,
                                        {"a": 2, "b": 2})
         self.assertGreaterEqual(admitted["a"], 2)
         self.assertGreaterEqual(admitted["b"], 2)
@@ -224,7 +224,7 @@ class AdmissionTest(unittest.TestCase):
     def test_an_unsatisfiable_minimum_is_reported(self):
         a = workload("a", 0.5, 384, min_replicas=6, max_replicas=6)
         bins = [A.Bin("w", res(1.0, 4000), False)]
-        _, _, starved = A.admit([a], {"a": 6}, bins, {"a": 1})
+        _, _, starved, _ = A.admit([a], {"a": 6}, bins, {"a": 1})
         self.assertIn("a", starved)
 
     def test_admission_never_scales_anything_down(self):
@@ -233,8 +233,20 @@ class AdmissionTest(unittest.TestCase):
         scale-up on the next loop.
         """
         bins = [A.Bin("w", W.ZERO, False)]
-        admitted, _, _ = A.admit([self.a], {"a": 6}, bins, {"a": 6})
+        admitted, _, _, _ = A.admit([self.a], {"a": 6}, bins, {"a": 6})
         self.assertEqual(admitted["a"], 6)
+
+    def test_a_service_already_too_big_to_roll_is_reported_not_hidden(self):
+        # Today's outage, in three lines. The service is running 3 replicas on
+        # nodes that can only roll 1, so the never-shrink floor raises the
+        # dispatched ceiling straight back to 3 and it reads as healthy. The
+        # rollout ceiling is the number that is allowed to say otherwise — and
+        # it has to, because the floor that hides the problem is the same rule
+        # that stops anything fixing it, so the state never clears on its own.
+        bins = [A.Bin("w", res(1.0, 3000), False)]
+        admitted, _, _, rollable = A.admit([self.a], {"a": 3}, bins, {"a": 3})
+        self.assertEqual(admitted["a"], 3)      # never shrunk under the autoscaler
+        self.assertLess(rollable["a"], 3)       # and the truth is still exported
 
     def test_more_capacity_never_reduces_an_allocation(self):
         """Monotonicity: this is what stops the loop oscillating."""

@@ -245,6 +245,14 @@ groups:
       # exported ceiling is the largest count the node can still ROLL, not the
       # largest it can hold.
       #
+      # It reads `overseer_service_rollout_ceiling`, NOT
+      # `overseer_service_replica_ceiling`. The dispatched ceiling is floored at
+      # the live count so admission can never shrink a running service, which
+      # means a service already too big to roll has its ceiling raised straight
+      # back to its own size and reports itself healthy. The rollout ceiling is
+      # the same packing result before that floor — the number allowed to say
+      # the service is over the line.
+      #
       # Running above it is the one state where everything looks healthy and
       # nothing can ship. Every replica is up, no service is starved, the fleet
       # is the right size by its own arithmetic — and the next deploy's first
@@ -259,7 +267,7 @@ groups:
       - alert: ServiceAboveRolloutCeiling
         expr: |
           autoscaler_service_current_replicas
-            > on (service) overseer_service_replica_ceiling
+            > on (service) overseer_service_rollout_ceiling
         for: 15m
         labels: { severity: warning }
         annotations:
