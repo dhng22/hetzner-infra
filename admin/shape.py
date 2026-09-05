@@ -607,10 +607,15 @@ Q_ERROR_RATIO = (
     'sum(rate(cloudflared_tunnel_response_by_code{status_code=~"5.."}[5m]))'
     ' / clamp_min(sum(rate(cloudflared_tunnel_response_by_code[5m])), 0.001)')
 Q_REQUEST_RATE = 'sum(rate(cloudflared_tunnel_response_by_code[5m]))'
-Q_LATENCY = 'overseer_service_latency_ms'
+# `max by (service)` rather than the bare series: the metric carries the
+# overseer's own `task_id`, so every restart of the overseer starts a NEW
+# series and the chart's history begins again at the restart. The x-axis
+# then reads "9 min ago" over an hour-wide chart and looks like the panel
+# has stopped updating, when what stopped is the series it was drawing.
+Q_LATENCY = 'max by (service) (overseer_service_latency_ms)'
 Q_SLO = 'max(autoscaler_service_slo_p95_ms)'
 #: WHICH STATISTIC Q_LATENCY currently is. Not decorative — see `_latency_note`.
-Q_LATENCY_KIND = 'overseer_service_latency_signal == 1'
+Q_LATENCY_KIND = ('max by (kind) (overseer_service_latency_signal) == 1')
 
 #: Utilisation, one row per node per resource.
 Q_UTILISATION = (

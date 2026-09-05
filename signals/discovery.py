@@ -157,6 +157,20 @@ def discover_dependencies(service_names):
         return {k: v for k, v in _dependencies.value.items() if v}
 
     wanted = set(service_names)
+    # Which dependency timers publish real percentile buckets. A dependency's
+    # reading is COMPARED AGAINST THE SERVICE'S OWN LATENCY to decide whether it
+    # is where the request's time went, and that comparison is only meaningful
+    # between the same statistic. Reading every dependency as a mean while the
+    # service is measured at p95 understates every dependency, always, and it
+    # understated this one out of existence: a third-party host answering at a
+    # 768ms p95 inside a 725ms p95 request — essentially the whole request —
+    # came back as a 317ms MEAN, lost to a threshold, and was reported as
+    # "nobody knows why this is slow".
+    histogrammed = set()
+    for metric, svc, _labels in vm_series_rows('{__name__=~".+_bucket", service!=""}'):
+        if svc in wanted:
+            histogrammed.add((svc, metric[: -len("_bucket")]))
+
     found = {}
     for metric, svc, labels in vm_series_rows('{__name__=~".+_count", service!=""}'):
         if svc not in wanted:
@@ -166,7 +180,12 @@ def discover_dependencies(service_names):
             if not any(h in base for h in hints):
                 continue
             target = next((lab for lab in TARGET_LABELS if labels.get(lab)), None)
-            entry = (cause, mean_expr(base, unit_of(base)), base, target)
+            unit = unit_of(base)
+            if (svc, base) in histogrammed:
+                expr = p95_expr(f"{base}_bucket", unit, by=target or "service")
+            else:
+                expr = mean_expr(base, unit)
+            entry = (cause, expr, base, target)
             if entry not in found.setdefault(svc, []):
                 found[svc].append(entry)
             break

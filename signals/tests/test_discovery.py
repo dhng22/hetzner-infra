@@ -62,5 +62,55 @@ class LatencyKindChangeTest(unittest.TestCase):
             discovery.discover_latency(["api_app"])
 
 
+class DependencyStatisticTest(unittest.TestCase):
+    """
+    A dependency's reading is compared against the SERVICE's latency to decide
+    whether it is where the request's time went. That comparison only means
+    anything between the same statistic.
+    """
+
+    def setUp(self):
+        self.real = discovery.vm_series_rows
+        discovery.reset_caches()
+
+    def tearDown(self):
+        discovery.vm_series_rows = self.real
+        discovery.reset_caches()
+
+    def rows(self, *metrics):
+        def rows(query):
+            suffix = "_bucket" if "_bucket" in query else "_count"
+            return [(m, "api_app", {"host": "media.example"})
+                    for m in metrics if m.endswith(suffix)]
+        return rows
+
+    def test_a_dependency_with_buckets_is_read_as_a_p95(self):
+        """
+        Read as a mean, a third-party host answering at a 768ms p95 inside a
+        725ms p95 request — essentially the whole request — came back as 317ms
+        and lost to the threshold. The service was reported as slow for reasons
+        nobody knows while the answer sat in a timer it was publishing.
+        """
+        discovery.vm_series_rows = self.rows(
+            "http_client_requests_seconds_count",
+            "http_client_requests_seconds_bucket")
+        [(cause, expr, _base, target)] = discovery.discover_dependencies(
+            ["api_app"])["api_app"]
+        self.assertEqual(cause, "upstream")
+        self.assertIn("histogram_quantile", expr)
+        # Grouped by the thing being CALLED, not by the calling service, or one
+        # slow third party is averaged into every fast one and nothing is named.
+        self.assertEqual(target, "host")
+        self.assertIn("by (host, le)", expr)
+
+    def test_a_dependency_without_buckets_still_falls_back_to_a_mean(self):
+        # Most timers publish _sum and _count and nothing else. A mean is worth
+        # far more than no dependency signal at all.
+        discovery.vm_series_rows = self.rows("http_client_requests_seconds_count")
+        [(_cause, expr, _base, _target)] = discovery.discover_dependencies(
+            ["api_app"])["api_app"]
+        self.assertNotIn("histogram_quantile", expr)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -25,10 +25,18 @@ def unit_of(name):
     return "milliseconds" if ("millis" in name or name.endswith("_ms")) else "seconds"
 
 
-def p95_expr(histogram, unit):
-    """p95 by service, in milliseconds. `service` is written by vmagent."""
+def p95_expr(histogram, unit, by="service"):
+    """
+    p95 in milliseconds, grouped by `by`. `service` is written by vmagent.
+
+    `by` exists for DEPENDENCY timers, which have to be grouped by whatever
+    names the thing being called — `host`, `server_address` — so one slow
+    third party can be told apart from the rest of a service's outbound calls.
+    Grouping those by `service` would average the slow one into the fast ones
+    and name nothing.
+    """
     scale = 1000 if unit == "seconds" else 1
-    return (f"histogram_quantile(0.95, sum by (service, le) "
+    return (f"histogram_quantile(0.95, sum by ({by}, le) "
             f"(rate({histogram}[2m]))) * {scale}")
 
 
