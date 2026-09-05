@@ -211,6 +211,12 @@ workloads.on_error = lambda stage: M_ERRORS.labels(stage=stage).inc()
 dkr = docker.DockerClient(base_url="unix:///var/run/docker.sock")
 
 _running = True
+#: What the SIGNALS asked for, before the overseer's ceiling capped it — the
+#: number `autoscaler_service_desired_replicas` is named after. Recorded here
+#: rather than recomputed, because the stabiliser that produces it keeps state
+#: and asking it twice in a loop is asking it a different question the second
+#: time.
+_wanted = {}
 _last_replica_change = {}       # service name -> unix time
 _unpinned_since = {}            # service name -> when its pin was released
 
@@ -257,6 +263,10 @@ def forget_vanished(current_names):
                 gauge.remove(name)
             except KeyError:
                 pass
+        # Same reason, one dict along: a deleted component leaving its last
+        # wanted count behind would keep publishing it under the next service to
+        # be given its name.
+        _wanted.pop(name, None)
     _exported_services.intersection_update(current_names)
     _exported_services.update(current_names)
 
@@ -811,7 +821,8 @@ def set_replicas(name, count):
 # what this loop publishes
 # ---------------------------------------------------------------------------
 
-def export_service_metrics(found, targets, verdicts, running, pending):
+def export_service_metrics(found, targets, verdicts, running, pending,
+                           uncapped=None):
     """
     The per-service series, unchanged in name and meaning.
 
@@ -821,6 +832,7 @@ def export_service_metrics(found, targets, verdicts, running, pending):
     control loop is not a reason to break a dashboard.
     """
     forget_vanished({w.name for w in found})
+    uncapped = uncapped or {}
     for w in found:
         v = verdicts.get(w.name) or {}
         if v.get("latency_ms") is not None:
@@ -835,9 +847,20 @@ def export_service_metrics(found, targets, verdicts, running, pending):
             1 if (w.policy.autoscale and v.get("cpu_pct") is not None) else 0)
         S_SLO.labels(w.name).set(w.policy.slo_ms)
         S_CURRENT.labels(w.name).set(w.spec_replicas)
-        S_DESIRED.labels(w.name).set(
-            (v.get("replica_ceiling") if v.get("replica_ceiling") is not None
-             else targets.get(w.name, w.spec_replicas)))
+        # WHAT THE SIGNALS ASKED FOR, which is what this gauge is named for and
+        # is not the ceiling. It used to report `replica_ceiling` — the number
+        # of replicas the NODES could hold — so a service sitting calmly at 2 on
+        # a master with room for 3 published "desired 3" and read, to anyone
+        # looking at the panel, as an autoscaler about to spawn another
+        # container. Nothing wanted a third: the overseer's verdict was `hold`,
+        # its own wanted-replicas gauge said 2, and admitted, running and
+        # current all said 2.
+        #
+        # The ceiling is already published by the overseer as
+        # `overseer_service_replica_ceiling`, and next to it as
+        # `overseer_service_rollout_ceiling`. Repeating it here under a name
+        # that means something else made the panel disagree with itself.
+        S_DESIRED.labels(w.name).set(uncapped.get(w.name, w.spec_replicas))
         S_ADMITTED.labels(w.name).set(targets.get(w.name, w.spec_replicas))
         S_RUNNING.labels(w.name).set(running.get(w.name, 0))
         S_ROLLBACK.labels(w.name).set(1 if w.rolled_back else 0)
@@ -895,6 +918,7 @@ def target_replicas(workload, verdict):
     # remove it is a bill.
     want = _stabilizer.stabilise(workload.name, raw, current,
                                  policy.stabilize_down, time.time())
+    _wanted[workload.name] = want
     ceiling = verdict.get("replica_ceiling")
     if ceiling is None:
         return want
@@ -1093,7 +1117,7 @@ def loop():
             M_ERRORS.labels(stage="resize").inc()
             log.warning("right-sizing skipped this loop: %s", exc)
 
-    export_service_metrics(found, targets, verdicts, running, pending)
+    export_service_metrics(found, targets, verdicts, running, pending, _wanted)
 
     for w in found:
         v = verdicts.get(w.name) or {}

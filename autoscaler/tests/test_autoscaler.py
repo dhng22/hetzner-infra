@@ -286,6 +286,29 @@ class DispatchedScalingTest(unittest.TestCase):
         return A.target_replicas(self.w._replace(spec_replicas=current),
                                  verdict(**kw) if kw else None)
 
+    def test_desired_is_what_the_signals_asked_for_not_what_the_nodes_could_hold(self):
+        """
+        `autoscaler_service_desired_replicas` reported `replica_ceiling` — the
+        number of replicas the NODES could hold. A service sitting calmly at 2
+        on a master with room for 3 therefore published "desired 3", which reads
+        as an autoscaler about to spawn a container. Nothing wanted a third: the
+        verdict was `hold`, the overseer's own wanted-replicas gauge said 2, and
+        admitted, running and current all said 2.
+        """
+        # Its own name: the stabiliser keeps per-service state, so sharing a
+        # name with the scaling tests would advance their history too.
+        w = self.w._replace(name="desired-hold", spec_replicas=2)
+        A.target_replicas(w, verdict(direction="hold", replica_ceiling=3))
+        self.assertEqual(A._wanted["desired-hold"], 2)
+
+    def test_a_capped_growth_still_records_what_was_wanted(self):
+        # The gap between the two is the point: wanting 4 and being allowed 3 is
+        # exactly what `capped` means, and it is invisible if both report 3.
+        w = self.w._replace(name="desired-capped", spec_replicas=3)
+        target = A.target_replicas(w, verdict(direction="up", replica_ceiling=3))
+        self.assertEqual(target, 3)
+        self.assertGreater(A._wanted["desired-capped"], 3)
+
     def test_up_grows_by_the_factor_with_a_floor_of_one(self):
         self.assertEqual(self.at(2, direction="up"), 3)
         self.assertEqual(self.at(4, direction="up"), 6)
