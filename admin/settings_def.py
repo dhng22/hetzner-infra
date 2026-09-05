@@ -159,8 +159,17 @@ FIELDS = {
                               "Slow on purpose: a deleted node costs a full boot to get back."),
     "SCHEDULE_FLOOR": (EDIT, "monitoring",
                        "UTC, `HH:MM-HH:MM=N`, comma separated. Blank disables it."),
+    # The help text used to say "the autoscaler", and that is half of what this
+    # does. Both the autoscaler AND the overseer read it, so `true` also stops
+    # the overseer creating or deleting servers — which is the half that leaves
+    # dataguard waiting forever for a machine that is never bought, with nothing
+    # in the panel to say why. Named for what it stops, not for who reads it.
     "DRY_RUN": (EDIT, "monitoring",
-                "`true` makes the autoscaler log every action without taking it."),
+                "`true` freezes the fleet: the autoscaler logs replica changes "
+                "without applying them and the overseer logs servers it would "
+                "create or delete without buying or deleting any. Anything "
+                "waiting on a machine — dataguard growing a database — waits "
+                "forever. Leave it `false` outside a rehearsal."),
 
     # --- access ------------------------------------------------------------
     "ADMIN_USER": (SECRET, "admin", "Stored as a docker secret alongside the password."),

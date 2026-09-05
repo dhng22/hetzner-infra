@@ -577,31 +577,6 @@ def claimed_causes(known=None):
     return claimed
 
 
-def busy_components():
-    """
-    Non-application components working hard right now.
-
-    Correlation, not proof, which is why it ranks below a timer the application
-    itself publishes. It is still the difference between "your API is slow, good
-    luck" and "your API is slow and your Mongo is pinned".
-    """
-    busy = set()
-    usage = query.vm_query_map(expressions.CPU_BY_SERVICE, label=expressions.CPU_LABEL)
-    for service in dkr.services.list():
-        spec = service.attrs.get("Spec", {})
-        labels = spec.get("Labels") or {}
-        if (workloads.COMPONENT_LABEL not in labels
-                or labels.get(workloads.WORKLOAD_LABEL) == workloads.WORKLOAD_APP):
-            continue
-        resources = (spec.get("TaskTemplate") or {}).get("Resources") or {}
-        limit = ((resources.get("Limits") or {}).get("NanoCPUs")
-                 or (resources.get("Reservations") or {}).get("NanoCPUs") or 0) / 1e9
-        used = usage.get(service.name)
-        if used is not None and limit and used / limit * 100 >= classify.BUSY_CPU:
-            busy.add(labels.get(workloads.COMPONENT_LABEL, service.name))
-    return busy
-
-
 #: (held, peak) for one service. `held` is the sustained MINIMUM over the
 #: scale-up window — was it above the line for the whole time — and `peak` the
 #: MAXIMUM over the scale-down one. Two windows, two aggregates: up fast, down
@@ -677,7 +652,7 @@ def measure(services):
     return out
 
 
-def attribute(service, cpu_pct, mem_pct, dependencies, busy):
+def attribute(service, cpu_pct, mem_pct, dependencies):
     """
     Why is this service slow? Returns (cause, target or None).
 
@@ -688,11 +663,30 @@ def attribute(service, cpu_pct, mem_pct, dependencies, busy):
       2. An outbound timer this service publishes is over the same budget
                                     -> it is whatever that timer measures,
                                        named by its own label.
-      3. A component in this cluster is busy -> probably that. Weaker than 2
-                                       because it is correlation: two things can
-                                       be busy at the same time.
-      4. Nothing                    -> `unknown`, which is what it is. Guessing
+      3. Nothing                    -> `unknown`, which is what it is. Guessing
                                        here sends somebody to read the wrong log.
+
+    There used to be a rule between 2 and 3: if some component in the cluster
+    looked busy, blame that one. It read as a cheap upgrade over "good luck" —
+    "your API is slow and your Mongo is pinned" — and it was wrong twice over.
+
+    It is not evidence. "Busy" was CPU against the service's own limit, and a
+    component with no CPU limit is measured against its RESERVATION instead; a
+    Redis reserving 0.06 cores crosses the 25% line doing essentially nothing.
+    Every managed database in a small cluster is permanently "busy" by that
+    arithmetic, and the set was then sorted alphabetically to pick a winner.
+
+    And a cause is not a hint. `dispatch` routes each verdict to the manager
+    that claims its cause, so naming `database` on a correlation handed the
+    guess to dataguard as an instruction: it grew the set, asked the overseer
+    for a machine, and waited for one. That happened here — an application
+    hanging on a third-party HTTP call, with no outbound timer to say so, put
+    an idle Redis on the shopping list once a minute.
+
+    So an uninstrumented service now gets `unknown`, and `unknown` is claimed by
+    nobody, which raises the alert that says exactly that. Which component is
+    hot at the same moment is a question the Overview page already answers, per
+    node and per service, without spending anything to ask it.
     """
     if classify.saturated(service.busy_cpu, service.busy_mem, cpu_pct, mem_pct):
         return classify.CAUSE_LOCAL, None
@@ -711,9 +705,6 @@ def attribute(service, cpu_pct, mem_pct, dependencies, busy):
                 worst = (cause, key, value)
     if worst:
         return worst[0], worst[1]
-
-    if busy:
-        return classify.CAUSE_DATABASE, sorted(busy)[0]
     return classify.CAUSE_UNKNOWN, None
 
 
@@ -2947,9 +2938,8 @@ def judge(watched):
 
     if needs_cause:
         dependencies = discovery.discover_dependencies([s.name for s, _, _ in needs_cause])
-        busy = busy_components()
         for s, cpu, mem in needs_cause:
-            cause, target = attribute(s, cpu, mem, dependencies, busy)
+            cause, target = attribute(s, cpu, mem, dependencies)
             decided[s.name].update(cause=cause, target=target)
 
     for s in watched:

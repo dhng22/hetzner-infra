@@ -91,28 +91,28 @@ class AttributionTest(unittest.TestCase):
         discovery.reset_caches()
 
     def test_busy_replicas_are_their_own_cause(self):
-        self.assertEqual(D.attribute(self.s, 80.0, 5.0, {}, set()),
+        self.assertEqual(D.attribute(self.s, 80.0, 5.0, {}),
                          (classify.CAUSE_LOCAL, None))
 
     def test_memory_alone_makes_it_local(self):
-        self.assertEqual(D.attribute(self.s, 2.0, 75.0, {}, set()),
+        self.assertEqual(D.attribute(self.s, 2.0, 75.0, {}),
                          (classify.CAUSE_LOCAL, None))
 
     def test_unknown_utilisation_is_not_busy(self):
         # Missing cadvisor must never read as "the replicas are fine".
-        self.assertEqual(D.attribute(self.s, None, None, {}, set()),
+        self.assertEqual(D.attribute(self.s, None, None, {}),
                          (classify.CAUSE_UNKNOWN, None))
 
     def test_a_slow_outbound_timer_names_the_third_party(self):
         D.query.vm_query_map = lambda expr, label=None: {"vendor.example": 2200.0}
         deps = {"api_app": [(classify.CAUSE_UPSTREAM, "e", "http_client_requests_seconds", "host")]}
-        self.assertEqual(D.attribute(self.s, 3.0, 4.0, deps, set()),
+        self.assertEqual(D.attribute(self.s, 3.0, 4.0, deps),
                          (classify.CAUSE_UPSTREAM, "vendor.example"))
 
     def test_an_outbound_timer_inside_budget_is_not_the_cause(self):
         D.query.vm_query_map = lambda expr, label=None: {"vendor.example": 12.0}
         deps = {"api_app": [(classify.CAUSE_UPSTREAM, "e", "http_client_requests_seconds", "host")]}
-        self.assertEqual(D.attribute(self.s, 3.0, 4.0, deps, set()),
+        self.assertEqual(D.attribute(self.s, 3.0, 4.0, deps),
                          (classify.CAUSE_UNKNOWN, None))
 
     def test_the_worst_dependency_wins_when_several_are_over_budget(self):
@@ -122,12 +122,26 @@ class AttributionTest(unittest.TestCase):
             {"mongo.internal": 900.0} if "e1" in expr else {"vendor.example": 2200.0})
         deps = {"api_app": readings["db"] +
                 [(classify.CAUSE_UPSTREAM, "e2", "http_client_requests_seconds", "host")]}
-        cause, target = D.attribute(self.s, 3.0, 4.0, deps, set())
+        cause, target = D.attribute(self.s, 3.0, 4.0, deps)
         self.assertEqual((cause, target), (classify.CAUSE_UPSTREAM, "vendor.example"))
 
-    def test_a_busy_component_is_the_fallback_not_the_first_answer(self):
-        self.assertEqual(D.attribute(self.s, 3.0, 4.0, {}, {"documents"}),
-                         (classify.CAUSE_DATABASE, "documents"))
+    def test_an_uninstrumented_service_is_unknown_not_a_guess(self):
+        # No outbound timer means no evidence, and `unknown` is what no evidence
+        # is called. Naming a component here is not a hint: `dispatch` routes on
+        # the cause, so the guess reaches that component's manager as an order
+        # to grow — which is how an app hanging on a third-party call spent four
+        # hours asking for a machine to enlarge an idle Redis.
+        self.assertEqual(D.attribute(self.s, 3.0, 4.0, {}),
+                         (classify.CAUSE_UNKNOWN, None))
+
+    def test_attribute_cannot_be_handed_a_correlation_again(self):
+        # The signature is the guard: the busy-component set was a parameter,
+        # and a test that only checked the return value would pass again the
+        # moment somebody re-added it as a fallback.
+        import inspect
+        self.assertEqual(list(inspect.signature(D.attribute).parameters),
+                         ["service", "cpu_pct", "mem_pct", "dependencies"])
+        self.assertNotIn("busy_components", inspect.getsource(D))
 
 
 class OwnershipTest(unittest.TestCase):
