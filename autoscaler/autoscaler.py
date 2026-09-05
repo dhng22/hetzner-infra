@@ -559,6 +559,23 @@ MEM_LIMIT_MULTIPLE = 2.0
 CPU_RESERVE_FLOOR = 0.02
 MEM_RESERVE_FLOOR_MB = 32
 
+#: The largest share of one node a single service may reserve — counting every
+#: replica it runs AND the spare its own rolling update needs.
+NODE_SHARE = 0.5
+
+#: `order: start-first` starts the replacement before stopping the replica it
+#: replaces, so a rollout transiently needs replicas + 1 of them placed. That
+#: spare is not optional and it is not free, so a reservation that leaves no
+#: room for it is not a sizing decision either — it is a service that can never
+#: be deployed again.
+#:
+#: This is not hypothetical. A 2-core master ran a 2-replica JVM whose warm-up
+#: dominated its own q90; the reservation was raised 0.36 -> 0.543, which was
+#: schedulable for the two replicas already running and left 0.167 CPU free.
+#: The next deploy needed a third at 0.543, sat Pending, and the service stayed
+#: half on the old image with no error anywhere that named a reservation.
+ROLLOUT_SPARE = 1
+
 #: THROTTLING, and why the CPU limit cannot be derived from usage alone.
 #:
 #: Everything above reads `container_cpu_usage_seconds_total` — CPU actually
@@ -644,7 +661,7 @@ def measure_throttling(service_names):
 
 
 def right_size(cpu_q, mem_max_bytes, node_cpu, node_mem,
-               throttled_pct=0.0, cpu_limit_now=0.0):
+               throttled_pct=0.0, cpu_limit_now=0.0, replicas=1):
     """
     (cpu_reservation, memory_reservation_mb, cpu_limit, memory_limit_mb).
 
@@ -652,6 +669,14 @@ def right_size(cpu_q, mem_max_bytes, node_cpu, node_mem,
     than any node can satisfy is not a sizing decision, it is an unschedulable
     task — the failure mode is a replica that sits Pending forever while the
     panel reports the component as down for no visible reason.
+
+    The clamp counts REPLICAS, and one more than there are: half a node each is
+    not half a node when a service runs two of them, and the rollout that
+    replaces them needs a third placed before the first is stopped. Sized per
+    replica alone, the reservation stays schedulable for the replicas already
+    running and quietly makes the next deploy impossible — which is a worse
+    failure than the one the clamp was written for, because everything reports
+    healthy while it happens. See ROLLOUT_SPARE.
 
     The RESERVATION is what the service typically uses, and it decides packing
     and CPU shares. The LIMIT is what it may burst to, and it decides latency.
@@ -664,8 +689,11 @@ def right_size(cpu_q, mem_max_bytes, node_cpu, node_mem,
     mem_res_mb = max(MEM_RESERVE_FLOOR_MB,
                      mem_max_bytes * MEM_RESERVE_HEADROOM / (1024 * 1024))
 
-    cpu_cap = max(CPU_RESERVE_FLOOR, node_cpu / 1e9 * 0.5) if node_cpu else cpu_res
-    mem_cap = (max(MEM_RESERVE_FLOOR_MB, node_mem / (1024 * 1024) * 0.5)
+    share = max(1, replicas + ROLLOUT_SPARE)
+    cpu_cap = (max(CPU_RESERVE_FLOOR, node_cpu / 1e9 * NODE_SHARE / share)
+               if node_cpu else cpu_res)
+    mem_cap = (max(MEM_RESERVE_FLOOR_MB,
+                   node_mem / (1024 * 1024) * NODE_SHARE / share)
                if node_mem else mem_res_mb)
     cpu_res = min(cpu_res, cpu_cap)
     mem_res_mb = min(mem_res_mb, mem_cap)
@@ -711,7 +739,7 @@ def apply_right_sizing(found, usage, node_cpu, node_mem):
         cpu_q, mem_max = usage[w.name]
         cpu_res, mem_res, cpu_lim, mem_lim = right_size(
             cpu_q, mem_max, node_cpu, node_mem,
-            throttling.get(w.name, 0.0), w.cpu_limit)
+            throttling.get(w.name, 0.0), w.cpu_limit, w.spec_replicas)
 
         now = time.time()
         if now - _last_resize.get(w.name, 0) < RESIZE_COOLDOWN_SECONDS:

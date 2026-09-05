@@ -89,10 +89,46 @@ class RightSizingTest(unittest.TestCase):
     GB = 1024 ** 3
 
     def size(self, cpu_q, mem_mb, node_cpu=2, node_mem_gb=4,
-             throttled_pct=0.0, cpu_limit_now=0.0):
+             throttled_pct=0.0, cpu_limit_now=0.0, replicas=1):
         return A.right_size(cpu_q, mem_mb * 1024 * 1024,
                             int(node_cpu * 1e9), int(node_mem_gb * self.GB),
-                            throttled_pct, cpu_limit_now)
+                            throttled_pct, cpu_limit_now, replicas)
+
+    def test_a_reservation_leaves_room_for_the_rollout_it_will_need(self):
+        """
+        THE ONE THAT STRANDED A DEPLOY. `order: start-first` places the
+        replacement before stopping the replica it replaces, so a 2-replica
+        service needs THREE placed for a moment.
+
+        Live shape, 2-core master: a JVM whose warm-up dominated its own q90
+        measured 0.272, was doubled to 0.543, and that fit — twice — with 0.167
+        CPU to spare. Nothing was wrong until the next push, when the third
+        replica needed 0.543 of the 0.167 that was left. It sat Pending, the
+        service stayed half on the old image, and every dashboard read 2/2
+        healthy because two replicas is what it was asked for.
+
+        So the clamp counts one more replica than there are, and the arithmetic
+        it guarantees is the whole point: replicas + 1 of these still fit.
+        """
+        cpu, mem, _, _ = self.size(0.272, 200, node_cpu=2, node_mem_gb=4,
+                                   replicas=2)
+        self.assertLessEqual(cpu * 3, 2 * A.NODE_SHARE)
+        self.assertLessEqual(mem * 3, 4 * 1024 * A.NODE_SHARE)
+        # And it really did bite: the unclamped answer is what was deployed.
+        self.assertLess(cpu, 0.272 * A.CPU_RESERVE_HEADROOM)
+
+    def test_a_single_replica_keeps_the_room_it_always_had(self):
+        # One replica plus its rollout spare is two, so the clamp is half of the
+        # old allowance rather than a third — tightening a service that never
+        # had a packing problem is its own regression.
+        cpu, _, _, _ = self.size(9.0, 200, node_cpu=2, replicas=1)
+        self.assertAlmostEqual(cpu, 2 * A.NODE_SHARE / 2, places=6)
+
+    def test_a_modest_appetite_is_not_clamped_at_all(self):
+        # The clamp is a ceiling, not a target. A service asking for less than
+        # its share gets what it measured.
+        cpu, _, _, _ = self.size(0.05, 100, node_cpu=2, replicas=2)
+        self.assertAlmostEqual(cpu, 0.05 * A.CPU_RESERVE_HEADROOM, places=6)
 
     def test_a_throttled_service_is_believed_over_its_own_cpu_reading(self):
         """
