@@ -550,6 +550,31 @@ class ColumnTest(unittest.TestCase):
         key = body[body.index("chart-legend"):]
         self.assertNotIn("/user/image", key)
 
+    def test_the_paths_are_on_the_same_scale_as_the_segment_above_them(self):
+        """
+        THE SUBTRACTION THAT LOOKED LIKE A LEAK. A part's raw value is
+        milliseconds of the AVERAGE request; the figure printed for its segment
+        is that part's share of the service's latency, which is a PERCENTILE.
+        Printed side by side, unscaled, the tooltip read
+        `media.tikdrama.asia: 98% of api_app's 783ms - 768ms` over a single
+        `/v1/partner - 170ms` — one route, every call to that host, apparently
+        leaving 598ms nowhere. Nothing was missing; the two numbers were
+        different statistics. A host whose calls are all tagged must have detail
+        rows that add up to its segment.
+        """
+        groups = shape._composition(
+            {("api_app", "media.example"): series(128.0)},
+            {"api_app": series(783.0)},
+            {("api_app", "media.example", "/v1/partner"): 128.0})
+        body = charts.divided(groups, "ms")
+        tip = re.search(r'data-tip="([^"]*)"', body).group(1)
+        head, detail = tip.split("\n")
+        self.assertIn("783ms", head)
+        self.assertIn("/v1/partner", detail)
+        # The one route is the whole segment, so it prints the segment's figure.
+        self.assertEqual(head.rsplit("\u2014", 1)[1].strip(),
+                         detail.rsplit("\u2014", 1)[1].strip())
+
     def test_a_host_with_no_path_detail_still_draws_and_still_hovers(self):
         # Only some client libraries tag a path. A segment without one must not
         # be a special case anywhere.

@@ -602,14 +602,28 @@ def divided(groups, unit="", empty="nothing is instrumented yet"):
                    '</div><div class="split-bar">')
         for index, (part, share) in enumerate(zip(parts, shares)):
             note = f' ({part["note"]})' if part.get("note") else ""
+            worth = total * share / 100.0
             tip = (f'{part["name"]}{note}: {share}% of {group["name"]}’s '
-                   f'{fmt(total, unit)} — {fmt(total * share / 100.0, unit)}')
+                   f'{fmt(total, unit)} — {fmt(worth, unit)}')
             # The calls behind this segment, ON HOVER AND NOWHERE ELSE. The bar
             # and the key stay at the level of the host — that is what the
             # alert names and what `autoscale.mute_causes` accepts — and "which
             # of its endpoints" is the next question, not the same one.
+            #
+            # ON THE SEGMENT'S SCALE, NOT THEIR OWN. A part's raw `value` is
+            # milliseconds of the AVERAGE request; the figure printed for the
+            # segment is its share of `total`, which is a PERCENTILE. Printing
+            # the raw detail underneath put two different statistics in one
+            # tooltip and invited the only reading available: subtraction. Live
+            # shape — `media.tikdrama.asia: 98% of api_app’s 783ms — 768ms`
+            # over a single `/v1/partner — 170ms`, one route accounting for
+            # every call to that host and appearing to leave 598ms unexplained.
+            # Nothing was missing; 170 was the mean and 768 was the p95's share.
+            # So the detail is rescaled by the same factor the segment was, and
+            # the rows under a fully-tagged host now add up to it.
+            raw = part.get("value") or 0.0
             for name, value in part.get("detail") or ():
-                tip += f'\n• {name} — {fmt(value, unit)}'
+                tip += f'\n• {name} — {fmt(value * worth / raw if raw else 0.0, unit)}'
             # The WIDTH is the same rounded share the tooltip prints. Drawing
             # an exact fraction under a rounded figure is how a segment ends up
             # visibly wider than the number written on it.

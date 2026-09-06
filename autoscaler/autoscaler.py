@@ -784,8 +784,38 @@ def right_size(cpu_q, mem_max_bytes, node_cpu, node_mem,
         # on an hourly cycle. An unused ceiling is free; a wrong one is not.
         cpu_lim = max(cpu_lim, cpu_limit_now)
 
+    # A CEILING IS NOT A RESERVATION, so it is not clamped like one.
+    #
+    # `cpu_cap` is a PACKING rule: it exists so that `replicas + 1` of this
+    # task still fit on the smallest node, because a reservation nothing can
+    # satisfy is an unschedulable replica. Nothing about that argument applies
+    # to a limit. Swarm schedules on reservations and never looks at limits, so
+    # a ceiling occupies no room on any node and takes nothing from anything
+    # else; contention between whatever does run is settled by CPU shares,
+    # which come from the reservation and are untouched here.
+    #
+    # Clamping the ceiling at `cpu_cap * 2` anyway is what silently undid the
+    # relief above. Live shape, both clusters: 2-core nodes, api_app at 2
+    # replicas, so `cpu_cap * 2` is 2 * 0.5 / 3 * 2 = 0.667 EXACTLY — and 0.667
+    # is what both services were deployed with. The kernel was stopping api_app
+    # in 53% of its scheduling periods on one cluster and 75% on the other;
+    # `THROTTLE_TARGET_PCT` saw that and asked for four times the cap; this line
+    # rounded the answer back to the number already deployed; `_changed_enough`
+    # then compared 0.667 against 0.667, found no change, and applied nothing.
+    # Forever. Every part of the relief machinery ran and the service stayed
+    # strangled, with ServiceCpuThrottled firing on both clusters and the
+    # autoscaler logging no resize in 24 hours — the exact self-confirming trap
+    # THROTTLE_TARGET_PCT was written to escape, reintroduced one line below it.
+    #
+    # The honest ceiling is the node itself: a container cannot use CPU the
+    # machine does not have, so a cap above that is not a bigger allowance, it
+    # is an unenforceable number. MEMORY keeps its share-shaped clamp, because
+    # a memory limit is enforced by killing the process and a limit past what
+    # the node has moves that kill from the container to the node.
+    cpu_lim_cap = node_cpu / 1e9 if node_cpu else cpu_lim
+
     return (round(cpu_res, 3), int(mem_res_mb),
-            round(min(cpu_lim, cpu_cap * 2), 3),
+            round(min(cpu_lim, cpu_lim_cap), 3),
             int(min(mem_res_mb * MEM_LIMIT_MULTIPLE, mem_cap * 2)))
 
 

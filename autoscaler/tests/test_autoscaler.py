@@ -175,6 +175,30 @@ class RightSizingTest(unittest.TestCase):
                                  cpu_limit_now=1.9)
         self.assertLessEqual(cap, 2.0)
 
+    def test_relief_is_not_clamped_by_the_rule_that_packs_reservations(self):
+        """
+        THE ONE THAT STRANGLED BOTH CLUSTERS. The ceiling used to be clamped at
+        `cpu_cap * 2` — a share of the node divided by `replicas + 1`, which is
+        a PACKING rule and has nothing to say about a limit Swarm never
+        schedules against.
+
+        Live shape, identical on both: 2-core nodes, api_app at 2 replicas, so
+        the clamp was 2 * 0.5 / 3 * 2 = 0.667 — and 0.667 is exactly the cap
+        both services were running. The kernel was stopping api_app in 53% of
+        its scheduling periods on one and 75% on the other; the relief asked for
+        four times the cap and was rounded straight back to what was already
+        deployed, so `_changed_enough` saw no change and nothing was applied for
+        as long as it lasted. Every alert fired, every measurement was correct,
+        and the fix was arithmetically unreachable.
+        """
+        _, _, cap, _ = self.size(0.003, 300, node_cpu=2, replicas=2,
+                                 throttled_pct=53.0, cpu_limit_now=0.667)
+        self.assertGreater(cap, 0.667)
+        self.assertTrue(A._changed_enough(0.667, cap, A.RESIZE_MIN_CPU_STEP))
+        # And the reservation, which IS packed, keeps the clamp entirely.
+        cpu_res, _, _, _ = self.size(9.0, 200, node_cpu=2, replicas=2)
+        self.assertAlmostEqual(cpu_res, 2 * A.NODE_SHARE / 3, places=3)
+
     def test_a_cap_change_alone_is_enough_to_apply_a_resize(self):
         # The limit used to be a pure function of the reservation, so testing
         # the reservation was the same test. A throttled service now needs a
