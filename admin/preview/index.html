@@ -1916,7 +1916,10 @@ details.ca .conn pre { margin: 0; overflow-x: auto; font-size: 11px; line-height
             <span class="obs-window">latest sample</span>
           </div>
           <p class="obs-note">the same latency RED draws, cut into what the request waits on — `unmeasured` is whatever no timer accounted for, including the service&#39;s own work</p>
-          <figure class="chart-wrap is-plain"><div class="split-bars"><div class="split-row"><div class="split-head"><span class="split-name" title="api_app">api_app</span><span class="split-total">279ms</span></div><div class="split-bar"><i style="width:68%;background:var(--s-prod)" data-tip="media.example.net: 68% of api_app’s 279ms — 190ms"></i><i style="width:9%;background:var(--s-staging)" data-tip="documents: 9% of api_app’s 279ms — 25.1ms"></i><i style="width:23%;background:var(--s-data)" data-tip="unmeasured: 23% of api_app’s 279ms — 64.2ms"></i></div><div class="chart-legend"><span class="chart-key"><i style="background:var(--s-prod)"></i>media.example.net</span><span class="chart-key"><i style="background:var(--s-staging)"></i>documents</span><span class="chart-key"><i style="background:var(--s-data)"></i>unmeasured</span></div></div><div class="split-row"><div class="split-head"><span class="split-name" title="web_app">web_app</span><span class="split-total">121ms</span></div><div class="split-bar"><i style="width:100%;background:var(--s-prod)" data-tip="queue.vendor.example: 100% of web_app’s 121ms — 121ms"></i></div><div class="chart-legend"><span class="chart-key"><i style="background:var(--s-prod)"></i>queue.vendor.example</span></div></div></div></figure>
+          <figure class="chart-wrap is-plain"><div class="split-bars"><div class="split-row"><div class="split-head"><span class="split-name" title="api_app">api_app</span><span class="split-total">279ms</span></div><div class="split-bar"><i style="width:68%;background:var(--s-prod)" data-tip="media.example.net: 68% of api_app’s 279ms — 190ms
+• /user/image/thumb — 68.3ms
+• /user/avatar — 28.7ms
+• /v1/upload — 14.7ms"></i><i style="width:9%;background:var(--s-staging)" data-tip="documents: 9% of api_app’s 279ms — 25.1ms"></i><i style="width:23%;background:var(--s-data)" data-tip="unmeasured: 23% of api_app’s 279ms — 64.2ms"></i></div><div class="chart-legend"><span class="chart-key"><i style="background:var(--s-prod)"></i>media.example.net</span><span class="chart-key"><i style="background:var(--s-staging)"></i>documents</span><span class="chart-key"><i style="background:var(--s-data)"></i>unmeasured</span></div></div><div class="split-row"><div class="split-head"><span class="split-name" title="web_app">web_app</span><span class="split-total">121ms</span></div><div class="split-bar"><i style="width:100%;background:var(--s-prod)" data-tip="queue.vendor.example: 100% of web_app’s 121ms — 121ms"></i></div><div class="chart-legend"><span class="chart-key"><i style="background:var(--s-prod)"></i>queue.vendor.example</span></div></div></div></figure>
           
           
             <p class="obs-summary">all 2 services under the 500ms SLO</p>
@@ -2613,7 +2616,7 @@ details.ca .conn pre { margin: 0; overflow-x: auto; font-size: 11px; line-height
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-06T14:54:59Z" data-localtime>2026-09-06T14:54:59Z</time>
+          <time datetime="2026-09-06T15:03:32Z" data-localtime>2026-09-06T15:03:32Z</time>
           
         </div>
       </div>
@@ -4037,7 +4040,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-06T14:54:59Z" data-localtime>2026-09-06T14:54:59Z</time>
+          <time datetime="2026-09-06T15:03:32Z" data-localtime>2026-09-06T15:03:32Z</time>
           
         </div>
       </div>
@@ -5369,7 +5372,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-06T14:54:59Z" data-localtime>2026-09-06T14:54:59Z</time>
+          <time datetime="2026-09-06T15:03:32Z" data-localtime>2026-09-06T15:03:32Z</time>
           
         </div>
       </div>
@@ -5601,9 +5604,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis+sentinel://default:ab02d036245342205c43e04f5f219228414ed94dc33e0fe2@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
+              <code>redis+sentinel://default:62d2f729f02d46ec7e5b49d7575bb1248ce2aa46f9eed024@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis+sentinel://default:ab02d036245342205c43e04f5f219228414ed94dc33e0fe2@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
+                      data-copy-text="redis+sentinel://default:62d2f729f02d46ec7e5b49d7575bb1248ce2aa46f9eed024@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -5614,7 +5617,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="ab02d036245342205c43e04f5f219228414ed94dc33e0fe2">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="62d2f729f02d46ec7e5b49d7575bb1248ce2aa46f9eed024">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -5680,9 +5683,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
             <div class="eyebrow">3 &middot; Point your application at this</div>
             
             <div class="conn">
-              <code>redis://default:ab02d036245342205c43e04f5f219228414ed94dc33e0fe2@127.0.0.1:6379</code>
+              <code>redis://default:62d2f729f02d46ec7e5b49d7575bb1248ce2aa46f9eed024@127.0.0.1:6379</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis://default:ab02d036245342205c43e04f5f219228414ed94dc33e0fe2@127.0.0.1:6379">Copy</button>
+                      data-copy-text="redis://default:62d2f729f02d46ec7e5b49d7575bb1248ce2aa46f9eed024@127.0.0.1:6379">Copy</button>
             </div>
             
             <p class="hint">Your application talks to the helper from step 2, which is running beside it and listening on this port; the helper carries the traffic through the tunnel. That is why this is a local address and not the hostname.</p>
@@ -6553,7 +6556,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-06T14:54:59Z" data-localtime>2026-09-06T14:54:59Z</time>
+          <time datetime="2026-09-06T15:03:32Z" data-localtime>2026-09-06T15:03:32Z</time>
           
         </div>
       </div>
@@ -6773,9 +6776,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>mongodb://root:1a3a82fa93c2481fa9864dda70e26a260a058e587dcede1d@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
+              <code>mongodb://root:5a70829d3500d6d0d9a0f4d6a97594959a3f956d26a780bd@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:1a3a82fa93c2481fa9864dda70e26a260a058e587dcede1d@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
+                      data-copy-text="mongodb://root:5a70829d3500d6d0d9a0f4d6a97594959a3f956d26a780bd@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -6786,7 +6789,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="1a3a82fa93c2481fa9864dda70e26a260a058e587dcede1d">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="5a70829d3500d6d0d9a0f4d6a97594959a3f956d26a780bd">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -6858,9 +6861,9 @@ Without that, a user can save a row and not see it on the next page load, and no
             <div class="eyebrow">3 &middot; Point your application at this</div>
             
             <div class="conn">
-              <code>mongodb://root:1a3a82fa93c2481fa9864dda70e26a260a058e587dcede1d@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority</code>
+              <code>mongodb://root:5a70829d3500d6d0d9a0f4d6a97594959a3f956d26a780bd@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:1a3a82fa93c2481fa9864dda70e26a260a058e587dcede1d@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority">Copy</button>
+                      data-copy-text="mongodb://root:5a70829d3500d6d0d9a0f4d6a97594959a3f956d26a780bd@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority">Copy</button>
             </div>
             
             <p class="hint">Your application talks to the helper from step 2, which is running beside it and listening on this port; the helper carries the traffic through the tunnel. That is why this is a local address and not the hostname.</p>
@@ -11049,7 +11052,7 @@ Without that, a user can save a row and not see it on the next page load, and no
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788702899.414518" data-localtime-epoch>1788702899</time>
+              <time datetime="1788703412.460223" data-localtime-epoch>1788703412</time>
             
           </td>
           <td>
@@ -11741,7 +11744,7 @@ Without that, a user can save a row and not see it on the next page load, and no
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788702899.414518" data-localtime-epoch>1788702899</time>
+              <time datetime="1788703412.460223" data-localtime-epoch>1788703412</time>
             
           </td>
           <td>

@@ -638,6 +638,14 @@ _RANGES = {
     # `unmeasured` is deliberately the largest slice on one service and the
     # smallest on the other, because both are ordinary and a preview that only
     # shows a well-instrumented app hides what most of them look like.
+    # The calls behind one host. Only `media.example.net` has them, because
+    # only some client libraries tag a path — a preview where every segment has
+    # detail hides that the chart works without any.
+    shape.Q_REQUEST_PATH: {
+        ("api_app", "media.example.net", "/user/image/thumb"): _wave(74, 22),
+        ("api_app", "media.example.net", "/user/avatar"): _wave(31, 9),
+        ("api_app", "media.example.net", "/v1/upload"): _wave(16, 5),
+    },
     shape.Q_REQUEST_MS: {
         ("api_app", "media.example.net"): _wave(121, 40),
         ("api_app", "documents"): _wave(18, 6, phase=1),

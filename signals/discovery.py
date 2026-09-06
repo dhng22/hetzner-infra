@@ -44,15 +44,14 @@ DEPENDENCY_HINTS = (
 TARGET_LABELS = ("host", "server_address", "net_peer_name", "client_name",
                  "target", "pool", "database", "uri")
 
-#: Labels that name WHICH CALL, when a client library publishes one. Read only
-#: as a SECOND part of the target, never on its own — a path with no host is
-#: ambiguous the moment two upstreams share a route name.
+#: Labels that name WHICH CALL, when a client library publishes one.
 #:
-#: A host is often not the answer on its own. `static-aichat.coretap.vn` taking
-#: most of a request says the CDN is slow; it does not say whether that is the
-#: thumbnail endpoint or the upload one, and those have different fixes. This
-#: is here so that the day an application starts tagging its outbound calls
-#: with a path, the breakdown splits by it with nothing to turn on.
+#: DETAIL ONLY. The breakdown is grouped by host and stays grouped by host — a
+#: chart with one segment per path would be a different chart, and the host is
+#: the level the alert, the mute label and the explanation all speak at. This
+#: is read for the HOVER: `static-aichat.coretap.vn` taking most of a request
+#: says the CDN is slow, and the paths underneath say whether that is the
+#: thumbnail endpoint or the upload one.
 #:
 #: THE APPLICATION MUST TRUNCATE, not this. A path tag is unbounded cardinality
 #: at the source — one series per object id will take the metrics store down
@@ -201,7 +200,11 @@ def discover_dependencies(service_names):
         for cause, hints in DEPENDENCY_HINTS:
             if not any(h in base for h in hints):
                 continue
-            targets = target_labels(labels)
+            target = next((lab for lab in TARGET_LABELS if labels.get(lab)), None)
+            # The path is carried BESIDE the target, never folded into it. The
+            # breakdown groups by host and stays grouped by host; this only
+            # says whether a finer split exists to show on hover.
+            path = next((lab for lab in PATH_LABELS if labels.get(lab)), None)
             unit = unit_of(base)
             # ALWAYS grouped by `service` as well as by the target. It used to
             # be grouped by the target ALONE, which silently merged every
@@ -211,54 +214,37 @@ def discover_dependencies(service_names):
             # service inherits its noisy neighbour's verdict. Nothing failed
             # while it did — there is one application per cluster here, so the
             # merge had nothing to merge.
-            by = ", ".join(("service",) + targets)
+            by = f"service, {target}" if target else "service"
             if (svc, base) in histogrammed:
                 expr = p95_expr(f"{base}_bucket", unit, by=by)
             else:
                 expr = mean_expr(base, unit, by=by)
-            entry = (cause, expr, base, targets)
+            entry = (cause, expr, base, target, path)
             if entry not in found.setdefault(svc, []):
                 found[svc].append(entry)
             break
 
     out = {svc: found.get(svc, []) for svc in wanted}
     for svc, entries in out.items():
-        for cause, _expr, base, targets in entries:
-            log.info("%s: %s dependency timer %s%s", svc, cause, base,
-                     f" (named by {', '.join(targets)})" if targets else "")
+        for cause, _expr, base, target, path in entries:
+            log.info("%s: %s dependency timer %s%s%s", svc, cause, base,
+                     f" (target label {target})" if target else "",
+                     f", paths from {path}" if path else "")
     _dependencies.store(out)
     return {k: v for k, v in out.items() if v}
 
 
-def target_labels(labels):
+def short_path(path):
     """
-    The labels that name what a dependency timer is calling, in reading order.
+    A path cut to its leading segments, for a hover that has to stay readable.
 
-    At most two: WHERE (a host) and, when the application publishes one, WHICH
-    CALL (a path). Empty when the series carries neither, which is what makes
-    the timer's own metric name the finest available name.
+    `/v1/media/thumbs/abc123/raw` reads as `/v1/media/thumbs`. Cut HERE as well
+    as at the tag, because a library that tags the full path would otherwise
+    put an object id on screen — and the panel cannot fix the cardinality that
+    already cost, only decline to show it.
     """
-    where = next((lab for lab in TARGET_LABELS if labels.get(lab)), None)
-    which = next((lab for lab in PATH_LABELS if labels.get(lab)), None)
-    return tuple(lab for lab in (where, which) if lab)
-
-
-def target_name(values):
-    """
-    One readable name out of the label values that identify a dependency.
-
-    `("static-aichat.coretap.vn", "/v1/media/thumbs/abc123")` reads as
-    `static-aichat.coretap.vn/v1/media/thumbs`. The path is cut to
-    `PATH_SEGMENTS` HERE as well as at the tag, because a library that tags the
-    full path would otherwise put an object id on a chart — and worse, one
-    series per object in the panel's own gauges.
-    """
-    parts = [str(v) for v in values if v]
-    if len(parts) > 1 and parts[1].startswith("/"):
-        segments = [seg for seg in parts[1].split("/") if seg][:PATH_SEGMENTS]
-        parts[1] = "/" + "/".join(segments)
-        return parts[0] + parts[1]
-    return "/".join(parts)
+    segments = [seg for seg in str(path).split("/") if seg][:PATH_SEGMENTS]
+    return "/" + "/".join(segments) if segments else str(path)
 
 
 def reset_caches():

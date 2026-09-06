@@ -94,11 +94,11 @@ class DependencyStatisticTest(unittest.TestCase):
         discovery.vm_series_rows = self.rows(
             "http_client_requests_seconds_count",
             "http_client_requests_seconds_bucket")
-        [(cause, expr, _base, targets)] = discovery.discover_dependencies(
+        [(cause, expr, _base, target, path)] = discovery.discover_dependencies(
             ["api_app"])["api_app"]
         self.assertEqual(cause, "upstream")
         self.assertIn("histogram_quantile", expr)
-        target = targets[0]
+        self.assertIsNone(path)
         # Grouped by the thing being CALLED, or one slow third party is
         # averaged into every fast one and nothing is named — AND by the
         # calling service, or two applications using the same client library
@@ -110,7 +110,7 @@ class DependencyStatisticTest(unittest.TestCase):
         # Most timers publish _sum and _count and nothing else. A mean is worth
         # far more than no dependency signal at all.
         discovery.vm_series_rows = self.rows("http_client_requests_seconds_count")
-        [(_cause, expr, _base, _target)] = discovery.discover_dependencies(
+        [(_cause, expr, _base, _target, _path)] = discovery.discover_dependencies(
             ["api_app"])["api_app"]
         self.assertNotIn("histogram_quantile", expr)
         # The fallback splits per service and per target too. It used to group
@@ -119,41 +119,54 @@ class DependencyStatisticTest(unittest.TestCase):
         self.assertIn("by (service, host)", expr)
 
 
-class TargetNameTest(unittest.TestCase):
+class PathDetailTest(unittest.TestCase):
     """
-    A host is often not the answer on its own.
+    A path is DETAIL under a host, and never the host's replacement.
 
-    `static-aichat.coretap.vn` taking most of a request says the CDN is slow;
-    it does not say whether that is the thumbnail endpoint or the upload one,
-    and those have different fixes. These are the parts that turn a path tag,
-    the day an application publishes one, into a target with nothing to enable.
+    `static-aichat.coretap.vn` taking most of a request is where the question
+    starts — the thumbnail endpoint and the upload endpoint have different
+    fixes — but the breakdown, the alert and `autoscale.mute_causes` all speak
+    at the level of the host, and they stay there.
     """
 
-    def test_a_host_alone_is_the_target_when_that_is_all_there_is(self):
-        self.assertEqual(discovery.target_labels({"host": "a.example"}), ("host",))
-        self.assertEqual(discovery.target_name(("a.example",)), "a.example")
+    def setUp(self):
+        self.saved = discovery.vm_series_rows
+        discovery.reset_caches()
 
-    def test_a_path_joins_the_host_rather_than_replacing_it(self):
-        # Never on its own: two upstreams sharing a route name would collapse
-        # into one row that belongs to neither.
-        labels = {"host": "static.example", "path": "/v1/media/thumbs"}
-        self.assertEqual(discovery.target_labels(labels), ("host", "path"))
-        self.assertEqual(
-            discovery.target_name(("static.example", "/v1/media/thumbs")),
-            "static.example/v1/media/thumbs")
+    def tearDown(self):
+        discovery.vm_series_rows = self.saved
+        discovery.reset_caches()
+
+    def rows(self, *metrics, **labels):
+        base = {"__name__": "", "service": "api_app", "host": "static.example"}
+        base.update(labels)
+        return lambda _selector: [
+            (m, "api_app", dict(base, __name__=m)) for m in metrics]
+
+    def test_a_path_label_is_reported_beside_the_target_not_inside_it(self):
+        discovery.vm_series_rows = self.rows(
+            "http_client_requests_seconds_count", path="/v1/media/thumbs")
+        [(_c, expr, _b, target, path)] = discovery.discover_dependencies(
+            ["api_app"])["api_app"]
+        self.assertEqual((target, path), ("host", "path"))
+        # The grouping the BREAKDOWN uses is unchanged: host, and only host.
+        self.assertIn("by (service, host)", expr)
+        self.assertNotIn("path", expr)
 
     def test_a_path_is_cut_to_its_leading_segments(self):
         # The application has to truncate at the TAG — cardinality is spent the
-        # moment the series exists. This is the display bound on top of that,
-        # so a library that tags the full path puts an object id in a metric
-        # store and not also on a chart.
-        self.assertEqual(
-            discovery.target_name(("s.example", "/v1/media/thumbs/abc123/raw")),
-            "s.example/v1/media/thumbs")
+        # moment the series exists. This is the display bound on top of that.
+        self.assertEqual(discovery.short_path("/v1/media/thumbs/abc123/raw"),
+                         "/v1/media/thumbs")
+        self.assertEqual(discovery.short_path("/v1"), "/v1")
         self.assertEqual(discovery.PATH_SEGMENTS, 3)
 
-    def test_neither_label_means_no_target_at_all(self):
-        self.assertEqual(discovery.target_labels({"status": "200"}), ())
+    def test_no_path_label_reports_none_rather_than_guessing(self):
+        discovery.vm_series_rows = self.rows("http_client_requests_seconds_count")
+        [(_c, _e, _b, target, path)] = discovery.discover_dependencies(
+            ["api_app"])["api_app"]
+        self.assertEqual(target, "host")
+        self.assertIsNone(path)
 
 
 if __name__ == "__main__":

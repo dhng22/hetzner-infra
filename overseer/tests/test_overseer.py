@@ -197,8 +197,8 @@ class DependencyReadingsTest(unittest.TestCase):
         """
         self.answer({"e": {("api_app", "vendor.example"): 900.0,
                            ("web_app", "vendor.example"): 20.0}})
-        deps = {"api_app": [(classify.CAUSE_UPSTREAM, "e", "http_client_requests_seconds", ("host",))],
-                "web_app": [(classify.CAUSE_UPSTREAM, "e", "http_client_requests_seconds", ("host",))]}
+        deps = {"api_app": [(classify.CAUSE_UPSTREAM, "e", "http_client_requests_seconds", "host", None)],
+                "web_app": [(classify.CAUSE_UPSTREAM, "e", "http_client_requests_seconds", "host", None)]}
         readings = D.dependency_readings(deps)
         self.assertEqual(readings["api_app"],
                          [(classify.CAUSE_UPSTREAM, "vendor.example", 900.0)])
@@ -209,7 +209,7 @@ class DependencyReadingsTest(unittest.TestCase):
         # Ten components x six queries at a 15s timeout does not fit in a 60s
         # loop. The dedup is what makes measuring EVERY service affordable.
         self.answer({"e": {("api_app", "v"): 1.0, "web_app": 2.0}})
-        entry = (classify.CAUSE_UPSTREAM, "e", "http_client_requests_seconds", ("host",))
+        entry = (classify.CAUSE_UPSTREAM, "e", "http_client_requests_seconds", "host", None)
         D.dependency_readings({"api_app": [entry], "web_app": [entry]})
         self.assertEqual(len(self.asked), 1)
         self.assertEqual(self.asked[0][1], ("service", "host"))
@@ -219,7 +219,7 @@ class DependencyReadingsTest(unittest.TestCase):
         # the timer itself — "this app's outbound HTTP", not a guess at a host.
         self.answer({"e": {"api_app": 88.0}})
         deps = {"api_app": [(classify.CAUSE_UPSTREAM, "e",
-                             "http_client_requests_seconds", ())]}
+                             "http_client_requests_seconds", None, None)]}
         self.assertEqual(D.dependency_readings(deps)["api_app"],
                          [(classify.CAUSE_UPSTREAM,
                            "http_client_requests_seconds", 88.0)])
@@ -233,7 +233,7 @@ class DependencyReadingsTest(unittest.TestCase):
         """
         wide = {("api_app", f"h{i}"): float(i) for i in range(40)}
         self.answer({"e": wide})
-        deps = {"api_app": [(classify.CAUSE_UPSTREAM, "e", "b", ("host",))]}
+        deps = {"api_app": [(classify.CAUSE_UPSTREAM, "e", "b", "host", None)]}
         rows = D.dependency_readings(deps)["api_app"]
         self.assertEqual(len(rows), D.DEPENDENCY_ROWS_MAX)
         self.assertEqual([r[1] for r in rows],
@@ -275,16 +275,17 @@ class RequestCompositionTest(unittest.TestCase):
     def latency(self, base="ktor_http_server_requests_seconds"):
         discovery._latency.store({"api_app": ("p95expr", "p95", base)})
 
-    def deps(self, target=("host",)):
+    def deps(self, path=None):
         return {"api_app": [(classify.CAUSE_UPSTREAM, "p95expr",
-                             "http_client_requests_seconds", target)]}
+                             "http_client_requests_seconds", "host", path)]}
 
     def test_the_parts_and_the_remainder_add_up_to_the_request(self):
         self.latency()
         self.answer({"ktor_http_server_requests_seconds_sum": {"api_app": 200.0},
                      "http_client_requests_seconds_sum":
                          {("api_app", "media.example"): 120.0}})
-        rows = D.request_composition([D.Watched(service())], self.deps())["api_app"]
+        rows, _paths = D.request_composition([D.Watched(service())], self.deps())
+        rows = rows["api_app"]
         self.assertEqual(rows, [(classify.CAUSE_UPSTREAM, "media.example", 120.0),
                                 (classify.CAUSE_LOCAL, D.UNMEASURED, 80.0)])
         self.assertEqual(sum(row[2] for row in rows), 200.0)
@@ -295,7 +296,8 @@ class RequestCompositionTest(unittest.TestCase):
         # in the panel.
         self.latency()
         self.answer({"ktor_http_server_requests_seconds_sum": {"api_app": 200.0}})
-        self.assertEqual(D.request_composition([D.Watched(service())], {})["api_app"],
+        rows, _paths = D.request_composition([D.Watched(service())], {})
+        self.assertEqual(rows["api_app"],
                          [(classify.CAUSE_LOCAL, D.UNMEASURED, 200.0)])
 
     def test_calls_that_overrun_the_request_leave_no_remainder(self):
@@ -311,7 +313,7 @@ class RequestCompositionTest(unittest.TestCase):
         self.answer({"ktor_http_server_requests_seconds_sum": {"api_app": 200.0},
                      "http_client_requests_seconds_sum":
                          {("api_app", "a.example"): 400.0}})
-        rows = D.request_composition([D.Watched(service())], self.deps())
+        rows, _paths = D.request_composition([D.Watched(service())], self.deps())
         self.assertEqual(rows["api_app"],
                          [(classify.CAUSE_UPSTREAM, "a.example", 400.0)])
         self.assertNotIn(D.UNMEASURED, [r[1] for r in rows["api_app"]])
@@ -322,27 +324,34 @@ class RequestCompositionTest(unittest.TestCase):
         self.latency()
         self.answer({"http_client_requests_seconds_sum":
                      {("api_app", "a.example"): 90.0}})
-        self.assertEqual(D.request_composition([D.Watched(service())], self.deps()), {})
+        self.assertEqual(D.request_composition([D.Watched(service())], self.deps()),
+                         ({}, []))
 
-    def test_a_path_label_splits_the_breakdown_by_call(self):
+    def test_paths_are_detail_under_a_host_and_never_replace_it(self):
         """
-        Ready for the day the application tags one. `static-aichat.coretap.vn`
-        taking most of a request says the CDN is slow; it does not say whether
-        that is the thumbnail endpoint or the upload one, and those have
-        different fixes.
+        The breakdown stays grouped by host: that is the level the alert, the
+        mute label and the explanation under the chart all speak at. The paths
+        are the hover, and they are measured the same way as the segment they
+        sit under so the two can be read against each other.
         """
         self.latency()
         self.answer({"ktor_http_server_requests_seconds_sum": {"api_app": 300.0},
-                     "http_client_requests_seconds_sum": {
-                         ("api_app", "static.example", "/v1/media/thumbs"): 120.0,
-                         ("api_app", "static.example", "/v1/upload"): 40.0}})
-        rows = D.request_composition([D.Watched(service())],
-                                     self.deps(("host", "path")))["api_app"]
-        self.assertEqual(
-            [(row[1], row[2]) for row in rows],
-            [("static.example/v1/media/thumbs", 120.0),
-             ("static.example/v1/upload", 40.0),
-             (D.UNMEASURED, 140.0)])
+                     "service, host, path": {
+                         ("api_app", "static.example", "/user/image/thumb/a1"): 90.0,
+                         ("api_app", "static.example", "/user/image/thumb/b2"): 30.0,
+                         ("api_app", "static.example", "/v1/upload"): 40.0},
+                     "http_client_requests_seconds_sum":
+                         {("api_app", "static.example"): 160.0}})
+        rows, paths = D.request_composition([D.Watched(service())],
+                                            self.deps(path="path"))
+        # One segment, named by the host, exactly as before.
+        self.assertEqual([(r[1], r[2]) for r in rows["api_app"]],
+                         [("static.example", 160.0), (D.UNMEASURED, 140.0)])
+        # And the detail underneath it, cut to three segments — which MERGES
+        # the two object ids into one row rather than dropping one of them.
+        self.assertEqual(sorted(paths, key=lambda r: -r[3]),
+                         [("api_app", "static.example", "/user/image/thumb", 120.0),
+                          ("api_app", "static.example", "/v1/upload", 40.0)])
 
     def test_only_the_worst_few_places_are_published(self):
         # A hostname is a label. The cap is what lets it be one.
@@ -350,7 +359,8 @@ class RequestCompositionTest(unittest.TestCase):
         self.answer({"ktor_http_server_requests_seconds_sum": {"api_app": 9000.0},
                      "http_client_requests_seconds_sum":
                          {("api_app", f"h{i}"): float(i) for i in range(40)}})
-        rows = D.request_composition([D.Watched(service())], self.deps())["api_app"]
+        rows, _paths = D.request_composition([D.Watched(service())], self.deps())
+        rows = rows["api_app"]
         self.assertEqual(len(rows), D.DEPENDENCY_ROWS_MAX + 1)     # + unmeasured
         self.assertEqual(rows[-1][1], D.UNMEASURED)
 

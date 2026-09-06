@@ -620,6 +620,12 @@ Q_SLO = 'max(autoscaler_service_slo_p95_ms)'
 #: reason Q_LATENCY uses it: the overseer's `task_id` is on every row, so a
 #: restart would otherwise leave the old task's series beside the new one's.
 Q_REQUEST_MS = 'max by (service, target) (overseer_service_request_ms)'
+#: The individual calls behind one host — HOVER ONLY. The chart, its legend and
+#: the sentence under it all stay grouped by host, which is the level the alert
+#: and `autoscale.mute_causes` speak at; this is the detail you get by pointing
+#: at a segment. Empty unless the application tags its outbound calls.
+Q_REQUEST_PATH = ('max by (service, target, path) '
+                  '(overseer_service_request_path_ms)')
 #: WHICH STATISTIC Q_LATENCY currently is. Not decorative — see `_latency_note`.
 Q_LATENCY_KIND = ('max by (kind) (overseer_service_latency_signal) == 1')
 
@@ -748,6 +754,12 @@ def _as_percent(series):
             for name, points in series.items()}
 
 
+def _latest_of(series):
+    """The newest sample of each series, as a plain `{key: value}`."""
+    return {key: points[-1][1] for key, points in (series or {}).items()
+            if points}
+
+
 def _points(series):
     """The one series a cluster-wide query answers with, or an empty list."""
     return next((v for v in (series or {}).values() if v), [])
@@ -766,7 +778,14 @@ PARTS_MAX = 4
 UNMEASURED = "unmeasured"
 
 
-def _composition(series, latency):
+def _paths_for(paths, service, host):
+    """The calls under one host, biggest first, as `[(name, ms)]`."""
+    found = [(path, value) for (svc, target, path), value in (paths or {}).items()
+             if svc == service and target == host]
+    return sorted(found, key=lambda row: -row[1])
+
+
+def _composition(series, latency, paths=None):
     """
     `[{name, total, parts}]` — each service's latency, cut into what it waits on.
 
@@ -785,6 +804,11 @@ def _composition(series, latency):
     Parts are biggest first, everything past the fourth rolled into one `other`
     slice so no segment ends up a colour the legend cannot name, and
     `unmeasured` last whatever its size — it is the leftover, not a place.
+
+    `paths` is per-call detail keyed by (service, host). It is attached to the
+    part it belongs to and read by nothing but the tooltip: the segments, the
+    legend and the summary stay at the level of the host, because that is what
+    the alert names and what `autoscale.mute_causes` accepts.
     """
     latest = {}
     for (service, target), points in (series or {}).items():
@@ -799,7 +823,9 @@ def _composition(series, latency):
             # same service on two cards a screen apart.
             continue
         rows.sort(key=lambda row: (row[0] == UNMEASURED, -row[1]))
-        parts = [{"name": name, "value": value} for name, value in rows[:PARTS_MAX]]
+        parts = [{"name": name, "value": value,
+                   "detail": _paths_for(paths, service, name)}
+                  for name, value in rows[:PARTS_MAX]]
         rest = sum(value for _name, value in rows[PARTS_MAX:])
         if rest:
             parts.append({"name": "other", "value": rest})
@@ -833,7 +859,9 @@ def observability(vm_range, vm_query, charts):
     error_points = _points(errors)
     # Keyed by BOTH labels: one bar per service, one segment per place inside
     # it, and the two cannot be told apart by either label alone.
-    composition = _composition(rng(Q_REQUEST_MS, ("service", "target")), latency)
+    composition = _composition(
+        rng(Q_REQUEST_MS, ("service", "target")), latency,
+        _latest_of(rng(Q_REQUEST_PATH, ("service", "target", "path"))))
 
     red = [
         _card("Duration", latency_note,

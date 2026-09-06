@@ -604,6 +604,12 @@ def divided(groups, unit="", empty="nothing is instrumented yet"):
             note = f' ({part["note"]})' if part.get("note") else ""
             tip = (f'{part["name"]}{note}: {share}% of {group["name"]}’s '
                    f'{fmt(total, unit)} — {fmt(total * share / 100.0, unit)}')
+            # The calls behind this segment, ON HOVER AND NOWHERE ELSE. The bar
+            # and the key stay at the level of the host — that is what the
+            # alert names and what `autoscale.mute_causes` accepts — and "which
+            # of its endpoints" is the next question, not the same one.
+            for name, value in part.get("detail") or ():
+                tip += f'\n• {name} — {fmt(value, unit)}'
             # The WIDTH is the same rounded share the tooltip prints. Drawing
             # an exact fraction under a rounded figure is how a segment ends up
             # visibly wider than the number written on it.

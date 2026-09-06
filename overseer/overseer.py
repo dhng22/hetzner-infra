@@ -425,6 +425,21 @@ G_TARGET = Gauge("overseer_service_dependency",
 G_REQUEST_MS = Gauge("overseer_service_request_ms",
                      "Milliseconds of the average request spent here",
                      _SVC + ["cause", "target"])
+#: The same milliseconds, split one level finer, FOR THE HOVER ONLY.
+#:
+#: The breakdown is grouped by host and stays grouped by host: that is the
+#: level the alert speaks at, the level `autoscale.mute_causes` speaks at, and
+#: the level the explanation under the chart speaks at. A chart with a segment
+#: per path would be a different chart answering a different question.
+#:
+#: But "static-aichat.coretap.vn is 55% of the request" is where the question
+#: starts, not where it ends — the thumbnail endpoint and the upload endpoint
+#: have different fixes. These rows are what the tooltip on that segment lists,
+#: and they exist only when the application tags its outbound calls with a
+#: path. Bounded by `PATH_ROWS_MAX` per host and by `PATH_SEGMENTS` per path.
+G_REQUEST_PATH_MS = Gauge("overseer_service_request_path_ms",
+                          "Milliseconds of the average request spent on one path",
+                          _SVC + ["target", "path"])
 G_CLAIMS = Gauge("overseer_claimed_causes", "Causes some service claims", ["cause"])
 G_LOOP = Gauge("overseer_last_loop_timestamp_seconds", "Unix time of the last loop")
 G_SERVICES = Gauge("overseer_watched_services", "Application services being watched")
@@ -749,24 +764,24 @@ DEPENDENCY_SHARE = 0.5
 DEPENDENCY_ROWS_MAX = 6
 
 
-def _label_key(targets):
-    """What `vm_query_map` should key a dependency's answer by."""
-    return ("service",) + targets if targets else "service"
+#: How many paths are published UNDER one host, for the hover.
+#:
+#: The breakdown itself is grouped by host and stays that way; this is the
+#: finer split shown when you point at a segment. Four because a tooltip is
+#: read at a glance, and because every row is a label value: the cap is what
+#: lets a path be a label at all.
+PATH_ROWS_MAX = 4
 
 
-def _split(found, targets, base):
+def _split(found, target, base):
     """
     One row of a dependency answer, as (service, what it was calling).
 
-    With no target labels the series names nothing but the service, so the
+    Without a target label the series names nothing but the service, so the
     timer's own metric name IS the finest name there is — "this app's outbound
-    HTTP", not which host. With one or two, `discovery.target_name` joins them:
-    a host on its own, or a host and the leading segments of a path once an
-    application tags one.
+    HTTP", not which host.
     """
-    if not targets:
-        return found, base
-    return found[0], discovery.target_name(found[1:])
+    return (found, base) if not target else (found[0], found[1])
 
 
 def dependency_readings(dependencies):
@@ -788,14 +803,15 @@ def dependency_readings(dependencies):
     answers, out = {}, {}
     for svc, entries in dependencies.items():
         rows = []
-        for cause, expr, base, targets in entries:
-            key = (expr, targets)
+        for cause, expr, base, target, _path in entries:
+            key = (expr, target)
             if key not in answers:
-                answers[key] = query.vm_query_map(expr, label=_label_key(targets))
+                labels = ("service", target) if target else "service"
+                answers[key] = query.vm_query_map(expr, label=labels)
             for found, value in answers[key].items():
-                name, target = _split(found, targets, base)
+                name, target_name = _split(found, target, base)
                 if name == svc and value is not None:
-                    rows.append((cause, target, value))
+                    rows.append((cause, target_name, value))
         rows.sort(key=lambda row: -row[2])
         if rows:
             out[svc] = rows[:DEPENDENCY_ROWS_MAX]
@@ -924,7 +940,7 @@ def request_composition(services, dependencies):
     each distinct request timer, one for each distinct dependency timer.
     """
     latency = discovery.discover_latency([s.name for s in services])
-    totals, answers, out = {}, {}, {}
+    totals, answers, out, paths = {}, {}, {}, []
     for _svc, (_expr, _kind, base) in latency.items():
         unit = expressions.unit_of(base)
         expr = expressions.mean_expr(base, unit)
@@ -939,16 +955,20 @@ def request_composition(services, dependencies):
             continue
         request_base = latency[svc][2]
         rows = []
-        for cause, _p95_expr, base, targets in dependencies.get(svc, ()):
-            by = ", ".join(("service",) + targets)
+        for cause, _p95_expr, base, target, path in dependencies.get(svc, ()):
+            by = f"service, {target}" if target else "service"
             expr = expressions.per_request_expr(
                 base, expressions.unit_of(base), request_base, by=by)
             if expr not in answers:
-                answers[expr] = query.vm_query_map(expr, label=_label_key(targets))
+                labels = ("service", target) if target else "service"
+                answers[expr] = query.vm_query_map(expr, label=labels)
             for found, value in answers[expr].items():
-                name, target = _split(found, targets, base)
+                name, target_name = _split(found, target, base)
                 if name == svc and value:
-                    rows.append((cause, target, value))
+                    rows.append((cause, target_name, value))
+            if target and path:
+                paths.extend(_paths_under(svc, base, request_base, target, path,
+                                          answers))
         rows.sort(key=lambda row: -row[2])
         rows = rows[:DEPENDENCY_ROWS_MAX]
         # A service with no outbound timers at all is entirely `unmeasured`,
@@ -959,10 +979,42 @@ def request_composition(services, dependencies):
         if remainder > 0:
             rows.append((classify.CAUSE_LOCAL, UNMEASURED, remainder))
         out[svc] = rows
-    return out
+    return out, paths
 
 
-def publish_composition(composition):
+def _paths_under(svc, base, request_base, target, path, answers):
+    """
+    The individual calls behind ONE host, for the hover and nowhere else.
+
+    Same measurement as the segment it sits under — milliseconds of the average
+    request — so the paths and the host they belong to are on one scale and the
+    tooltip can be read against the bar. Capped per host by
+    `PATH_ROWS_MAX`, and the path itself cut to its leading segments, because
+    every distinct value here is a label value in a gauge.
+    """
+    expr = expressions.per_request_expr(base, expressions.unit_of(base),
+                                        request_base,
+                                        by=f"service, {target}, {path}")
+    if expr not in answers:
+        answers[expr] = query.vm_query_map(expr,
+                                           label=("service", target, path))
+    under = {}
+    for (name, host, raw), value in answers[expr].items():
+        if name != svc or not value:
+            continue
+        short = discovery.short_path(raw)
+        # Truncation MERGES: /a/b/c/1 and /a/b/c/2 are one row here, and their
+        # times add rather than the second replacing the first.
+        under[(host, short)] = under.get((host, short), 0.0) + value
+    rows = []
+    for host in {h for h, _ in under}:
+        mine = sorted(((p, v) for (h, p), v in under.items() if h == host),
+                      key=lambda row: -row[1])[:PATH_ROWS_MAX]
+        rows.extend((svc, host, p, v) for p, v in mine)
+    return rows
+
+
+def publish_composition(composition, paths=()):
     """
     The average request and its parts, for every service, so the panel can draw
     an end-to-end latency that adds up.
@@ -982,6 +1034,18 @@ def publish_composition(composition):
     for labels in [l for l in list(G_REQUEST_MS._metrics)
                    if l and tuple(l) not in live]:
         G_REQUEST_MS.remove(*labels)
+
+    # The per-path detail, level-triggered on the same terms. A path that stops
+    # being called must stop being listed under its host, or the hover names an
+    # endpoint nobody has requested since Tuesday.
+    seen = set()
+    for svc, host, path, value in paths:
+        seen.add((svc, str(host), str(path)))
+        G_REQUEST_PATH_MS.labels(service=svc, target=str(host),
+                                 path=str(path)).set(value)
+    for labels in [l for l in list(G_REQUEST_PATH_MS._metrics)
+                   if l and tuple(l) not in seen]:
+        G_REQUEST_PATH_MS.remove(*labels)
 
 
 
@@ -3266,7 +3330,7 @@ def judge(watched):
     # cached an answer with the other services MISSING from it, and they stayed
     # missing for the next fifteen minutes.
     dependencies = discovery.discover_dependencies([s.name for s in watched])
-    publish_composition(request_composition(watched, dependencies))
+    publish_composition(*request_composition(watched, dependencies))
     if needs_cause:
         readings = dependency_readings(dependencies)
         for s, cpu, mem, lat in needs_cause:

@@ -528,6 +528,37 @@ class ColumnTest(unittest.TestCase):
         self.assertEqual(
             shape._composition({("ghost", "a.example"): series(10.0)}, {}), [])
 
+    def test_the_paths_behind_a_host_are_in_its_tooltip_and_nowhere_else(self):
+        """
+        `static-aichat.coretap.vn is 55% of the request` is where the question
+        starts — the thumbnail endpoint and the upload endpoint have different
+        fixes. But the bar, the key and the sentence under them stay at the
+        level of the HOST, because that is what the alert names and what
+        `autoscale.mute_causes` accepts.
+        """
+        groups = shape._composition(
+            {("api_app", "static.example"): series(160.0)},
+            {"api_app": series(300.0)},
+            {("api_app", "static.example", "/user/image"): 120.0,
+             ("api_app", "static.example", "/v1/upload"): 40.0})
+        self.assertEqual([p["name"] for p in groups[0]["parts"]], ["static.example"])
+        body = charts.divided(groups, "ms")
+        tip = re.search(r'data-tip="([^"]*)"', body).group(1)
+        self.assertIn("/user/image", tip)
+        self.assertIn("/v1/upload", tip)
+        # And NOT in the key, which would make it a different chart.
+        key = body[body.index("chart-legend"):]
+        self.assertNotIn("/user/image", key)
+
+    def test_a_host_with_no_path_detail_still_draws_and_still_hovers(self):
+        # Only some client libraries tag a path. A segment without one must not
+        # be a special case anywhere.
+        groups = shape._composition(
+            {("api_app", "plain.example"): series(50.0)},
+            {"api_app": series(50.0)}, {})
+        self.assertEqual(groups[0]["parts"][0]["detail"], [])
+        self.assertIn("plain.example", charts.divided(groups, "ms"))
+
     def test_past_the_fourth_place_the_rest_becomes_one_slice(self):
         # `SERIES_VARS` is four hues wide; a fifth segment would fold into the
         # neutral and claim a distinction the colours cannot make.
