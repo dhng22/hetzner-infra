@@ -40,6 +40,34 @@ def p95_expr(histogram, unit, by="service"):
             f"(rate({histogram}[2m]))) * {scale}")
 
 
+def per_request_expr(dep_base, dep_unit, request_base, by="service"):
+    """
+    Milliseconds of `dep_base` spent inside the AVERAGE request, grouped by `by`.
+
+    This is the only dependency number that can be added up, and adding them up
+    is the whole point. A dependency's p95 cannot: it is the tail of one call
+    measured against the tail of a request, the two tails are not the same
+    requests, and dividing one by the other produced readings like "this
+    service spends 1112% of a request in media.tikdrama.asia" — arithmetically
+    defensible, useless to read, and impossible to draw.
+
+    Total seconds spent in the dependency, divided by the number of REQUESTS
+    that time was spent on, is time per request. Every part measured this way
+    sits inside the same average request, so the parts and the remainder add up
+    to the end-to-end mean and a stacked bar is an honest picture of it.
+
+    Two ways it can still mislead, both named on the card rather than hidden:
+    calls made CONCURRENTLY are counted once each but overlap in wall-clock, so
+    the parts can exceed the request they sit in; and work with no timer at all
+    lands in the remainder, which is why the remainder is labelled as
+    "unmeasured" rather than as the service's own compute.
+    """
+    scale = 1000 if dep_unit == "seconds" else 1
+    return (f"(sum by ({by}) (rate({dep_base}_sum[2m])) "
+            f"/ on (service) group_left () "
+            f"sum by (service) (rate({request_base}_count[2m]))) * {scale}")
+
+
 def mean_expr(base, unit, by="service"):
     """
     Mean latency, in milliseconds, grouped by `by`.

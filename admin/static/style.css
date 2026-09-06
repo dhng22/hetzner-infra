@@ -1055,17 +1055,16 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
 .bar-row.is-warn .bar-track > i { background: var(--warn); }
 .bar-row.is-bad .bar-track > i { background: var(--bad); }
 .bar-value { font: 400 11px var(--mono); text-align: right; }
-/* The dependency breakdown reuses `.bar-rows` wholesale — same track, same
-   ellipsised name, same right-aligned reading — and adds only the per-service
-   heading the rows hang under. The hue is set inline per row by
-   `charts.shares`, which is the one place a series colour is ever chosen. */
-.share-groups { display: flex; flex-direction: column; gap: var(--s-3); }
-.share-head { display: flex; align-items: baseline; gap: var(--s-2);
-              margin-bottom: 5px; }
-.share-name { font-size: var(--t-xs); font-weight: var(--w-bold);
-              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.share-total { font: 400 11px var(--mono); color: var(--text-mute);
-               margin-left: auto; }
+/* Names the subject of one chart when a card draws several — the Duration card
+   draws one per service. Sits above the plot, inside the same figure, so the
+   caption cannot drift away from the picture it names. */
+.chart-caption { font-size: var(--t-xs); font-weight: var(--w-bold);
+                 color: var(--text-mute); margin-bottom: 3px;
+                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The p95 drawn OVER the stacked average request: same line weight, neutral
+   hue and dashed, so it reads as a different measurement rather than as one
+   more layer of the composition. */
+.chart-line.is-overlay { stroke: var(--text); stroke-dasharray: 3 2; opacity: .75; }
 
 /* A bullet, not a gauge: the number matters far less than where it sits
    relative to the line that will act on it. */

@@ -240,36 +240,116 @@ class DependencyReadingsTest(unittest.TestCase):
                          [f"h{i}" for i in range(39, 39 - D.DEPENDENCY_ROWS_MAX, -1)])
 
 
-class PublishDependenciesTest(unittest.TestCase):
+class RequestCompositionTest(unittest.TestCase):
     """
-    The breakdown gauge, which the panel draws "where the time goes" from.
+    THE LATENCY CHART'S LAYERS, and the one property that makes them drawable:
+    they add up to the end-to-end mean.
+
+    The first attempt published each dependency's p95 and let the panel divide
+    it by the request's p95. Every number was true and the picture was
+    unreadable — "api_app spends 1112% of a request in media.tikdrama.asia" —
+    because a call's tail and a request's tail are not the same requests, so
+    the ratio is a share of nothing. These are milliseconds of the average
+    request instead, which is the only decomposition that can be stacked.
     """
 
-    def rows(self):
-        return {labels: value for labels, value
-                in [(l, D.G_DEP_MS.labels(*l)._value.get())
-                    for l in list(D.G_DEP_MS._metrics)]}
+    def setUp(self):
+        self.saved = D.query.vm_query_map
+        self.asked = []
+        discovery.reset_caches()
 
     def tearDown(self):
-        D.publish_dependencies({})
+        D.query.vm_query_map = self.saved
+        discovery.reset_caches()
+        D.publish_composition({})
 
-    def test_every_dependency_is_published_not_only_the_blamed_one(self):
-        # The alert needs one culprit. The picture needs all of them, or a
-        # dependency creeping from 20% of a request to 60% is invisible until
-        # it is already the culprit.
-        D.publish_dependencies({"api_app": [
-            (classify.CAUSE_UPSTREAM, "vendor.example", 900.0),
-            (classify.CAUSE_DATABASE, "documents", 20.0)]})
+    def answer(self, table):
+        def vm_query_map(expr, label="service"):
+            self.asked.append(expr)
+            for fragment, rows in table.items():
+                if fragment in expr:
+                    return rows
+            return {}
+        D.query.vm_query_map = vm_query_map
+
+    def latency(self, base="ktor_http_server_requests_seconds"):
+        discovery._latency.store({"api_app": ("p95expr", "p95", base)})
+
+    def deps(self, target="host"):
+        return {"api_app": [(classify.CAUSE_UPSTREAM, "p95expr",
+                             "http_client_requests_seconds", target)]}
+
+    def test_the_parts_and_the_remainder_add_up_to_the_request(self):
+        self.latency()
+        self.answer({"ktor_http_server_requests_seconds_sum": {"api_app": 200.0},
+                     "http_client_requests_seconds_sum":
+                         {("api_app", "media.example"): 120.0}})
+        rows = D.request_composition([D.Watched(service())], self.deps())["api_app"]
+        self.assertEqual(rows, [(classify.CAUSE_UPSTREAM, "media.example", 120.0),
+                                (classify.CAUSE_LOCAL, D.UNMEASURED, 80.0)])
+        self.assertEqual(sum(row[2] for row in rows), 200.0)
+
+    def test_a_service_with_no_outbound_timer_is_all_unmeasured(self):
+        # It draws as one layer the height of its own latency — the plain chart
+        # it had before, reached by the same path rather than by a special case
+        # in the panel.
+        self.latency()
+        self.answer({"ktor_http_server_requests_seconds_sum": {"api_app": 200.0}})
+        self.assertEqual(D.request_composition([D.Watched(service())], {})["api_app"],
+                         [(classify.CAUSE_LOCAL, D.UNMEASURED, 200.0)])
+
+    def test_concurrent_calls_cannot_push_the_remainder_below_zero(self):
+        # Two 200ms calls in parallel cost one request 200ms of wall-clock and
+        # 400ms of dependency time. Floored, and the card says so; the
+        # alternative is a picture that silently rescales itself.
+        self.latency()
+        self.answer({"ktor_http_server_requests_seconds_sum": {"api_app": 200.0},
+                     "http_client_requests_seconds_sum":
+                         {("api_app", "a.example"): 400.0}})
+        rows = D.request_composition([D.Watched(service())], self.deps())["api_app"]
+        self.assertEqual(rows, [(classify.CAUSE_UPSTREAM, "a.example", 400.0)])
+
+    def test_a_service_with_no_end_to_end_number_is_not_broken_down(self):
+        # A stack whose parts are known and whose whole is not is not a
+        # breakdown — it is a pile of numbers under a total nobody measured.
+        self.latency()
+        self.answer({"http_client_requests_seconds_sum":
+                     {("api_app", "a.example"): 90.0}})
+        self.assertEqual(D.request_composition([D.Watched(service())], self.deps()), {})
+
+    def test_only_the_worst_few_places_are_published(self):
+        # A hostname is a label. The cap is what lets it be one.
+        self.latency()
+        self.answer({"ktor_http_server_requests_seconds_sum": {"api_app": 9000.0},
+                     "http_client_requests_seconds_sum":
+                         {("api_app", f"h{i}"): float(i) for i in range(40)}})
+        rows = D.request_composition([D.Watched(service())], self.deps())["api_app"]
+        self.assertEqual(len(rows), D.DEPENDENCY_ROWS_MAX + 1)     # + unmeasured
+        self.assertEqual(rows[-1][1], D.UNMEASURED)
+
+
+class PublishCompositionTest(unittest.TestCase):
+    def rows(self):
+        return {labels: D.G_REQUEST_MS.labels(*labels)._value.get()
+                for labels in list(D.G_REQUEST_MS._metrics)}
+
+    def tearDown(self):
+        D.publish_composition({})
+
+    def test_the_whole_composition_is_published_not_only_the_blamed_part(self):
+        D.publish_composition({"api_app": [
+            (classify.CAUSE_UPSTREAM, "vendor.example", 120.0),
+            (classify.CAUSE_LOCAL, D.UNMEASURED, 80.0)]})
         self.assertEqual(self.rows(), {
-            ("api_app", "upstream", "vendor.example"): 900.0,
-            ("api_app", "database", "documents"): 20.0})
+            ("api_app", "upstream", "vendor.example"): 120.0,
+            ("api_app", "local", D.UNMEASURED): 80.0})
 
-    def test_a_dependency_that_stops_being_called_stops_being_drawn(self):
-        # Level-triggered. A stale row looks exactly like a current one, and
-        # the panel would draw a retired third party as eating the request.
-        D.publish_dependencies({"api_app": [
+    def test_a_place_that_stops_being_called_stops_being_drawn(self):
+        # Level-triggered. A stale layer looks exactly like a current one, and
+        # the chart would draw a retired third party inside the request.
+        D.publish_composition({"api_app": [
             (classify.CAUSE_UPSTREAM, "old.example", 900.0)]})
-        D.publish_dependencies({"api_app": [
+        D.publish_composition({"api_app": [
             (classify.CAUSE_UPSTREAM, "new.example", 120.0)]})
         self.assertEqual(self.rows(),
                          {("api_app", "upstream", "new.example"): 120.0})

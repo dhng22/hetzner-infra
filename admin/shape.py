@@ -600,14 +600,6 @@ SATURATION_DANGER = 80.0
 #: and the alert rule cannot drift apart without somebody seeing it.
 ERROR_BUDGET_PCT = 5.0
 
-#: The share of a request at which the overseer stops calling a dependency a
-#: contributor and starts calling it THE CAUSE — `DEPENDENCY_SHARE` in
-#: `overseer/overseer.py`. Restated here rather than imported because the panel
-#: image does not carry the overseer, and quoted rather than re-chosen because a
-#: panel that draws one bar while the alert fires at another is how somebody
-#: ends up arguing with a graph.
-DEPENDENCY_SHARE = 0.5
-
 Q_STATUS_CLASS = (
     'sum by (class) (label_replace(rate(cloudflared_tunnel_response_by_code[5m]),'
     ' "class", "${1}xx", "status_code", "(.).*"))')
@@ -622,11 +614,12 @@ Q_REQUEST_RATE = 'sum(rate(cloudflared_tunnel_response_by_code[5m]))'
 # has stopped updating, when what stopped is the series it was drawing.
 Q_LATENCY = 'max by (service) (overseer_service_latency_ms)'
 Q_SLO = 'max(autoscaler_service_slo_p95_ms)'
-#: Where each service's time goes. `max by` for the same reason Q_LATENCY uses
-#: it — the overseer's `task_id` is on every row, so a restart would otherwise
-#: leave the old task's readings sitting beside the new one's.
-Q_DEPENDENCY = ('max by (service, cause, target) '
-                '(overseer_service_dependency_ms)')
+#: THE LATENCY CHART'S LAYERS. Where the average request's time goes, one
+#: series per place it goes, published so that the layers ADD UP to the
+#: end-to-end mean — see `overseer_service_request_ms`. `max by` for the same
+#: reason Q_LATENCY uses it: the overseer's `task_id` is on every row, so a
+#: restart would otherwise leave the old task's series beside the new one's.
+Q_REQUEST_MS = 'max by (service, target) (overseer_service_request_ms)'
 #: WHICH STATISTIC Q_LATENCY currently is. Not decorative — see `_latency_note`.
 Q_LATENCY_KIND = ('max by (kind) (overseer_service_latency_signal) == 1')
 
@@ -692,6 +685,24 @@ def _window(span, *exprs):
             if phrase not in parts:
                 parts.append(phrase)
     return " · ".join(parts)
+
+
+#: What the Duration card says about its own layers, appended to whatever
+#: `_latency_note` works out the LINE is.
+#:
+#: The wording is careful about ONE thing, because getting it wrong is what
+#: made the first attempt unreadable: the layers are milliseconds of the
+#: average request spent in each place, and they normally add up to it — but a
+#: call made in parallel with another, or made outside a request at all, is
+#: counted in full and cannot be told apart from one made inside. Live on this
+#: cluster that is 253ms of outbound time inside a 198ms average request. Both
+#: numbers are true; a caption promising they add up is not.
+COMPOSITION_NOTE = (
+    " · filled areas are milliseconds of the AVERAGE request spent in each "
+    "place, `unmeasured` being whatever is left of it. Calls made in parallel, "
+    "or made outside a request, count in full — so the layers can total more "
+    "than the request they sit in"
+)
 
 
 def _latency_note(kinds):
@@ -769,62 +780,43 @@ def _points(series):
     return next((v for v in (series or {}).values() if v), [])
 
 
-def _breakdown(latency, dependencies):
+def _duration(latency, composition, slo, charts):
     """
-    Each service's outbound calls, worst first, beside its own request latency.
+    THE latency chart: end-to-end, with the breakdown drawn on it.
 
-    Joined HERE rather than in PromQL because the two numbers come from
-    different shapes — a range for the request, an instant for the calls — and
-    a service with dependencies but no latency series has nothing to be a share
-    OF. Those are dropped rather than drawn against a total of zero.
+    One stacked chart per service. The filled layers are the average request
+    split into where its time goes and they ADD UP to it — that is the whole
+    reason the overseer measures them per request rather than as percentiles
+    (see `overseer_service_request_ms`). The dashed line over them is that
+    service's p95, the number the SLO is written against, and the SLO itself is
+    the rule across the plot.
+
+    It used to be a plain multi-line chart of p95 per service, and the
+    breakdown was tried beside it as a card of its own. Both were wrong for the
+    same reason: the question is "what is this 466ms MADE OF", and an answer
+    that is not on the latency chart is an answer somebody has to assemble
+    themselves out of two pictures.
+
+    Falls back to the plain line for a cluster where nothing publishes a
+    composition yet, so an uninstrumented service still gets its latency drawn
+    rather than an empty box.
     """
-    parts = {}
-    for (service, cause, target), value in (dependencies or {}).items():
-        parts.setdefault(service, []).append(
-            {"name": target, "value": value, "note": cause})
-    out = []
-    for service, points in sorted((latency or {}).items()):
-        rows = parts.get(service)
-        if not rows or not points:
-            continue
-        out.append({"name": service, "total": points[-1][1],
-                    "parts": sorted(rows, key=lambda r: -r["value"])})
-    return out
+    services = sorted({svc for svc, _target in composition})
+    if not services:
+        return charts.line(latency, "ms", reference=slo, band=slo,
+                           empty="no service is publishing a timer yet")
+    return "".join(
+        charts.stack({target: points for (svc, target), points
+                      in composition.items() if svc == name},
+                     "ms", reference=slo, band=slo,
+                     overlay={"p95": latency.get(name) or []},
+                     caption=name)
+        for name in services)
 
 
-def _breakdown_summary(breakdown):
-    """
-    The one sentence the picture cannot say: is any call BIG ENOUGH to be the
-    answer, by the same bar the overseer blames one at.
-
-    `DEPENDENCY_SHARE` in `overseer/overseer.py` is that bar — half the request
-    — and it is quoted rather than re-chosen so the panel and the alert cannot
-    disagree about which dependency is "the reason".
-    """
-    biggest = None
-    for group in breakdown:
-        for part in group["parts"]:
-            share = part["value"] / group["total"]
-            if biggest is None or share > biggest[0]:
-                biggest = (share, group["name"], part["name"])
-    if biggest is None:
-        return ""
-    share, service, target = biggest
-    if share >= DEPENDENCY_SHARE:
-        return (f"{target} is {share * 100:.0f}% of {service}'s request — "
-                f"most of the request is this one call, and more replicas "
-                f"cannot shorten it")
-    return (f"the largest single call is {target} at {share * 100:.0f}% of "
-            f"{service}'s request — no one dependency is where the time goes")
-
-
-def observability(vm_range, vm_query, vm_map, charts):
+def observability(vm_range, vm_query, charts):
     """
     The RED / USE / Golden column, already drawn.
-
-    `vm_map` is the third reader: an instant query keyed by SEVERAL labels,
-    which the dependency breakdown needs because a reading is only meaningful
-    per (service, cause, target) and `vm_query` answers with one number.
 
     `charts` is a parameter rather than an import for the same reason
     `summary()` takes `vm_query`: this stays a pure function of its arguments,
@@ -846,23 +838,17 @@ def observability(vm_range, vm_query, vm_map, charts):
     status = rng(Q_STATUS_CLASS, "class")
     traffic = _points(rng(Q_REQUEST_RATE))
     error_points = _points(errors)
-    breakdown = _breakdown(latency, vm_map(Q_DEPENDENCY,
-                                           "service", "cause", "target"))
+    # Keyed by BOTH labels: one chart per service, one layer per place inside
+    # it, and the two cannot be told apart by either label alone.
+    composition = rng(Q_REQUEST_MS, ("service", "target"))
+    if composition:
+        latency_note += COMPOSITION_NOTE
 
     red = [
         _card("Duration", latency_note,
-              charts.line(latency, "ms", reference=slo, band=slo,
-                          empty="no service is publishing a timer yet"),
-              _window(RANGE_SPAN, Q_LATENCY),
+              _duration(latency, composition, slo, charts),
+              _window(RANGE_SPAN, Q_LATENCY, Q_REQUEST_MS),
               charts.reading(latency, "ms", reference=slo)),
-        _card("Where the time goes",
-              "each outbound call a service makes, against the request it sits "
-              "inside — these are separate percentiles, so they overlap and do "
-              "NOT add up to the request",
-              charts.shares(breakdown, "ms",
-                            empty="no service publishes an outbound timer yet"),
-              _window(LATEST_SPAN, Q_DEPENDENCY),
-              _breakdown_summary(breakdown)),
         _card("Rate", "responses per second, split by status class",
               charts.stack(status, "/s"),
               _window(RANGE_SPAN, Q_STATUS_CLASS),
@@ -902,18 +888,6 @@ def observability(vm_range, vm_query, vm_map, charts):
     else:
         latency_summary = (f"all {len(latency)} services under the "
                            f"{charts.fmt(slo, 'ms')} SLO")
-
-    # WHAT the slowest one is waiting on, on the card that reports it being
-    # slowest. The breakdown chart above already draws every service; naming it
-    # again here is not the picture repeated, it is the one fact this card is
-    # missing — "api_app is over its SLO" and "api_app is over its SLO because
-    # of media.tikdrama.asia" are a different amount of help at 3am.
-    waiting_on = next((g["parts"][0] for g in breakdown if g["name"] == slowest),
-                      None)
-    if waiting_on and latency_summary and slowest_now:
-        latency_summary += (f" · {slowest} spends "
-                            f"{100.0 * waiting_on['value'] / slowest_now:.0f}% "
-                            f"of a request in {waiting_on['name']}")
 
     traffic_now = traffic[-1][1] if traffic else None
     traffic_peak = max((v for _, v in traffic), default=0.0)

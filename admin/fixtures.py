@@ -624,6 +624,17 @@ _RANGES = {
                            "4xx": _wave(0.6, 0.3, phase=1), "5xx": _wave(0.15, 0.12)},
     shape.Q_ERROR_RATIO: {"5xx": [(t, v / 100.0) for t, v in _wave(1.4, 1.1)]},
     shape.Q_REQUEST_RATE: {"served": _wave(13, 4)},
+    # The latency composition: the layers of the Duration chart, per service.
+    # `unmeasured` is deliberately the largest slice on one service and the
+    # smallest on the other, because both are ordinary and a preview that only
+    # shows a well-instrumented app hides what most of them look like.
+    shape.Q_REQUEST_MS: {
+        ("api_app", "media.example.net"): _wave(121, 40),
+        ("api_app", "documents"): _wave(18, 6, phase=1),
+        ("api_app", "unmeasured"): _wave(44, 12, phase=2),
+        ("web_app", "queue.vendor.example"): _wave(21, 8),
+        ("web_app", "unmeasured"): _wave(88, 20, phase=3),
+    },
 }
 for _name, _expr in shape.Q_UTILISATION:
     _RANGES[_expr] = {"master": _wave(58, 12), "wkr-1": _wave(71, 9),
@@ -636,27 +647,9 @@ def vm_query_range(expr, minutes=60, step=60, label=None):
     return _RANGES.get(expr, {})
 
 
-#: A breakdown with the two shapes worth seeing in the preview: one call that
-#: is most of the request, and one that is a rounding error beside it. The
-#: third is deliberately OVER the request — the case the chart exists to draw
-#: honestly, and the one a stacked chart would have had to hide.
-_DEPENDENCIES = {
-    ("api_app", "upstream", "media.example.net"): 268.0,
-    ("api_app", "database", "documents"): 31.0,
-    ("web_app", "upstream", "queue.vendor.example"): 171.0,
-}
-
-
 def observability():
     """Mirrors swarm.observability() — the same function, canned series."""
-    return shape.observability(vm_query_range, _obs_instant, _obs_multi, charts)
-
-
-def _obs_multi(expr, *labels):
-    """The multi-label instant readings — today, the dependency breakdown."""
-    if expr == shape.Q_DEPENDENCY:
-        return dict(_DEPENDENCIES)
-    return {}
+    return shape.observability(vm_query_range, _obs_instant, charts)
 
 
 def _obs_instant(expr):

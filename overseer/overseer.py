@@ -403,26 +403,28 @@ G_LATENCY_KIND = Gauge("overseer_service_latency_signal",
 G_TARGET = Gauge("overseer_service_dependency",
                  "1 for the dependency currently blamed for this service",
                  _SVC + ["cause", "target"])
-#: HOW LONG each of a service's outbound calls takes, next to how long the
-#: request it sits inside takes. `G_TARGET` above names the one currently
-#: blamed; this one publishes the whole picture, all the time.
+#: THE AVERAGE REQUEST, BROKEN INTO THE PARTS IT IS MADE OF. One row per place
+#: the time goes, plus one for everything not measured, and THE ROWS ADD UP TO
+#: THE END-TO-END MEAN. That property is the whole design.
 #:
-#: The distinction matters because they answer different questions. The alert
-#: needs a culprit and only while there is one. The panel needs to show where a
-#: request's time goes BEFORE the service is in trouble — a dependency creeping
-#: from 20% of the request to 60% is the interesting half, and by the time it
-#: has a culprit's row it is already half an hour into an alert.
+#: The first attempt published each dependency's p95 and let the panel express
+#: it as a share of the request's p95. Every individual number was true and the
+#: result was unreadable — "api_app spends 1112% of a request in
+#: media.tikdrama.asia" — because a dependency's tail and a request's tail are
+#: not measured over the same requests, so the ratio is not a share of
+#: anything. Nothing that cannot be added up can be drawn as a breakdown.
 #:
-#: NOT SUMMABLE, and nothing here or on the panel pretends otherwise. These are
-#: percentiles of different distributions: a p95 of one outbound call inside a
-#: p95 request. One dependency can legitimately read ABOVE the request it sits
-#: in — its own tail is longer than the request tail — and stacking them into a
-#: total would invent a number nobody measured.
+#: `rate(_sum) / rate(request _count)` can: total time spent there, over the
+#: requests it was spent on, is milliseconds of the average request. Two honest
+#: limits, both printed on the card rather than hidden — concurrent calls
+#: overlap in wall-clock so the parts can exceed the whole, and anything with
+#: no timer lands in the remainder, which is therefore labelled UNMEASURED and
+#: not "the service's own compute".
 #:
 #: Cardinality is bounded by `DEPENDENCY_ROWS_MAX`, not by trust: see there.
-G_DEP_MS = Gauge("overseer_service_dependency_ms",
-                 "Latency of one outbound dependency of a service",
-                 _SVC + ["cause", "target"])
+G_REQUEST_MS = Gauge("overseer_service_request_ms",
+                     "Milliseconds of the average request spent here",
+                     _SVC + ["cause", "target"])
 G_CLAIMS = Gauge("overseer_claimed_causes", "Causes some service claims", ["cause"])
 G_LOOP = Gauge("overseer_last_loop_timestamp_seconds", "Unix time of the last loop")
 G_SERVICES = Gauge("overseer_watched_services", "Application services being watched")
@@ -882,24 +884,89 @@ def publish(service, verdict, handled, alert):
                  service.name, cause, where, cause, classify.MUTE_LABEL)
 
 
-def publish_dependencies(readings):
+#: What the leftover slice is called. Not "the service's own work": a
+#: dependency the application does not time at all lands in here too, and
+#: naming it after the application would be a claim this process cannot check.
+UNMEASURED = "unmeasured"
+
+
+def request_composition(services, dependencies):
     """
-    Every dependency reading, for every service, so the panel can draw where a
-    request's time goes.
+    {service: [(cause, target, ms of the average request)]}, biggest first.
+
+    The end-to-end mean, split into where it goes. Every part is measured the
+    same way — total time in that place over the requests it was spent on — so
+    they share one denominator and the parts plus the remainder ARE the total.
+
+    The remainder is the total minus the parts, floored at zero. It goes
+    negative exactly when a service makes its outbound calls CONCURRENTLY: two
+    200ms calls in parallel cost one request 200ms of wall-clock and 400ms of
+    dependency time. Floored rather than hidden, and the card says so, because
+    the alternative is a picture that silently rescales itself.
+
+    Queries are deduplicated by expression, as everywhere else here: one for
+    each distinct request timer, one for each distinct dependency timer.
+    """
+    latency = discovery.discover_latency([s.name for s in services])
+    totals, answers, out = {}, {}, {}
+    for _svc, (_expr, _kind, base) in latency.items():
+        unit = expressions.unit_of(base)
+        expr = expressions.mean_expr(base, unit)
+        if expr not in answers:
+            answers[expr] = query.vm_query_map(expr)
+        totals.update(answers[expr])
+
+    for svc in [s.name for s in services]:
+        if svc not in latency or not totals.get(svc):
+            # No end-to-end number means no total to break down. A stack whose
+            # parts are known and whose whole is not is not a breakdown.
+            continue
+        request_base = latency[svc][2]
+        rows = []
+        for cause, _p95_expr, base, target_label in dependencies.get(svc, ()):
+            by = f"service, {target_label}" if target_label else "service"
+            expr = expressions.per_request_expr(
+                base, expressions.unit_of(base), request_base, by=by)
+            if expr not in answers:
+                labels = ("service", target_label) if target_label else "service"
+                answers[expr] = query.vm_query_map(expr, label=labels)
+            for found, value in answers[expr].items():
+                name, target = (found, base) if not target_label else found
+                if name == svc and value:
+                    rows.append((cause, target, value))
+        rows.sort(key=lambda row: -row[2])
+        rows = rows[:DEPENDENCY_ROWS_MAX]
+        # A service with no outbound timers at all is entirely `unmeasured`,
+        # which draws as one layer the height of its own latency — the plain
+        # chart it had before, reached by the same path rather than by a
+        # special case in the panel.
+        remainder = totals[svc] - sum(row[2] for row in rows)
+        if remainder > 0:
+            rows.append((classify.CAUSE_LOCAL, UNMEASURED, remainder))
+        out[svc] = rows
+    return out
+
+
+def publish_composition(composition):
+    """
+    The average request and its parts, for every service, so the panel can draw
+    an end-to-end latency that adds up.
 
     Level-triggered like everything else here: the rows measured this loop are
     written and every row that was NOT is removed. Without the removal a
     dependency that stops being called — a hostname retired, a feature turned
     off — leaves its last reading behind looking current, and the panel draws a
-    third party as eating 60% of a request nobody makes any more.
+    third party inside a request nobody makes any more.
     """
     live = set()
-    for name, rows in readings.items():
+    for name, rows in composition.items():
         for cause, target, value in rows:
             live.add((name, cause, str(target)))
-            G_DEP_MS.labels(service=name, cause=cause, target=str(target)).set(value)
-    for labels in [l for l in list(G_DEP_MS._metrics) if l and tuple(l) not in live]:
-        G_DEP_MS.remove(*labels)
+            G_REQUEST_MS.labels(service=name, cause=cause,
+                                target=str(target)).set(value)
+    for labels in [l for l in list(G_REQUEST_MS._metrics)
+                   if l and tuple(l) not in live]:
+        G_REQUEST_MS.remove(*labels)
 
 
 def _forget_target(name):
@@ -3166,22 +3233,29 @@ def judge(watched):
         if direction == classify.DIRECTION_HOLD and reason:
             needs_cause.append((s, cpu, mem, lat))
 
-    # Measured for EVERY watched service, not only the ones in trouble. The
-    # readings are what the panel draws its breakdown from, and a breakdown
-    # that only exists while a service is breaching is a picture nobody can use
-    # to see the breach coming. It costs one instant query per distinct
-    # dependency timer in the cluster — see `dependency_readings`.
+    # Two different questions, deliberately measured two different ways.
+    #
+    # ATTRIBUTION compares tails: is this dependency's p95 big enough, against
+    # this request's p95, to be the reason the request is slow. That is what
+    # names a culprit in an alert and it is not changed here.
+    #
+    # THE PICTURE needs parts that add up, which tails never do. It is measured
+    # per request instead — see `request_composition`. Both run for every
+    # watched service rather than only the breaching ones: a breakdown that
+    # only exists while a service is on fire cannot be used to see the fire
+    # coming.
     #
     # Discovery is asked about every service for the same reason: its cache is
     # keyed by nothing but time, so a call that passed only the breaching names
     # cached an answer with the other services MISSING from it, and they stayed
     # missing for the next fifteen minutes.
-    readings = dependency_readings(
-        discovery.discover_dependencies([s.name for s in watched]))
-    publish_dependencies(readings)
-    for s, cpu, mem, lat in needs_cause:
-        cause, target = attribute(s, cpu, mem, readings.get(s.name, ()), lat)
-        decided[s.name].update(cause=cause, target=target)
+    dependencies = discovery.discover_dependencies([s.name for s in watched])
+    publish_composition(request_composition(watched, dependencies))
+    if needs_cause:
+        readings = dependency_readings(dependencies)
+        for s, cpu, mem, lat in needs_cause:
+            cause, target = attribute(s, cpu, mem, readings.get(s.name, ()), lat)
+            decided[s.name].update(cause=cause, target=target)
 
     for s in watched:
         verdict = decided[s.name]
