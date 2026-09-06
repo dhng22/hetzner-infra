@@ -25,8 +25,6 @@ import sys
 import types
 import unittest
 
-import yaml
-
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
 sys.path.insert(0, os.path.dirname(_HERE))
@@ -47,6 +45,11 @@ import overseer as D  # noqa: E402
 
 ALERTS = os.path.join(_ROOT, "config", "alerts.yml")
 
+#: A YAML comment line. Stripped before anything is matched, because the prose
+#: beside a rule QUOTES the broken form in order to explain it, and a checker
+#: that reads its own explanation as a violation is a checker nobody keeps.
+_COMMENT = re.compile(r"^\s*#")
+
 #: A comparison against a literal, immediately followed by an arithmetic vector
 #: match. Always a precedence bug: the arithmetic binds first and the
 #: comparison is left comparing against a scalar-to-vector match that yields
@@ -55,13 +58,35 @@ _UNPARENTHESISED = re.compile(
     r"(==|!=|>=|<=|>|<)\s*-?\d+(?:\.\d+)?\s*[*/+-]\s*(?:on|ignoring)\b")
 
 
-def rules():
+def _text():
     with open(ALERTS) as handle:
-        doc = yaml.safe_load(handle)
-    for group in doc.get("groups", []):
-        for rule in group.get("rules", []):
-            if rule.get("alert"):
-                yield rule["alert"], rule.get("expr", "")
+        return handle.read()
+
+
+def rule_text(name):
+    """
+    Everything written under one `- alert:`, comments removed.
+
+    READ AS TEXT, NOT PARSED. `yaml` is not in the overseer image and has no
+    business being added to it: the suite runs INSIDE that image precisely so a
+    module the runtime does not have fails here, and a test-only dependency in
+    `requirements.txt` is the one thing that would blunt that. Nothing below
+    needs structure — these are substring and regex questions about an
+    expression — so the file is sliced between rule headers instead.
+
+    A missing or renamed rule raises rather than quietly checking nothing.
+    """
+    body = _text().split(f"- alert: {name}\n", 1)[1].split("- alert: ", 1)[0]
+    return "\n".join(line for line in body.splitlines()
+                      if not _COMMENT.match(line))
+
+
+def rules():
+    """(name, everything under it, comments removed) for every alert."""
+    for chunk in _text().split("- alert: ")[1:]:
+        body = chunk.split("- alert: ", 1)[0].splitlines()
+        yield body[0].strip(), "\n".join(
+            line for line in body[1:] if not _COMMENT.match(line))
 
 
 class PrecedenceTest(unittest.TestCase):
@@ -98,7 +123,7 @@ class JoinLabelTest(unittest.TestCase):
     """
 
     def expr(self, name):
-        return dict(rules())[name]
+        return rule_text(name)
 
     def test_the_named_dependency_alert_joins_on_labels_that_exist(self):
         expr = self.expr("ThrottledByNamedDependency")

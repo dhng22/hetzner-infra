@@ -57,7 +57,14 @@ SEED = [
     # A managed Redis and a managed Mongo, both with a visualiser, so the
     # preview exercises the Observability group, the Dataguard group and the
     # View button rather than only the plain-configuration half.
-    ("redis", "cache", {"maxmemory_mb": 512,
+    # The two memory numbers are set TOGETHER because they constrain each
+    # other: `maxmemory` is the dataset ceiling and the reservation is what
+    # Swarm holds for the whole process, so the dataset has to fit inside it
+    # with room left for Redis itself and its AOF rewrite buffer. Seeding
+    # `maxmemory` alone left it above the field's default reservation, and
+    # `create()` refused the component — which took the whole preview build
+    # down, since a seed that cannot be created renders no pages at all.
+    ("redis", "cache", {"maxmemory_mb": 512, "memory_reservation_mb": 768,
                         "external_hostname": "cache.acme.dev",
                         "dataguard": "true", "visualizer": "true",
                         "backup_target": "s3-main"}),
@@ -288,8 +295,11 @@ def main():
             logout_href=lambda: "#",
         )
 
-    out_dir = HERE / "preview"
-    out_dir.mkdir(exist_ok=True)
+    # Overridable so the build can be RUN as a check without writing into the
+    # tree. CI mounts the repository read-only — a test that proves the preview
+    # still builds cannot also drop a 600KB file next to the source.
+    out_dir = pathlib.Path(os.environ.get("PREVIEW_OUT") or (HERE / "preview"))
+    out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / "index.html"
     target.write_text(html)
     print(f"wrote {target} ({len(html) / 1024:.0f} KB, {len(details)} components)")
