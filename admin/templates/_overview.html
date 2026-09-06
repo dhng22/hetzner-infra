@@ -99,7 +99,7 @@
                        sight. #}
                     <span class="slot slot-{{ t.key }}" tabindex="0"
                           style="--cpu:{{ t.cpu_share }};--mem:{{ t.mem_share }};--cpu-use:{{ t.cpu_used }};--mem-use:{{ t.mem_used }};--disk-use:{{ t.disk_used }}"
-                          data-tip="{{ t.service }} — task {{ t.id }} on {{ n.hostname }}&#10;state: {{ t.state }}&#10;cpu {{ t.cpu_used }}% used of this node, {{ t.cpu_share }}% reserved&#10;memory {{ t.mem_used }}% used, {{ t.mem_share }}% reserved&#10;disk {{ t.disk_used }}% used">
+                          data-tip="{{ t.service }} — task {{ t.id }} on {{ n.hostname }}&#10;state: {{ t.state }}&#10;&#10;• cpu — {{ t.cpu_used }}% used, {{ t.cpu_share }}% reserved&#10;• memory — {{ t.mem_used }}% used, {{ t.mem_share }}% reserved&#10;• disk — {{ t.disk_used }}% used&#10;&#10;every figure is a share of {{ n.hostname }}">
                       <i class="dot dot-{{ t.tone }}" aria-hidden="true"></i>{{ t.name }}<i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                     </span>
                   {% else %}

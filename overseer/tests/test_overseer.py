@@ -197,8 +197,8 @@ class DependencyReadingsTest(unittest.TestCase):
         """
         self.answer({"e": {("api_app", "vendor.example"): 900.0,
                            ("web_app", "vendor.example"): 20.0}})
-        deps = {"api_app": [(classify.CAUSE_UPSTREAM, "e", "http_client_requests_seconds", "host")],
-                "web_app": [(classify.CAUSE_UPSTREAM, "e", "http_client_requests_seconds", "host")]}
+        deps = {"api_app": [(classify.CAUSE_UPSTREAM, "e", "http_client_requests_seconds", ("host",))],
+                "web_app": [(classify.CAUSE_UPSTREAM, "e", "http_client_requests_seconds", ("host",))]}
         readings = D.dependency_readings(deps)
         self.assertEqual(readings["api_app"],
                          [(classify.CAUSE_UPSTREAM, "vendor.example", 900.0)])
@@ -209,7 +209,7 @@ class DependencyReadingsTest(unittest.TestCase):
         # Ten components x six queries at a 15s timeout does not fit in a 60s
         # loop. The dedup is what makes measuring EVERY service affordable.
         self.answer({"e": {("api_app", "v"): 1.0, "web_app": 2.0}})
-        entry = (classify.CAUSE_UPSTREAM, "e", "http_client_requests_seconds", "host")
+        entry = (classify.CAUSE_UPSTREAM, "e", "http_client_requests_seconds", ("host",))
         D.dependency_readings({"api_app": [entry], "web_app": [entry]})
         self.assertEqual(len(self.asked), 1)
         self.assertEqual(self.asked[0][1], ("service", "host"))
@@ -219,7 +219,7 @@ class DependencyReadingsTest(unittest.TestCase):
         # the timer itself — "this app's outbound HTTP", not a guess at a host.
         self.answer({"e": {"api_app": 88.0}})
         deps = {"api_app": [(classify.CAUSE_UPSTREAM, "e",
-                             "http_client_requests_seconds", None)]}
+                             "http_client_requests_seconds", ())]}
         self.assertEqual(D.dependency_readings(deps)["api_app"],
                          [(classify.CAUSE_UPSTREAM,
                            "http_client_requests_seconds", 88.0)])
@@ -233,7 +233,7 @@ class DependencyReadingsTest(unittest.TestCase):
         """
         wide = {("api_app", f"h{i}"): float(i) for i in range(40)}
         self.answer({"e": wide})
-        deps = {"api_app": [(classify.CAUSE_UPSTREAM, "e", "b", "host")]}
+        deps = {"api_app": [(classify.CAUSE_UPSTREAM, "e", "b", ("host",))]}
         rows = D.dependency_readings(deps)["api_app"]
         self.assertEqual(len(rows), D.DEPENDENCY_ROWS_MAX)
         self.assertEqual([r[1] for r in rows],
@@ -275,7 +275,7 @@ class RequestCompositionTest(unittest.TestCase):
     def latency(self, base="ktor_http_server_requests_seconds"):
         discovery._latency.store({"api_app": ("p95expr", "p95", base)})
 
-    def deps(self, target="host"):
+    def deps(self, target=("host",)):
         return {"api_app": [(classify.CAUSE_UPSTREAM, "p95expr",
                              "http_client_requests_seconds", target)]}
 
@@ -323,6 +323,26 @@ class RequestCompositionTest(unittest.TestCase):
         self.answer({"http_client_requests_seconds_sum":
                      {("api_app", "a.example"): 90.0}})
         self.assertEqual(D.request_composition([D.Watched(service())], self.deps()), {})
+
+    def test_a_path_label_splits_the_breakdown_by_call(self):
+        """
+        Ready for the day the application tags one. `static-aichat.coretap.vn`
+        taking most of a request says the CDN is slow; it does not say whether
+        that is the thumbnail endpoint or the upload one, and those have
+        different fixes.
+        """
+        self.latency()
+        self.answer({"ktor_http_server_requests_seconds_sum": {"api_app": 300.0},
+                     "http_client_requests_seconds_sum": {
+                         ("api_app", "static.example", "/v1/media/thumbs"): 120.0,
+                         ("api_app", "static.example", "/v1/upload"): 40.0}})
+        rows = D.request_composition([D.Watched(service())],
+                                     self.deps(("host", "path")))["api_app"]
+        self.assertEqual(
+            [(row[1], row[2]) for row in rows],
+            [("static.example/v1/media/thumbs", 120.0),
+             ("static.example/v1/upload", 40.0),
+             (D.UNMEASURED, 140.0)])
 
     def test_only_the_worst_few_places_are_published(self):
         # A hostname is a label. The cap is what lets it be one.

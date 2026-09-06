@@ -599,13 +599,18 @@
     el.style.setProperty("--cpu-use", t.cpu_used);
     el.style.setProperty("--mem-use", t.mem_used);
     el.style.setProperty("--disk-use", t.disk_used);
+    // One bullet per resource. The tooltip is textContent into a `pre-line`
+    // box, so the newlines are the layout and the bullets are just characters
+    // — no markup crosses this boundary, which is the rule for anything
+    // carrying a service name the daemon gave us.
     el.setAttribute("data-tip", t.service + " — task " + t.id +
-                    " · state: " + t.state +
-                    "\ncpu " + t.cpu_used + "% used of this node, " +
+                    "\nstate: " + t.state + "\n" +
+                    "\n• cpu — " + t.cpu_used + "% used, " +
                     t.cpu_share + "% reserved" +
-                    "\nmemory " + t.mem_used + "% used, " +
+                    "\n• memory — " + t.mem_used + "% used, " +
                     t.mem_share + "% reserved" +
-                    "\ndisk " + t.disk_used + "% used");
+                    "\n• disk — " + t.disk_used + "% used\n" +
+                    "\nevery figure is a share of this node");
     // The chart, after the label. Three bars: fill is what the task uses, the
     // mark across it is what it reserved. Disk has no mark because Swarm has
     // no disk reservation to draw one at.

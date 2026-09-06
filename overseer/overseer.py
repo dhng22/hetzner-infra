@@ -749,6 +749,26 @@ DEPENDENCY_SHARE = 0.5
 DEPENDENCY_ROWS_MAX = 6
 
 
+def _label_key(targets):
+    """What `vm_query_map` should key a dependency's answer by."""
+    return ("service",) + targets if targets else "service"
+
+
+def _split(found, targets, base):
+    """
+    One row of a dependency answer, as (service, what it was calling).
+
+    With no target labels the series names nothing but the service, so the
+    timer's own metric name IS the finest name there is — "this app's outbound
+    HTTP", not which host. With one or two, `discovery.target_name` joins them:
+    a host on its own, or a host and the leading segments of a path once an
+    application tags one.
+    """
+    if not targets:
+        return found, base
+    return found[0], discovery.target_name(found[1:])
+
+
 def dependency_readings(dependencies):
     """
     {service: [(cause, target, milliseconds)]}, worst first.
@@ -768,16 +788,12 @@ def dependency_readings(dependencies):
     answers, out = {}, {}
     for svc, entries in dependencies.items():
         rows = []
-        for cause, expr, base, target_label in entries:
-            key = (expr, target_label)
+        for cause, expr, base, targets in entries:
+            key = (expr, targets)
             if key not in answers:
-                labels = ("service", target_label) if target_label else "service"
-                answers[key] = query.vm_query_map(expr, label=labels)
+                answers[key] = query.vm_query_map(expr, label=_label_key(targets))
             for found, value in answers[key].items():
-                # Without a target label the series names nothing but the
-                # service, so the timer's own metric name IS the finest name
-                # there is — "this app's outbound HTTP", not which host.
-                name, target = (found, base) if not target_label else (found[0], found[1])
+                name, target = _split(found, targets, base)
                 if name == svc and value is not None:
                     rows.append((cause, target, value))
         rows.sort(key=lambda row: -row[2])
@@ -923,15 +939,14 @@ def request_composition(services, dependencies):
             continue
         request_base = latency[svc][2]
         rows = []
-        for cause, _p95_expr, base, target_label in dependencies.get(svc, ()):
-            by = f"service, {target_label}" if target_label else "service"
+        for cause, _p95_expr, base, targets in dependencies.get(svc, ()):
+            by = ", ".join(("service",) + targets)
             expr = expressions.per_request_expr(
                 base, expressions.unit_of(base), request_base, by=by)
             if expr not in answers:
-                labels = ("service", target_label) if target_label else "service"
-                answers[expr] = query.vm_query_map(expr, label=labels)
+                answers[expr] = query.vm_query_map(expr, label=_label_key(targets))
             for found, value in answers[expr].items():
-                name, target = (found, base) if not target_label else found
+                name, target = _split(found, targets, base)
                 if name == svc and value:
                     rows.append((cause, target, value))
         rows.sort(key=lambda row: -row[2])

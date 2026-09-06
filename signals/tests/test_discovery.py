@@ -94,10 +94,11 @@ class DependencyStatisticTest(unittest.TestCase):
         discovery.vm_series_rows = self.rows(
             "http_client_requests_seconds_count",
             "http_client_requests_seconds_bucket")
-        [(cause, expr, _base, target)] = discovery.discover_dependencies(
+        [(cause, expr, _base, targets)] = discovery.discover_dependencies(
             ["api_app"])["api_app"]
         self.assertEqual(cause, "upstream")
         self.assertIn("histogram_quantile", expr)
+        target = targets[0]
         # Grouped by the thing being CALLED, or one slow third party is
         # averaged into every fast one and nothing is named — AND by the
         # calling service, or two applications using the same client library
@@ -116,6 +117,43 @@ class DependencyStatisticTest(unittest.TestCase):
         # by `service` alone, so the mean of every outbound call a service made
         # was reported as the latency of whichever host got named.
         self.assertIn("by (service, host)", expr)
+
+
+class TargetNameTest(unittest.TestCase):
+    """
+    A host is often not the answer on its own.
+
+    `static-aichat.coretap.vn` taking most of a request says the CDN is slow;
+    it does not say whether that is the thumbnail endpoint or the upload one,
+    and those have different fixes. These are the parts that turn a path tag,
+    the day an application publishes one, into a target with nothing to enable.
+    """
+
+    def test_a_host_alone_is_the_target_when_that_is_all_there_is(self):
+        self.assertEqual(discovery.target_labels({"host": "a.example"}), ("host",))
+        self.assertEqual(discovery.target_name(("a.example",)), "a.example")
+
+    def test_a_path_joins_the_host_rather_than_replacing_it(self):
+        # Never on its own: two upstreams sharing a route name would collapse
+        # into one row that belongs to neither.
+        labels = {"host": "static.example", "path": "/v1/media/thumbs"}
+        self.assertEqual(discovery.target_labels(labels), ("host", "path"))
+        self.assertEqual(
+            discovery.target_name(("static.example", "/v1/media/thumbs")),
+            "static.example/v1/media/thumbs")
+
+    def test_a_path_is_cut_to_its_leading_segments(self):
+        # The application has to truncate at the TAG — cardinality is spent the
+        # moment the series exists. This is the display bound on top of that,
+        # so a library that tags the full path puts an object id in a metric
+        # store and not also on a chart.
+        self.assertEqual(
+            discovery.target_name(("s.example", "/v1/media/thumbs/abc123/raw")),
+            "s.example/v1/media/thumbs")
+        self.assertEqual(discovery.PATH_SEGMENTS, 3)
+
+    def test_neither_label_means_no_target_at_all(self):
+        self.assertEqual(discovery.target_labels({"status": "200"}), ())
 
 
 if __name__ == "__main__":

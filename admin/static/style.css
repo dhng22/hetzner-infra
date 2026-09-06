@@ -776,8 +776,8 @@ a.tnode.is-link:focus-visible { outline: 2px solid var(--accent); outline-offset
 .slot {
   --cpu: 0; --mem: 0; --cpu-use: 0; --mem-use: 0; --disk-use: 0;
   position: relative;
-  gap: 10px;                             /* the name, then room, then the chart */
-  padding: 6px 10px 6px 8px;
+  gap: 14px;                             /* the name, then room, then the chart */
+  padding: 7px 11px 7px 9px; min-height: 46px;
   background: var(--slot-bg, var(--surface-2));
 }
 /* VERTICAL, and at the end of the name rather than behind it. Laid flat above
@@ -785,12 +785,17 @@ a.tnode.is-link:focus-visible { outline: 2px solid var(--accent); outline-offset
    get the chip's whole height, which is the only axis here with room to spare,
    and they sit where the eye already stops — after the name. */
 .slot-chart {
-  margin-left: auto; display: flex; align-items: flex-end; gap: 4px;
-  height: 22px; pointer-events: none;
+  margin-left: auto; display: flex; align-items: flex-end; gap: 5px;
+  height: 32px; pointer-events: none;
 }
+/* Sized to be READ, not to be tucked away. At 7px wide and 22px tall the fill
+   and the reservation mark were within a couple of pixels of each other on
+   every ordinary task, which is precisely the comparison the chart exists to
+   make. The chip grew to fit; a chart nobody can see is worth less than the
+   space it saves. */
 .band {
-  position: relative; display: block; width: 7px; height: 100%;
-  border-radius: 2px;
+  position: relative; display: block; width: 11px; height: 100%;
+  border-radius: 3px;
   background: color-mix(in srgb, var(--line) 55%, transparent);
 }
 /* The fill, growing UP from the floor — the direction every bar chart uses, so
@@ -798,13 +803,13 @@ a.tnode.is-link:focus-visible { outline: 2px solid var(--accent); outline-offset
    repeating this rule three times. */
 .band::before {
   content: ""; position: absolute; left: 0; right: 0; bottom: 0;
-  height: calc(var(--use, 0) * 1%); border-radius: 2px;
+  height: calc(var(--use, 0) * 1%); min-height: 2px; border-radius: 3px;
   background: var(--slot-ring, var(--accent));
 }
 /* The reservation mark, standing proud of the bar on both sides so it reads as
    a mark ON the scale rather than as more fill. */
 .band::after {
-  content: ""; position: absolute; left: -2px; right: -2px;
+  content: ""; position: absolute; left: -3px; right: -3px;
   bottom: calc(var(--res, 0) * 1%); height: 2px; border-radius: 1px;
   background: color-mix(in srgb, var(--text) 70%, transparent);
 }
@@ -895,6 +900,10 @@ a.tnode.is-link:focus-visible { outline: 2px solid var(--accent); outline-offset
   background: var(--surface); color: var(--text);
   box-shadow: var(--shadow);
   font: 500 12px/1.45 var(--ui);
+  /* Tooltips are written with newlines in them — a chip lists three resources,
+     one per line. Without this the browser collapses every one of them into a
+     space and the list arrives as a paragraph. */
+  white-space: pre-line;
   opacity: 0; visibility: hidden;
   transition: opacity .08s ease;
 }
