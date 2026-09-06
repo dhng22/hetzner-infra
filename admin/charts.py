@@ -263,7 +263,7 @@ def _ticks(values):
         else f"<span>{_esc(v)}</span>" for v in values)
 
 
-def _wrap(plot, y_ticks=(), x_ticks=(), legend=(), spread=False, caption=""):
+def _wrap(plot, y_ticks=(), x_ticks=(), legend=(), spread=False):
     """
     The plot, plus the furniture that says what it is measuring.
 
@@ -275,10 +275,6 @@ def _wrap(plot, y_ticks=(), x_ticks=(), legend=(), spread=False, caption=""):
     """
     plain = "" if y_ticks else " is-plain"
     out = [f'<figure class="chart-wrap{plain}">']
-    # Which THING this chart is about, when a card draws one per service. The
-    # legend names the layers; without this nothing names the subject.
-    if caption:
-        out.append(f'<figcaption class="chart-caption">{_esc(caption)}</figcaption>')
     if y_ticks:
         out.append(f'<div class="chart-y">{_ticks(y_ticks)}</div>')
     out.append(plot)
@@ -428,27 +424,17 @@ def line(series, unit="", reference=None, band=None, empty="no data yet"):
         legend=_legend([name for name, _ in order]))
 
 
-def stack(series, unit="", reference=None, band=None, overlay=None, caption="",
-          empty="no traffic recorded"):
+def stack(series, unit="", empty="no traffic recorded"):
     """
     Stacked areas — for a total split into parts, where the parts sum to
     something meaningful. Response codes are the case this exists for: the
     height IS the request rate and the colours are what it was made of.
-
-    `reference` and `band` behave exactly as they do on `line`: a dashed rule
-    at a value, and shading above it. `overlay` is a second, UNSTACKED series
-    drawn as a line over the areas — for a chart whose parts are measured one
-    way and whose headline number is measured another, which is the latency
-    case: the areas are the average request broken up, and the line is the p95
-    the SLO actually judges. Drawing only the areas under an SLO rule would
-    invite reading a mean against a percentile budget.
     """
     series = {k: v for k, v in (series or {}).items() if v}
-    overlay = {k: v for k, v in (overlay or {}).items() if v}
     if not series:
         return _empty(empty)
 
-    t0, t1 = _span({**series, **overlay})
+    t0, t1 = _span(series)
     order = sorted(series.items())
     stamps, own = _carried(series)
     running = {t: 0.0 for t in stamps}
@@ -462,21 +448,8 @@ def stack(series, unit="", reference=None, band=None, overlay=None, caption="",
             upper.append((t, running[t]))
         layers.append((name, lower, upper))
 
-    top = max([max(running.values())]
-              + [v for points in overlay.values() for _, v in points]
-              + ([reference * 1.15] if reference is not None else []))
-    hi = _nice(top)
+    hi = _nice(max(running.values()))
     body = []
-    height = H - PAD_T - PAD_B
-    if band is not None:
-        edge = PAD_T + height * (1 - min(1.0, max(0.0, band / hi)))
-        body.append(f'<rect class="chart-band" x="{PAD_L}" y="{PAD_T:.1f}" '
-                    f'width="{W - PAD_L - PAD_R}" '
-                    f'height="{max(0.0, edge - PAD_T):.1f}"/>')
-    if reference is not None:
-        edge = PAD_T + height * (1 - min(1.0, max(0.0, reference / hi)))
-        body.append(f'<line class="chart-ref" x1="{PAD_L}" y1="{edge:.1f}" '
-                    f'x2="{W - PAD_R}" y2="{edge:.1f}"/>')
     for index, (name, lower, upper) in enumerate(layers):
         top = _points(upper, t0, t1, 0.0, hi)
         bottom = list(reversed(_points(lower, t0, t1, 0.0, hi)))
@@ -485,19 +458,11 @@ def stack(series, unit="", reference=None, band=None, overlay=None, caption="",
         body.append(f'<path class="chart-area" style="fill:var({series_var(index)})" '
                     f'd="{path}"><title>{_esc(name)}</title></path>')
 
-    for name, points in sorted(overlay.items()):
-        coords = _points(points, t0, t1, 0.0, hi)
-        body.append(f'<path class="chart-line is-overlay" d="{_path(coords)}">'
-                    f'<title>{_esc(name)}</title></path>')
-
     # The readout names each LAYER's own value, not its stacked height. The
     # height is what the picture already shows; what it cannot show is which
     # part of it belongs to which colour.
-    lookups = {name: dict(points) for name, points in overlay.items()}
     body.append(_slices(
-        [(t, [(name, own[name][t]) for name, _ in order]
-             + [("total", running[t])]
-             + [(n, lookups[n][t]) for n in sorted(lookups) if t in lookups[n]])
+        [(t, [(name, own[name][t]) for name, _ in order] + [("total", running[t])])
          for t in stamps], t0, t1, unit))
 
     peak = max(running.values())
@@ -505,8 +470,7 @@ def stack(series, unit="", reference=None, band=None, overlay=None, caption="",
         _frame("".join(body), f"{len(layers)} layers, peak {fmt(peak, unit)}"),
         y_ticks=(fmt(hi, unit), fmt(0.0, unit)),
         x_ticks=(ago(t0, t1), "now"),
-        legend=_legend([name for name, _ in order]),
-        caption=caption)
+        legend=_legend([name for name, _ in order]))
 
 
 def bars(rows, unit="", empty="nothing to compare"):
@@ -576,6 +540,80 @@ def columns(rows, unit="", empty="none in this window"):
         y_ticks=(fmt(hi, unit), fmt(0.0, unit)),
         x_ticks=[(r["name"], fmt(r["value"], unit)) for r in rows],
         spread=True)
+
+
+def _percentages(values):
+    """
+    Whole percentages that SUM TO EXACTLY 100.
+
+    Rounding each share on its own does not: 800/1200 and two 200/1200s round
+    to 67 + 17 + 17 = 101, and a breakdown whose own labels add up to 101% is
+    read as a bug in the measurement rather than in the arithmetic. Largest
+    remainder — hand the leftover points to whichever shares lost the most to
+    rounding — is the standard fix and the only one that is stable as the
+    numbers move.
+    """
+    total = sum(values) or 1.0
+    exact = [100.0 * value / total for value in values]
+    out = [int(share) for share in exact]
+    order = sorted(range(len(values)), key=lambda i: exact[i] - out[i], reverse=True)
+    for i in order[:100 - sum(out)]:
+        out[i] += 1
+    return out
+
+
+def divided(groups, unit="", empty="nothing is instrumented yet"):
+    """
+    One bar per service, cut into the parts its latency is made of.
+
+    The Golden latency card used to be a `bullet` — one bar, the slowest
+    service's number against its SLO. It answered "how slow" and could not
+    answer "of what", which is the question somebody woken up actually has.
+    This is the same bar with the answer inside it: 1200ms drawn as 800ms of
+    one third party, 200ms of a database, the rest of the request.
+
+    THE SEGMENTS ALWAYS SUM TO THE BAR. Each part's percentage is its share of
+    the bar's own total, and the total printed beside the bar is the sum of the
+    parts — so the picture and the arithmetic cannot disagree, whatever the
+    underlying measurements do. What the parts are worth in milliseconds is in
+    every segment's tooltip, unrounded to a share.
+
+    `groups` is `[{"name", "parts": [{"name", "value", "note"?}]}]`.
+    """
+    groups = [g for g in (groups or [])
+              if sum(p["value"] for p in g.get("parts") or []) > 0]
+    if not groups:
+        return _empty(empty)
+
+    out = ['<div class="split-bars">']
+    for group in groups:
+        parts = group["parts"]
+        total = sum(part["value"] for part in parts)
+        shares = _percentages([part["value"] for part in parts])
+        out.append('<div class="split-row">'
+                   f'<div class="split-head">'
+                   f'<span class="split-name" title="{_esc(group["name"])}">'
+                   f'{_esc(group["name"])}</span>'
+                   f'<span class="split-total">{fmt(total, unit)}</span>'
+                   '</div><div class="split-bar">')
+        for index, (part, share) in enumerate(zip(parts, shares)):
+            note = f' ({part["note"]})' if part.get("note") else ""
+            tip = (f'{part["name"]}{note}: {fmt(part["value"], unit)} of '
+                   f'{group["name"]}’s {fmt(total, unit)} — {share}%')
+            # The WIDTH is the same rounded share the label prints. Drawing an
+            # exact fraction under a rounded caption is how a segment ends up
+            # visibly wider than the number written on it.
+            out.append(f'<i style="width:{share}%;'
+                       f'background:var({series_var(index)})" '
+                       f'data-tip="{_esc(tip)}"></i>')
+        out.append('</div><div class="split-keys">')
+        for index, (part, share) in enumerate(zip(parts, shares)):
+            out.append(f'<span class="chart-key">'
+                       f'<i style="background:var({series_var(index)})"></i>'
+                       f'{_esc(part["name"])} {share}%</span>')
+        out.append('</div></div>')
+    out.append('</div>')
+    return _wrap("".join(out))
 
 
 def bullet(value, warn=None, danger=None, ceiling=100.0, unit="%",

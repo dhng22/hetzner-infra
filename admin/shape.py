@@ -687,24 +687,6 @@ def _window(span, *exprs):
     return " · ".join(parts)
 
 
-#: What the Duration card says about its own layers, appended to whatever
-#: `_latency_note` works out the LINE is.
-#:
-#: The wording is careful about ONE thing, because getting it wrong is what
-#: made the first attempt unreadable: the layers are milliseconds of the
-#: average request spent in each place, and they normally add up to it — but a
-#: call made in parallel with another, or made outside a request at all, is
-#: counted in full and cannot be told apart from one made inside. Live on this
-#: cluster that is 253ms of outbound time inside a 198ms average request. Both
-#: numbers are true; a caption promising they add up is not.
-COMPOSITION_NOTE = (
-    " · filled areas are milliseconds of the AVERAGE request spent in each "
-    "place, `unmeasured` being whatever is left of it. Calls made in parallel, "
-    "or made outside a request, count in full — so the layers can total more "
-    "than the request they sit in"
-)
-
-
 def _latency_note(kinds):
     """
     What the Duration card is actually showing, read from the cluster.
@@ -766,52 +748,46 @@ def _as_percent(series):
             for name, points in series.items()}
 
 
-def _latest(series):
-    """(name, value) of whichever series is highest at its newest sample."""
-    live = {k: v for k, v in (series or {}).items() if v}
-    if not live:
-        return "", None
-    name = max(live, key=lambda k: live[k][-1][1])
-    return name, live[name][-1][1]
-
-
 def _points(series):
     """The one series a cluster-wide query answers with, or an empty list."""
     return next((v for v in (series or {}).values() if v), [])
 
 
-def _duration(latency, composition, slo, charts):
+#: How many places a latency bar is cut into before the rest becomes one slice.
+#: Four is not a layout choice: `charts.SERIES_VARS` is four hues wide and a
+#: fifth would fold into the neutral, so a fifth segment would claim a
+#: distinction the colours cannot make. The remainder is honest as "other" and
+#: dishonest as a colour nobody can match to a name.
+PARTS_MAX = 4
+
+#: The slice that is the request itself rather than something it called out to.
+#: Must match `UNMEASURED` in `overseer/overseer.py`; it is only ever compared
+#: for ORDERING here, so a rename there degrades the sort and breaks nothing.
+UNMEASURED = "unmeasured"
+
+
+def _composition(series):
     """
-    THE latency chart: end-to-end, with the breakdown drawn on it.
+    `[{name, parts}]` — each service's latency cut into where it goes.
 
-    One stacked chart per service. The filled layers are the average request
-    split into where its time goes and they ADD UP to it — that is the whole
-    reason the overseer measures them per request rather than as percentiles
-    (see `overseer_service_request_ms`). The dashed line over them is that
-    service's p95, the number the SLO is written against, and the SLO itself is
-    the rule across the plot.
-
-    It used to be a plain multi-line chart of p95 per service, and the
-    breakdown was tried beside it as a card of its own. Both were wrong for the
-    same reason: the question is "what is this 466ms MADE OF", and an answer
-    that is not on the latency chart is an answer somebody has to assemble
-    themselves out of two pictures.
-
-    Falls back to the plain line for a cluster where nothing publishes a
-    composition yet, so an uninstrumented service still gets its latency drawn
-    rather than an empty box.
+    The parts are what the overseer measured per request, biggest first, with
+    everything past the fourth rolled into one `other` slice so no segment ends
+    up a colour the legend cannot name. `unmeasured` is sorted last whatever
+    its size, because it is the leftover rather than a place.
     """
-    services = sorted({svc for svc, _target in composition})
-    if not services:
-        return charts.line(latency, "ms", reference=slo, band=slo,
-                           empty="no service is publishing a timer yet")
-    return "".join(
-        charts.stack({target: points for (svc, target), points
-                      in composition.items() if svc == name},
-                     "ms", reference=slo, band=slo,
-                     overlay={"p95": latency.get(name) or []},
-                     caption=name)
-        for name in services)
+    latest = {}
+    for (service, target), points in (series or {}).items():
+        if points and points[-1][1] > 0:
+            latest.setdefault(service, []).append((target, points[-1][1]))
+    out = []
+    for service, rows in sorted(latest.items()):
+        rows.sort(key=lambda row: (row[0] == UNMEASURED, -row[1]))
+        parts = [{"name": name, "value": value} for name, value in rows[:PARTS_MAX]]
+        rest = sum(value for _name, value in rows[PARTS_MAX:])
+        if rest:
+            parts.append({"name": "other", "value": rest})
+        out.append({"name": service, "parts": parts})
+    return out
 
 
 def observability(vm_range, vm_query, charts):
@@ -838,16 +814,15 @@ def observability(vm_range, vm_query, charts):
     status = rng(Q_STATUS_CLASS, "class")
     traffic = _points(rng(Q_REQUEST_RATE))
     error_points = _points(errors)
-    # Keyed by BOTH labels: one chart per service, one layer per place inside
+    # Keyed by BOTH labels: one bar per service, one segment per place inside
     # it, and the two cannot be told apart by either label alone.
-    composition = rng(Q_REQUEST_MS, ("service", "target"))
-    if composition:
-        latency_note += COMPOSITION_NOTE
+    composition = _composition(rng(Q_REQUEST_MS, ("service", "target")))
 
     red = [
         _card("Duration", latency_note,
-              _duration(latency, composition, slo, charts),
-              _window(RANGE_SPAN, Q_LATENCY, Q_REQUEST_MS),
+              charts.line(latency, "ms", reference=slo, band=slo,
+                          empty="no service is publishing a timer yet"),
+              _window(RANGE_SPAN, Q_LATENCY),
               charts.reading(latency, "ms", reference=slo)),
         _card("Rate", "responses per second, split by status class",
               charts.stack(status, "/s"),
@@ -868,13 +843,6 @@ def observability(vm_range, vm_query, charts):
     # states the number against the line that acts on it instead, and its
     # summary answers the question the chart above cannot: not "where is this
     # now" but "how many, for how long, and how much room is left".
-    slowest, slowest_now = _latest(latency)
-    # With no SLO published there is no line to judge against, so the bullet
-    # falls back to the same idiom Traffic uses: this reading against the
-    # highest one in the window. A ceiling equal to the value itself would draw
-    # a full bar and read as an alarm nobody set.
-    slowest_ceiling = slo or max((v for _, v in latency.get(slowest, [])),
-                                 default=0.0)
     over_slo = [name for name, points in latency.items()
                 if slo and points and points[-1][1] >= slo]
     if not latency:
@@ -932,12 +900,18 @@ def observability(vm_range, vm_query, charts):
             + f" before the {SATURATION_DANGER:.0f}% that buys one")
 
     golden = [
-        _card("Latency", "the slowest service right now, against its SLO",
-              charts.bullet(slowest_now, danger=slo,
-                            ceiling=slowest_ceiling or 1.0, unit="ms",
-                            label=slowest or "slowest service",
-                            empty="no service is publishing a timer yet"),
-              _window(LATEST_SPAN, Q_LATENCY),
+        # The bar is CUT INTO what the request is made of. It used to be a
+        # bullet — one length, the slowest service against its SLO — which
+        # answered "how slow" and could not answer "of what", and "of what" is
+        # the question somebody woken at 3am has. Both are now on it: the
+        # segments say where 1200ms goes, the summary underneath says which
+        # services are over the line.
+        _card("Latency",
+              "each service's request, cut into where its time goes — segments "
+              "are shares of that service's own total, so they sum to it",
+              charts.divided(composition, "ms",
+                             empty="no service is publishing a timer yet"),
+              _window(LATEST_SPAN, Q_REQUEST_MS),
               latency_summary),
         _card("Traffic", "everything the tunnel served, against this window's "
                          "own peak",

@@ -1055,16 +1055,22 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
 .bar-row.is-warn .bar-track > i { background: var(--warn); }
 .bar-row.is-bad .bar-track > i { background: var(--bad); }
 .bar-value { font: 400 11px var(--mono); text-align: right; }
-/* Names the subject of one chart when a card draws several — the Duration card
-   draws one per service. Sits above the plot, inside the same figure, so the
-   caption cannot drift away from the picture it names. */
-.chart-caption { font-size: var(--t-xs); font-weight: var(--w-bold);
-                 color: var(--text-mute); margin-bottom: 3px;
-                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* The p95 drawn OVER the stacked average request: same line weight, neutral
-   hue and dashed, so it reads as a different measurement rather than as one
-   more layer of the composition. */
-.chart-line.is-overlay { stroke: var(--text); stroke-dasharray: 3 2; opacity: .75; }
+/* The Golden latency bar, cut into what the request is made of. One flex row
+   whose children are the segments, so their widths ARE their percentages and
+   nothing has to be positioned. Hues come from `charts.divided`, which is the
+   one place a series colour is ever chosen. */
+.split-bars { display: flex; flex-direction: column; gap: var(--s-3); }
+.split-head { display: flex; align-items: baseline; gap: var(--s-2);
+              margin-bottom: 4px; }
+.split-name { font-size: var(--t-xs); font-weight: var(--w-bold);
+              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.split-total { font: 400 11px var(--mono); color: var(--text-mute);
+               margin-left: auto; }
+.split-bar { display: flex; height: 12px; border-radius: 3px; overflow: hidden;
+             background: var(--surface-2); }
+.split-bar > i { display: block; height: 100%; min-width: 2px; cursor: help; }
+.split-keys { display: flex; flex-wrap: wrap; gap: 4px var(--s-3);
+              margin-top: 5px; }
 
 /* A bullet, not a gauge: the number matters far less than where it sits
    relative to the line that will act on it. */

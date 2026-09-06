@@ -410,7 +410,7 @@ class ColumnTest(unittest.TestCase):
                 for c in s["cards"]}[title]
 
     def composed(self):
-        """A cluster whose latency chart has layers to draw."""
+        """A cluster whose latency bar has parts to be cut into."""
         return {shape.Q_LATENCY: {"api_app": series(400.0)},
                 shape.Q_REQUEST_MS: {("api_app", "media.example"): series(120.0),
                                      ("api_app", "unmeasured"): series(60.0)}}
@@ -476,61 +476,70 @@ class ColumnTest(unittest.TestCase):
         self.assertIn("budget", summaries[("golden", "Errors")])
         self.assertIn("headroom", summaries[("golden", "Saturation")])
 
-    def test_the_latency_chart_carries_the_breakdown_itself(self):
+    def test_the_golden_latency_bar_is_cut_into_where_the_time_goes(self):
         """
-        ON the latency chart, not beside it. The question is "what is this
-        466ms made OF", and an answer in a second card is an answer somebody
-        has to assemble out of two pictures.
+        It used to be a bullet: one length, the slowest service against its
+        SLO. That answers "how slow" and cannot answer "of what", which is the
+        question somebody woken at 3am actually has.
         """
+        body = self.card(self.composed(), "Latency")["body"]
+        self.assertIn("media.example", body)
+        self.assertIn("unmeasured", body)
+        self.assertIn("api_app", body)
+        self.assertIn("split-bar", body)
+        self.assertIn("data-tip", body)              # hover names each segment
+        self.assertIn(charts.SERIES_VARS[0], body)   # and they are told apart
+        self.assertIn(charts.SERIES_VARS[1], body)
+
+    def test_the_segments_sum_to_the_bar(self):
+        # The whole reason the percentages are shares of the bar's OWN total:
+        # the picture and the arithmetic cannot then disagree, whatever the
+        # underlying measurements do.
+        body = charts.divided([{"name": "api_app", "parts": [
+            {"name": "tikdrama", "value": 800.0},
+            {"name": "database", "value": 200.0},
+            {"name": "unmeasured", "value": 200.0}]}], "ms")
+        widths = [int(w) for w in re.findall(r"width:(\d+)%", body)]
+        self.assertEqual(sum(widths), 100)
+        self.assertIn("1.2kms", body)                # the total beside the bar
+        self.assertIn("tikdrama 67%", body)
+        self.assertIn("800ms of api_app", body)      # millis live in the tip
+
+    def test_the_printed_percentages_add_up_too(self):
+        # 800/1200 and two 200/1200s round to 67 + 17 + 17 = 101 one at a time,
+        # and a breakdown whose own labels total 101% reads as a broken
+        # measurement rather than as rounding.
+        # 66.67 / 16.67 / 16.67 floors to 98; the two leftover points go to
+        # the shares that lost most to rounding, earlier one first on a tie.
+        self.assertEqual(charts._percentages([800.0, 200.0, 200.0]), [67, 17, 16])
+        self.assertEqual(sum(charts._percentages([1.0, 1.0, 1.0])), 100)
+        self.assertEqual(sum(charts._percentages([7.0, 1.0, 1.0, 1.0, 1.0])), 100)
+
+    def test_the_red_duration_chart_is_left_alone(self):
+        # The breakdown belongs on the GOLDEN bar. RED's Duration is the
+        # per-service p95 over time against its SLO and nothing else.
         card = self.card(self.composed(), "Duration")
-        self.assertIn("media.example", card["body"])
-        self.assertIn("unmeasured", card["body"])
-        self.assertIn("api_app", card["body"])          # the chart's caption
-        self.assertIn("chart-area", card["body"])       # stacked, not lines
-        self.assertIn("chart-ref", card["body"])        # the SLO, still drawn
-        self.assertIn("data-tip", card["body"])         # hover names each layer
-
-    def test_the_layers_are_coloured_apart_and_the_p95_is_not_one_of_them(self):
-        # The areas are the average request; the line over them is the p95 the
-        # SLO judges. Drawing the p95 as another layer would add it to a total
-        # it is not part of.
-        card = self.card(self.composed(), "Duration")
-        self.assertIn(charts.SERIES_VARS[0], card["body"])
-        self.assertIn(charts.SERIES_VARS[1], card["body"])
-        self.assertIn("chart-line is-overlay", card["body"])
-
-    def test_the_card_says_which_statistic_each_half_is(self):
-        # The areas are a mean and the line is a p95. A reader who works that
-        # out from the picture concludes the panel is broken.
-        note = self.card(self.composed(), "Duration")["note"]
-        self.assertIn("AVERAGE request", note)
-        self.assertIn("unmeasured", note)
-        # And it must NOT promise the layers add up. Live on this cluster they
-        # total 253ms inside a 198ms average request, because a call made
-        # outside a request is counted in full and cannot be told apart.
-        self.assertIn("can total more than the request", note)
-
-    def test_a_cluster_publishing_no_composition_still_draws_its_latency(self):
-        card = self.card({shape.Q_LATENCY: {"api_app": series(400.0)}}, "Duration")
         self.assertIn("chart-line", card["body"])
-        self.assertNotIn("chart-area", card["body"])
-        self.assertNotIn("AVERAGE request", card["note"])
+        self.assertNotIn("split-bar", card["body"])
+        self.assertNotIn("media.example", card["body"])
 
-    def test_one_service_layers_are_never_drawn_under_another(self):
-        ranges = self.composed()
-        ranges[shape.Q_REQUEST_MS][("web_app", "only.web.example")] = series(50.0)
-        ranges[shape.Q_LATENCY]["web_app"] = series(120.0)
-        body = self.card(ranges, "Duration")["body"]
-        # One figure per service, and each service's layers stay inside its own
-        # figure — a stack that mixed them would total two services' requests
-        # into one height.
-        figures = body.split("<figure")[1:]
-        self.assertEqual(len(figures), 2)
-        api, web = sorted(figures, key=lambda f: "web_app" in f)
-        self.assertIn("media.example", api)
-        self.assertNotIn("only.web.example", api)
-        self.assertIn("only.web.example", web)
-        self.assertNotIn("media.example", web)
+    def test_past_the_fourth_place_the_rest_becomes_one_slice(self):
+        # `SERIES_VARS` is four hues wide; a fifth segment would fold into the
+        # neutral and claim a distinction the colours cannot make.
+        rows = shape._composition({("api_app", f"h{i}"): series(float(10 - i))
+                                   for i in range(7)})
+        names = [part["name"] for part in rows[0]["parts"]]
+        self.assertEqual(len(names), shape.PARTS_MAX + 1)
+        self.assertEqual(names[-1], "other")
+        self.assertEqual(rows[0]["parts"][-1]["value"], 4.0 + 5.0 + 6.0)
+
+    def test_the_leftover_is_ordered_last_however_big_it_is(self):
+        # `unmeasured` is what is left of the request, not a place it went, so
+        # it reads as the tail of the bar rather than as the biggest dependency.
+        rows = shape._composition({("api_app", "unmeasured"): series(900.0),
+                                   ("api_app", "media.example"): series(100.0)})
+        self.assertEqual([p["name"] for p in rows[0]["parts"]],
+                         ["media.example", "unmeasured"])
 
     def test_a_service_past_its_slo_is_named_not_just_counted(self):
         sections = self.build(ranges={shape.Q_LATENCY: {"api": series(900.0),
