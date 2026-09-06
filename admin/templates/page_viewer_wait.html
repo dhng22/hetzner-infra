@@ -1,14 +1,19 @@
+{# ONE wait page, for anything the panel starts on demand.
+   A component's visualiser and Grafana are the same interaction — press a
+   button, something scales 0 -> 1, the page comes back on its own — and they
+   were one template's worth of difference apart. Everything specific arrives
+   as a parameter so the polling, the no-JS path and the CSP-free markup are
+   written once. #}
 {% extends "base.html" %}
-{% block title %}{{ component.name }} · visualiser · {{ cluster_name }}{% endblock %}
-{% block crumb %}{{ cluster_name }} · components · {{ component.name }}{% endblock %}
+{% block title %}{{ wait.title }} · {{ cluster_name }}{% endblock %}
+{% block crumb %}{{ cluster_name }} · {{ wait.crumb }}{% endblock %}
 {% block main %}
 <div class="page-head">
   <div>
-    <div class="eyebrow"><a href="{{ component_href(component.name) }}">{{ component.name }}</a></div>
-    <h1>Starting the visualiser</h1>
-    <p class="hint">It is kept stopped when nobody is looking at it — it has full access to
-    this database and no password of its own, so the shorter it exists the smaller that
-    surface is. This page comes back on its own the moment it is up.</p>
+    <div class="eyebrow"><a href="{{ wait.back_url }}">{{ wait.back_label }}</a></div>
+    <h1>{{ wait.heading }}</h1>
+    <p class="hint">{{ wait.blurb }} This page comes back on its own the moment
+    it is up.</p>
   </div>
 </div>
 {% if detail %}
@@ -18,12 +23,12 @@
    so this page carries no code and the Content-Security-Policy has nothing new
    to allow. With JS off the button below is still the whole feature. #}
 <div class="banner" data-viewer-wait
-     data-status-url="{{ status_url }}"
-     data-open-url="{{ viewer_href(component.name) }}">
+     data-status-url="{{ wait.status_url }}"
+     data-open-url="{{ wait.open_url }}">
   <div><span class="live" data-viewer-live><i></i>waiting for it to start</span></div>
 </div>
 <div class="btn-row">
-  <a class="btn btn-primary" href="{{ viewer_href(component.name) }}">Open it now</a>
-  <a class="btn" href="{{ component_href(component.name) }}">Back to {{ component.name }}</a>
+  <a class="btn btn-primary" href="{{ wait.open_url }}">Open it now</a>
+  <a class="btn" href="{{ wait.back_url }}">Back to {{ wait.back_label }}</a>
 </div>
 {% endblock %}

@@ -144,6 +144,18 @@ VIEWER_IDLE_SECONDS = _env("VIEWER_IDLE_SECONDS", "900", int)
 #: short enough that a credential for another cluster is not left lying about
 #: indefinitely. The Migrate section says so where you start one.
 MIGRATE_KEEP_SECONDS = _env("MIGRATE_KEEP_SECONDS", "3600", int)
+#: How long Grafana stays up after the last request through the panel.
+#:
+#: Longer than a visualiser's idle window because the risk is different: a
+#: visualiser is unauthenticated full access to a database and the argument for
+#: stopping it is exposure, while Grafana is 96MB on a master that is 84%
+#: reserved and the argument is memory. Long enough to read a dashboard, get
+#: coffee and come back to it.
+GRAFANA_IDLE_SECONDS = _env("GRAFANA_IDLE_SECONDS", "1800", int)
+#: The one service that is not a component. It is stamped and stopped through
+#: exactly the same two files a visualiser is, so there is one mechanism here
+#: and not two.
+GRAFANA_SERVICE = "monitoring_grafana"
 
 #: Task states that mean the job may still be holding its secrets. Anything
 #: else — complete, failed, rejected, orphaned — is finished, and a job with no
@@ -1524,6 +1536,7 @@ def loop():
             log.exception("%s: %s failed: %s", name, action.verb, exc)
 
     _stop_idle_viewers(components)
+    _stop_idle_grafana()
     _reap_finished_migrations()
     return results
 
@@ -1605,29 +1618,49 @@ def _stop_idle_viewers(components):
     somebody opened it; this is the half that puts it away.
     """
     for component in components.values():
-        if not component.viewer:
-            continue
-        stamp = os.path.join(STATE_DIR, "viewer", f"{component.name}.seen")
-        try:
-            last = os.path.getmtime(stamp)
-        except OSError:
-            continue
-        if time.time() - last < VIEWER_IDLE_SECONDS:
-            continue
-        service = f"{component.name}_viewer"
-        try:
-            live = dkr.services.get(service)
-        except Exception:                                        # noqa: BLE001
-            continue
-        mode = (live.attrs.get("Spec", {}).get("Mode") or {}).get("Replicated") or {}
-        if mode.get("Replicas", 0) == 0:
-            continue
-        try:
-            _service_update(service, "--replicas", "0")
-            log.info("%s: the data visualiser has been idle for %ds; stopped",
-                     component.name, VIEWER_IDLE_SECONDS)
-        except Exception as exc:                                 # noqa: BLE001
-            log.warning("could not stop %s: %s", service, exc)
+        if component.viewer:
+            _scale_down_if_idle(
+                component.name, f"{component.name}_viewer", VIEWER_IDLE_SECONDS,
+                f"{component.name}: the data visualiser has been idle for "
+                f"%ds; stopped")
+
+
+def _stop_idle_grafana():
+    """
+    Put Grafana away once nobody has it open.
+
+    The same two files a visualiser uses — the panel touches a stamp on every
+    request it proxies, this reads the mtime — because it is the same
+    interaction and a second mechanism for it would be a second thing to get
+    wrong. What differs is only the reason and therefore the window: a
+    visualiser is stopped because it is unauthenticated access to a database,
+    Grafana because it holds 96MB on a master with none to spare.
+    """
+    _scale_down_if_idle(GRAFANA_SERVICE, GRAFANA_SERVICE, GRAFANA_IDLE_SECONDS,
+                        "Grafana has been idle for %ds; stopped")
+
+
+def _scale_down_if_idle(stamp_key, service, idle_seconds, message):
+    """Scale a viewer to zero if its stamp is older than `idle_seconds`."""
+    stamp = os.path.join(STATE_DIR, "viewer", f"{stamp_key}.seen")
+    try:
+        last = os.path.getmtime(stamp)
+    except OSError:
+        return
+    if time.time() - last < idle_seconds:
+        return
+    try:
+        live = dkr.services.get(service)
+    except Exception:                                            # noqa: BLE001
+        return
+    mode = (live.attrs.get("Spec", {}).get("Mode") or {}).get("Replicated") or {}
+    if mode.get("Replicas", 0) == 0:
+        return
+    try:
+        _service_update(service, "--replicas", "0")
+        log.info(message, idle_seconds)
+    except Exception as exc:                                     # noqa: BLE001
+        log.warning("could not stop %s: %s", service, exc)
 
 
 def _reap_finished_migrations():

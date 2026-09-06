@@ -1310,6 +1310,17 @@ GRAFANA_FORWARD_TIMEOUT = 60
 #: and nothing else, so this name resolves for the panel and for nobody outside
 #: the cluster. See `grafana()` below for what this buys.
 GRAFANA_ORIGIN = "http://grafana:3000"
+#: Grafana is started on demand and put away when nobody is looking, exactly
+#: like a component's data visualiser.
+#:
+#: It reserves 96MB on a master that is 84% reserved before anything else asks,
+#: and it is a VIEWER — nothing reads it, nothing alerts on it, and the panel's
+#: own charts answer the questions it was left running for. Loki is the one
+#: thing that cannot be treated this way, and for a reason that has nothing to
+#: do with Grafana: every stack ships logs through the `loki` log driver, and
+#: Docker cannot read a non-local driver back, so stopping Loki does not defer
+#: log storage, it discards it.
+GRAFANA_SERVICE = "monitoring_grafana"
 
 
 def _forward(origin, timeout=VIEWER_FORWARD_TIMEOUT):
@@ -1467,8 +1478,7 @@ def component_viewer(name, sub):        # noqa: ARG001 — `sub` is the URL capt
         # comes back on its own — which is what the "press View two or three
         # times" ritual was standing in for.
         return render_template("page_viewer_wait.html", section="components",
-                               component=component, detail=detail,
-                               status_url=url_for("viewer_status", name=name)), 503
+                               wait=_viewer_wait(component), detail=detail), 503
     data.touch_viewer(component.name)
     if not sub:
         # The landing request, and only that one. This is the request the View
@@ -1484,8 +1494,23 @@ def component_viewer(name, sub):        # noqa: ARG001 — `sub` is the URL capt
         return _forward(f"http://{service}:{port}")
     except requests.RequestException as exc:
         return render_template("page_viewer_wait.html", section="components",
-                               component=component, detail=str(exc),
-                               status_url=url_for("viewer_status", name=name)), 502
+                               wait=_viewer_wait(component), detail=str(exc)), 502
+
+
+def _viewer_wait(component):
+    """What the shared wait page needs to be about a component's visualiser."""
+    return {
+        "title": f"{component.name} · visualiser",
+        "crumb": f"components · {component.name}",
+        "heading": "Starting the visualiser",
+        "blurb": ("It is kept stopped when nobody is looking at it — it has "
+                  "full access to this database and no password of its own, so "
+                  "the shorter it exists the smaller that surface is."),
+        "status_url": url_for("viewer_status", name=component.name),
+        "open_url": url_for("component_viewer", name=component.name, sub=""),
+        "back_url": _component_href(component.name),
+        "back_label": component.name,
+    }
 
 
 #: NOT under `/components/<name>/viewer/`, deliberately. A static segment there
@@ -1541,13 +1566,50 @@ def grafana(sub):                       # noqa: ARG001 — `sub` is the URL capt
     """
     if PREVIEW:
         abort(400, "This is a preview build with dummy data — nothing is proxied.")
+    # EVERY request, not only the landing one. A dashboard sits on this route
+    # polling sub-paths for as long as it is open and never asks for `/grafana/`
+    # again, so stamping only the landing request would let dataguard put
+    # Grafana away underneath somebody reading it.
+    data.touch_viewer(GRAFANA_SERVICE)
     try:
         return _forward(GRAFANA_ORIGIN, timeout=GRAFANA_FORWARD_TIMEOUT)
     except requests.RequestException as exc:
+        # Asleep or broken — and the difference decides which page you get.
+        # Asked HERE rather than before every forward: this is one Docker call
+        # on the rare failing request instead of one on each of the hundred
+        # assets a dashboard pulls.
+        running, detail = data.ensure_viewer(GRAFANA_SERVICE)
+        if not running and not detail:
+            return render_template("page_viewer_wait.html", section="components",
+                                   wait=_grafana_wait()), 503
         # `components`, because that is the page whose Open button sent you here
         # — Grafana has no rail entry of its own.
         return render_template("page_grafana_down.html", section="components",
-                               detail=str(exc)), 502
+                               detail=detail or str(exc)), 502
+
+
+def _grafana_wait():
+    return {
+        "title": "Grafana",
+        "crumb": "components · Grafana",
+        "heading": "Starting Grafana",
+        "blurb": ("It is kept stopped when nobody has it open — it reserves "
+                  "memory on the master all day to answer questions the "
+                  "Overview page already answers."),
+        "status_url": url_for("grafana_status"),
+        "open_url": url_for("grafana", sub=""),
+        "back_url": url_for("components_index"),
+        "back_label": "components",
+    }
+
+
+@app.get("/grafana-status")
+@auth.login_required
+def grafana_status():
+    """Is Grafana up yet? The one question the wait page has to ask."""
+    if PREVIEW:
+        return jsonify({"ready": True})
+    return jsonify({"ready": bool(data.viewer_running(GRAFANA_SERVICE))})
 
 
 # --- storage ---------------------------------------------------------------

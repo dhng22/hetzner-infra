@@ -734,14 +734,19 @@ a.tnode.is-link:focus-visible { outline: 2px solid var(--accent); outline-offset
 
    The spine and the drop share an x of 0 so there is no jog between them, and
    it stops at the last task's tick rather than running past the final item. */
+/* A NODE'S TASKS WRAP. They used to be one chip per row with an elbow into a
+   spine, which was fine at 26px a chip and is not at 46px: a master running
+   eighteen tasks became a 900px column, and the map stopped being a map.
+   They flow into as many columns as the width allows instead, so the tree is
+   as tall as its tallest node needs and no taller.
+   The spine stays as the branch's own rule; the per-chip elbow is gone with
+   the single column it was drawn for. */
 .slots { position: relative; align-self: stretch;
-  display: flex; flex-direction: column; align-items: flex-start;
-  gap: 5px; margin-top: 20px; padding-left: 18px; }
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 6px; margin-top: 20px; padding-left: 18px; }
 .slots::before { content: ""; position: absolute; left: 0; top: -20px; width: 1px;
-  height: calc(100% - 13px + 20px); background: var(--line); }
+  height: calc(100% + 20px); background: var(--line); }
 .slots > .slot { position: relative; }
-.slots > .slot::before { content: ""; position: absolute; right: 100%; top: 50%;
-  width: 18px; height: 1px; background: var(--line); }
 .slot {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 5px 9px 5px 7px; min-height: 26px;
@@ -2616,7 +2621,7 @@ details.ca .conn pre { margin: 0; overflow-x: auto; font-size: 11px; line-height
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-06T15:03:32Z" data-localtime>2026-09-06T15:03:32Z</time>
+          <time datetime="2026-09-06T17:19:28Z" data-localtime>2026-09-06T17:19:28Z</time>
           
         </div>
       </div>
@@ -4040,7 +4045,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-06T15:03:32Z" data-localtime>2026-09-06T15:03:32Z</time>
+          <time datetime="2026-09-06T17:19:28Z" data-localtime>2026-09-06T17:19:28Z</time>
           
         </div>
       </div>
@@ -5372,7 +5377,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-06T15:03:32Z" data-localtime>2026-09-06T15:03:32Z</time>
+          <time datetime="2026-09-06T17:19:28Z" data-localtime>2026-09-06T17:19:28Z</time>
           
         </div>
       </div>
@@ -5604,9 +5609,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis+sentinel://default:62d2f729f02d46ec7e5b49d7575bb1248ce2aa46f9eed024@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
+              <code>redis+sentinel://default:7250bb2ce163f24cdf81a422897782016734c6068958dea2@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis+sentinel://default:62d2f729f02d46ec7e5b49d7575bb1248ce2aa46f9eed024@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
+                      data-copy-text="redis+sentinel://default:7250bb2ce163f24cdf81a422897782016734c6068958dea2@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -5617,7 +5622,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="62d2f729f02d46ec7e5b49d7575bb1248ce2aa46f9eed024">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="7250bb2ce163f24cdf81a422897782016734c6068958dea2">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -5683,9 +5688,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
             <div class="eyebrow">3 &middot; Point your application at this</div>
             
             <div class="conn">
-              <code>redis://default:62d2f729f02d46ec7e5b49d7575bb1248ce2aa46f9eed024@127.0.0.1:6379</code>
+              <code>redis://default:7250bb2ce163f24cdf81a422897782016734c6068958dea2@127.0.0.1:6379</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis://default:62d2f729f02d46ec7e5b49d7575bb1248ce2aa46f9eed024@127.0.0.1:6379">Copy</button>
+                      data-copy-text="redis://default:7250bb2ce163f24cdf81a422897782016734c6068958dea2@127.0.0.1:6379">Copy</button>
             </div>
             
             <p class="hint">Your application talks to the helper from step 2, which is running beside it and listening on this port; the helper carries the traffic through the tunnel. That is why this is a local address and not the hostname.</p>
@@ -6556,7 +6561,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-06T15:03:32Z" data-localtime>2026-09-06T15:03:32Z</time>
+          <time datetime="2026-09-06T17:19:28Z" data-localtime>2026-09-06T17:19:28Z</time>
           
         </div>
       </div>
@@ -6776,9 +6781,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>mongodb://root:5a70829d3500d6d0d9a0f4d6a97594959a3f956d26a780bd@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
+              <code>mongodb://root:bf540974641d82e26c5e42cfcad08b06334f59ac5520a328@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:5a70829d3500d6d0d9a0f4d6a97594959a3f956d26a780bd@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
+                      data-copy-text="mongodb://root:bf540974641d82e26c5e42cfcad08b06334f59ac5520a328@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -6789,7 +6794,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="5a70829d3500d6d0d9a0f4d6a97594959a3f956d26a780bd">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="bf540974641d82e26c5e42cfcad08b06334f59ac5520a328">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -6861,9 +6866,9 @@ Without that, a user can save a row and not see it on the next page load, and no
             <div class="eyebrow">3 &middot; Point your application at this</div>
             
             <div class="conn">
-              <code>mongodb://root:5a70829d3500d6d0d9a0f4d6a97594959a3f956d26a780bd@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority</code>
+              <code>mongodb://root:bf540974641d82e26c5e42cfcad08b06334f59ac5520a328@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:5a70829d3500d6d0d9a0f4d6a97594959a3f956d26a780bd@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority">Copy</button>
+                      data-copy-text="mongodb://root:bf540974641d82e26c5e42cfcad08b06334f59ac5520a328@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority">Copy</button>
             </div>
             
             <p class="hint">Your application talks to the helper from step 2, which is running beside it and listening on this port; the helper carries the traffic through the tunnel. That is why this is a local address and not the hostname.</p>
@@ -11052,7 +11057,7 @@ Without that, a user can save a row and not see it on the next page load, and no
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788703412.460223" data-localtime-epoch>1788703412</time>
+              <time datetime="1788711568.806805" data-localtime-epoch>1788711568</time>
             
           </td>
           <td>
@@ -11744,7 +11749,7 @@ Without that, a user can save a row and not see it on the next page load, and no
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788703412.460223" data-localtime-epoch>1788703412</time>
+              <time datetime="1788711568.806805" data-localtime-epoch>1788711568</time>
             
           </td>
           <td>

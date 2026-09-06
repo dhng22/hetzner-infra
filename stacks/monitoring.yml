@@ -273,7 +273,20 @@ services:
       - /opt/infra/config/grafana-datasources.yml:/etc/grafana/provisioning/datasources/ds.yml:ro
     networks: [monitoring]
     deploy:
-      replicas: 1
+      # STOPPED UNTIL SOMEBODY OPENS IT, like a component's data visualiser.
+      # The panel scales it to 1 on the first request to /grafana/ and dataguard
+      # scales it back once nobody has looked for GRAFANA_IDLE_SECONDS.
+      #
+      # It is a viewer: nothing reads it, nothing alerts on it, and the panel's
+      # own RED/USE/Golden column answers the questions it was left running for.
+      # 96M is 2.5% of this master, held all day, on a box that is 84% reserved
+      # before anything else asks.
+      #
+      # A redeploy puts it back to 0 with somebody possibly reading it. That is
+      # the same trade the visualisers make and it is why this number is not
+      # read back off the live service: the wait page brings it straight back,
+      # and a stack file that says 1 while the cluster runs 0 is worse.
+      replicas: 0
       <<: *manager-only
       resources:
         # 96M, from 112M: measured 24h peak 60M.

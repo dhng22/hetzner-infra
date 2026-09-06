@@ -694,14 +694,19 @@ a.tnode.is-link:focus-visible { outline: 2px solid var(--accent); outline-offset
 
    The spine and the drop share an x of 0 so there is no jog between them, and
    it stops at the last task's tick rather than running past the final item. */
+/* A NODE'S TASKS WRAP. They used to be one chip per row with an elbow into a
+   spine, which was fine at 26px a chip and is not at 46px: a master running
+   eighteen tasks became a 900px column, and the map stopped being a map.
+   They flow into as many columns as the width allows instead, so the tree is
+   as tall as its tallest node needs and no taller.
+   The spine stays as the branch's own rule; the per-chip elbow is gone with
+   the single column it was drawn for. */
 .slots { position: relative; align-self: stretch;
-  display: flex; flex-direction: column; align-items: flex-start;
-  gap: 5px; margin-top: 20px; padding-left: 18px; }
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 6px; margin-top: 20px; padding-left: 18px; }
 .slots::before { content: ""; position: absolute; left: 0; top: -20px; width: 1px;
-  height: calc(100% - 13px + 20px); background: var(--line); }
+  height: calc(100% + 20px); background: var(--line); }
 .slots > .slot { position: relative; }
-.slots > .slot::before { content: ""; position: absolute; right: 100%; top: 50%;
-  width: 18px; height: 1px; background: var(--line); }
 .slot {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 5px 9px 5px 7px; min-height: 26px;
