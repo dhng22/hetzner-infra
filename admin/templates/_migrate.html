@@ -28,6 +28,15 @@
       stop the application first, or accept that whatever it wrote during the
       transfer stays behind.
     </p>
+    {# Said HERE, where a migration is started, and not only in a log nobody
+       reads: the job mounts a full credential for the other cluster, so the
+       result is deliberately not kept forever. Read the counts while they are
+       on the page. #}
+    <p class="hint">
+      The job holds a connection string for both ends while it runs. An hour
+      after it finishes, the job and both credentials are removed — so the run
+      below stops being shown at the same time.
+    </p>
 
     {% if migrate %}
       <div class="field">

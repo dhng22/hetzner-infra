@@ -174,14 +174,30 @@ class TaskChipTest(unittest.TestCase):
                           f"data-sig omits {field}, so the first tick rebuilds "
                           f"every chip on an unchanged cluster")
 
-    def test_the_chart_is_under_the_name_and_over_the_tint(self):
-        # The whole visual contract in one assertion: the chip is a positioning
-        # context, the chart is absolutely placed inside it, and it takes no
-        # pointer events — the chip's own tooltip has to win over it.
+    def test_the_chart_comes_after_the_name_in_both_renderers(self):
+        """
+        `margin-left: auto` only pushes the chart to the end of the chip if it
+        is the LAST child. Build it before the name and it lands on the left,
+        on the poller's chips only — so the page looks right until the first
+        tick and wrong forever after.
+        """
+        for path in self.chip_templates():
+            body = path.read_text()
+            with self.subTest(template=path.name):
+                self.assertLess(body.index("dot dot-"), body.index("slot-chart"))
+        js = self.JS.read_text()
+        build = re.search(r"function buildSlot\(t\) \{(.*?)\n  \}", js, re.S)
+        self.assertIsNotNone(build)
+        appends = re.findall(r"el\.appendChild\((\w+)", build.group(1))
+        self.assertEqual(appends[-1], "chart", "the chart is not appended last")
+
+    def test_the_chart_is_beside_the_name_and_takes_no_pointer_events(self):
+        # The chart is pushed to the chip's end and takes no pointer events —
+        # the chip's own tooltip has to win over it.
         css = CSS.read_text()
         block = re.search(r"\.slot-chart \{(.*?)\}", css, re.S)
         self.assertIsNotNone(block)
-        self.assertIn("position: absolute", block.group(1))
+        self.assertIn("margin-left: auto", block.group(1))
         self.assertIn("pointer-events: none", block.group(1))
 
     def test_disk_has_no_reservation_tick(self):

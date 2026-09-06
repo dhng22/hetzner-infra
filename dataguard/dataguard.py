@@ -59,12 +59,14 @@ machine instead of adding a replica that could not have helped.
 import json
 import logging
 import os
+import re
 import signal
 import socket
 import subprocess
 import sys
 import threading
 import time
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -126,6 +128,30 @@ PRESSURE_SUSTAIN_SECONDS = _env("PRESSURE_SUSTAIN_SECONDS", "3600", int)
 LAG_BUDGET_SECONDS = _env("LAG_BUDGET_SECONDS", "10", float)
 BACKUP_MAX_AGE_SECONDS = _env("BACKUP_MAX_AGE_SECONDS", "86400", int)
 VIEWER_IDLE_SECONDS = _env("VIEWER_IDLE_SECONDS", "900", int)
+#: How long a finished migration is kept before the job and its credentials are
+#: removed.
+#:
+#: The job mounts TWO connection strings — this cluster's root URI and a full
+#: credential for somebody else's Atlas cluster — and nothing removed them when
+#: it finished. Found live: four secrets from a migration that completed a day
+#: earlier, still sitting in Swarm, two versions of each because every run
+#: minted a new one and kept the old.
+#:
+#: Swarm refuses to remove a secret any service SPEC references, even one with
+#: no running task, so bounding the credential means removing the job too — and
+#: the job is what the panel reads its result back from. An hour is the trade:
+#: long enough to read the verify table after a migration you were watching,
+#: short enough that a credential for another cluster is not left lying about
+#: indefinitely. The Migrate section says so where you start one.
+MIGRATE_KEEP_SECONDS = _env("MIGRATE_KEEP_SECONDS", "3600", int)
+
+#: Task states that mean the job may still be holding its secrets. Anything
+#: else — complete, failed, rejected, orphaned — is finished, and a job with no
+#: task at all has not started yet and is finished by nothing.
+MIGRATE_LIVE_STATES = frozenset({
+    "new", "pending", "assigned", "accepted", "preparing", "ready",
+    "starting", "running",
+})
 DISK_HEADROOM = _env("DB_DISK_HEADROOM", "2.5", float)
 
 # --- labels: the contract with the component renderer ----------------------
@@ -1498,6 +1524,7 @@ def loop():
             log.exception("%s: %s failed: %s", name, action.verb, exc)
 
     _stop_idle_viewers(components)
+    _reap_finished_migrations()
     return results
 
 
@@ -1601,6 +1628,109 @@ def _stop_idle_viewers(components):
                      component.name, VIEWER_IDLE_SECONDS)
         except Exception as exc:                                 # noqa: BLE001
             log.warning("could not stop %s: %s", service, exc)
+
+
+def _reap_finished_migrations():
+    """
+    Take a finished migration's credentials away.
+
+    Found by LABEL, not by name: the panel stamps the job with
+    `dataguard.role=migrate` and `infra.component=<name>`, and its two URI
+    secrets carry the same component label. So this reaps whatever the panel
+    started without holding a copy of how the panel builds those names — the
+    drift that would otherwise be one rename away.
+
+    Two stages, because they have different urgency:
+
+      * Secret versions the CURRENT job does not reference go immediately.
+        Every run mints a new version and the old one becomes unreachable the
+        moment the job is recreated; keeping it buys nothing at all.
+      * The job and its live secrets go once it has been finished for
+        `MIGRATE_KEEP_SECONDS`, because Swarm will not remove a secret a
+        service spec still names — bounding the credential means removing the
+        job, and the job is the panel's record of how the migration went.
+
+    A RUNNING migration is never touched. It holds the secrets it is using and
+    may hold them for an hour.
+    """
+    for service in _migration_jobs():
+        name = (service.attrs.get("Spec", {}).get("Labels") or {}).get("infra.component")
+        if not name:
+            continue
+        finished = _finished_at(service)
+        held = _secrets_named_by(service)
+        for secret in _component_secrets(f"{name}-migrate-"):
+            if secret.name not in held:
+                _remove_secret(secret, name, "superseded")
+        if finished is None or time.time() - finished < MIGRATE_KEEP_SECONDS:
+            continue
+        try:
+            service.remove()
+        except Exception as exc:                                 # noqa: BLE001
+            log.warning("could not remove %s: %s", service.name, exc)
+            continue
+        log.info("%s: the migration finished %ds ago; removed the job and the "
+                 "connection strings it was holding", name, MIGRATE_KEEP_SECONDS)
+        for secret in _component_secrets(f"{name}-migrate-"):
+            _remove_secret(secret, name, "the job that used it is gone")
+
+
+def _migration_jobs():
+    try:
+        return dkr.services.list(filters={"label": f"{L_ROLE}=migrate"})
+    except Exception:                                            # noqa: BLE001
+        return []
+
+
+def _finished_at(service):
+    """When this job's last task stopped, or None while one is still running."""
+    try:
+        tasks = service.tasks()
+    except Exception:                                            # noqa: BLE001
+        return None
+    stamps = []
+    for task in tasks:
+        state = (task.get("Status") or {}).get("State")
+        if state in MIGRATE_LIVE_STATES:
+            return None
+        stamps.append((task.get("Status") or {}).get("Timestamp") or "")
+    if not stamps:
+        return None
+    return _parse_stamp(max(stamps))
+
+
+def _parse_stamp(text):
+    """Docker's RFC3339 with nanoseconds, as a unix time."""
+    if not text:
+        return None
+    cleaned = re.sub(r"\.(\d{6})\d*", r".\1", text.replace("Z", "+00:00"))
+    try:
+        return datetime.fromisoformat(cleaned).timestamp()
+    except ValueError:
+        return None
+
+
+def _secrets_named_by(service):
+    spec = (service.attrs.get("Spec", {}).get("TaskTemplate") or {})
+    return {(s.get("SecretName") or "")
+            for s in ((spec.get("ContainerSpec") or {}).get("Secrets") or [])}
+
+
+def _component_secrets(prefix):
+    try:
+        return [s for s in dkr.secrets.list() if s.name.startswith(prefix)]
+    except Exception:                                            # noqa: BLE001
+        return []
+
+
+def _remove_secret(secret, component, why):
+    try:
+        secret.remove()
+    except Exception as exc:                                     # noqa: BLE001
+        log.warning("%s: could not remove the secret %s: %s",
+                    component, secret.name, exc)
+        return
+    log.info("%s: removed %s (%s)", component, secret.name, why)
 
 
 def _stop_signal(signum, _frame):

@@ -91,16 +91,16 @@
                      data-sig="{% for t in n.tasks %}{{ t.name }}|{{ t.key }}|{{ t.tone }}|{{ t.cpu_share }}|{{ t.mem_share }}|{{ t.cpu_used }}|{{ t.mem_used }}|{{ t.disk_used }};{% endfor %}">
                   {% for t in n.tasks %}
                     {# The chip's own colour already says WHAT this is, so the dot
-                       is spent on what it is DOING. Behind the name is a chart of
-                       three bands — cpu, memory, disk — where the fill is what
-                       this task is USING and the tick is what it RESERVED, both
-                       as shares of this machine. One scale per band is what makes
-                       "the fill is past the tick" mean something on sight. #}
+                       is spent on what it is DOING. After the name stands a chart
+                       of three bars — cpu, memory, disk — where the fill is what
+                       this task is USING and the mark across it is what it
+                       RESERVED, both as shares of this machine. One scale per bar
+                       is what makes "the fill is past the mark" mean something on
+                       sight. #}
                     <span class="slot slot-{{ t.key }}" tabindex="0"
                           style="--cpu:{{ t.cpu_share }};--mem:{{ t.mem_share }};--cpu-use:{{ t.cpu_used }};--mem-use:{{ t.mem_used }};--disk-use:{{ t.disk_used }}"
                           data-tip="{{ t.service }} — task {{ t.id }} on {{ n.hostname }}&#10;state: {{ t.state }}&#10;cpu {{ t.cpu_used }}% used of this node, {{ t.cpu_share }}% reserved&#10;memory {{ t.mem_used }}% used, {{ t.mem_share }}% reserved&#10;disk {{ t.disk_used }}% used">
-                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
-                      <i class="dot dot-{{ t.tone }}" aria-hidden="true"></i>{{ t.name }}
+                      <i class="dot dot-{{ t.tone }}" aria-hidden="true"></i>{{ t.name }}<i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                     </span>
                   {% else %}
                     <span class="slot is-empty">no running tasks</span>

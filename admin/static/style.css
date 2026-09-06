@@ -776,37 +776,43 @@ a.tnode.is-link:focus-visible { outline: 2px solid var(--accent); outline-offset
 .slot {
   --cpu: 0; --mem: 0; --cpu-use: 0; --mem-use: 0; --disk-use: 0;
   position: relative;
-  padding-top: 15px;                     /* the chart's own room, above the name */
+  gap: 10px;                             /* the name, then room, then the chart */
+  padding: 6px 10px 6px 8px;
   background: var(--slot-bg, var(--surface-2));
 }
+/* VERTICAL, and at the end of the name rather than behind it. Laid flat above
+   the label the bars were 3px tall and read as underlining; standing up they
+   get the chip's whole height, which is the only axis here with room to spare,
+   and they sit where the eye already stops — after the name. */
 .slot-chart {
-  position: absolute; left: 7px; right: 9px; top: 4px;
-  display: flex; flex-direction: column; gap: 1px; pointer-events: none;
+  margin-left: auto; display: flex; align-items: flex-end; gap: 4px;
+  height: 22px; pointer-events: none;
 }
 .band {
-  position: relative; display: block; height: 3px; border-radius: 2px;
+  position: relative; display: block; width: 7px; height: 100%;
+  border-radius: 2px;
   background: color-mix(in srgb, var(--line) 55%, transparent);
 }
-/* The fill. `--use` is set per band below rather than repeating this rule
-   three times, so a change to how usage is drawn happens in one place. */
+/* The fill, growing UP from the floor — the direction every bar chart uses, so
+   nothing has to be explained. `--use` is set per band below rather than
+   repeating this rule three times. */
 .band::before {
-  content: ""; position: absolute; top: 0; bottom: 0; left: 0;
-  width: calc(var(--use, 0) * 1%); border-radius: 2px;
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0;
+  height: calc(var(--use, 0) * 1%); border-radius: 2px;
   background: var(--slot-ring, var(--accent));
 }
-/* The reservation tick, standing slightly proud of the band so it reads as a
-   mark ON the scale rather than as more fill. */
+/* The reservation mark, standing proud of the bar on both sides so it reads as
+   a mark ON the scale rather than as more fill. */
 .band::after {
-  content: ""; position: absolute; top: -1px; bottom: -1px;
-  left: calc(var(--res, 0) * 1%); width: 2px; border-radius: 1px;
-  background: color-mix(in srgb, var(--text) 65%, transparent);
+  content: ""; position: absolute; left: -2px; right: -2px;
+  bottom: calc(var(--res, 0) * 1%); height: 2px; border-radius: 1px;
+  background: color-mix(in srgb, var(--text) 70%, transparent);
 }
 .band-cpu  { --use: var(--cpu-use); --res: var(--cpu); }
 .band-mem  { --use: var(--mem-use); --res: var(--mem); }
 .band-disk { --use: var(--disk-use); }
 .band-disk::after { content: none; }
 .slot.is-empty .slot-chart { display: none; }
-.slot.is-empty { padding-top: 5px; }
 .slot-prod     { --slot-bg: color-mix(in srgb, var(--s-prod) 14%, var(--surface));
                  --slot-ring: var(--s-prod); }
 .slot-staging  { --slot-bg: color-mix(in srgb, var(--s-staging) 14%, var(--surface));

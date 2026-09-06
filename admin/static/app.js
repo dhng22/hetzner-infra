@@ -606,9 +606,9 @@
                     "\nmemory " + t.mem_used + "% used, " +
                     t.mem_share + "% reserved" +
                     "\ndisk " + t.disk_used + "% used");
-    // The chart, behind the label. Three bands: fill is what the task uses,
-    // the tick is what it reserved. Disk has no tick because Swarm has no
-    // disk reservation to draw one at.
+    // The chart, after the label. Three bars: fill is what the task uses, the
+    // mark across it is what it reserved. Disk has no mark because Swarm has
+    // no disk reservation to draw one at.
     var chart = document.createElement("i");
     chart.className = "slot-chart";
     chart.setAttribute("aria-hidden", "true");
@@ -618,13 +618,16 @@
       band.className = "band band-" + bands[b];
       chart.appendChild(band);
     }
-    el.appendChild(chart);
     var dot = document.createElement("i");
     dot.className = "dot dot-" + t.tone;      // what it is DOING; the chip tint
     el.appendChild(dot);                      // already says what it IS
     // textContent, never innerHTML: service names come from the daemon and are
     // not this file's to trust with markup.
     el.appendChild(document.createTextNode(t.name));
+    // LAST, so the chart sits after the name in the DOM exactly as it does in
+    // the template. `margin-left: auto` is what pushes it to the chip's end,
+    // and it only does that from here.
+    el.appendChild(chart);
     return el;
   }
 

@@ -1516,6 +1516,17 @@ say "destination:"; printf '%s\n' "$AFTER"
 exit 1
 """
 
+    def _drop_secrets(self, suffix):
+        """
+        Remove every version of one of this component's secrets.
+
+        Only ever called for a secret nothing references any more — Swarm
+        refuses otherwise, and that refusal is the safety net rather than this
+        method's own caution.
+        """
+        for _version, name in self.secret_versions(suffix):
+            base.run(["docker", "secret", "rm", name], timeout=30)
+
     def migrate_status(self):
         """
         `{state, since, detail}` for the running or last migration, or None.
@@ -1572,6 +1583,22 @@ exit 1
         if running and running["running"]:
             return False, "A migration is already running for this component."
 
+        # The old job goes FIRST, then its secrets, then the new ones are made.
+        #
+        # Order matters twice over. Swarm will not remove a secret any service
+        # spec names, so nothing can be cleaned up while the previous job still
+        # exists; and creating before removing is what left four secrets behind
+        # from a single migration — two live versions of each URI, one of them
+        # a full credential for somebody else's Atlas cluster, kept by a rule
+        # written for TLS material where a stale copy really does cost nothing.
+        #
+        # dataguard reaps whatever survives this, including the pair this run is
+        # about to create — see MIGRATE_KEEP_SECONDS. This is the half that
+        # keeps one run from inheriting the last one's.
+        base.run(["docker", "service", "rm", self.migrate_service()], timeout=60)
+        self._drop_secrets("migrate-here")
+        self._drop_secrets("migrate-there")
+
         # Both URIs as secrets, both through stdin. The Atlas one is rewritten
         # every run because it may have changed on the Credentials tab since the
         # last migration, and a job authenticating with last month's password is
@@ -1579,7 +1606,6 @@ exit 1
         here = self._ensure_secret("migrate-here", self.connection_url(), replace=True)
         there = self._ensure_secret("migrate-there", atlas, replace=True)
 
-        base.run(["docker", "service", "rm", self.migrate_service()], timeout=60)
         ok, out = base.run([
             "docker", "service", "create", "--detach",
             "--name", self.migrate_service(),
