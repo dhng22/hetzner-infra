@@ -572,23 +572,27 @@ def divided(groups, unit="", empty="nothing is instrumented yet"):
     This is the same bar with the answer inside it: 1200ms drawn as 800ms of
     one third party, 200ms of a database, the rest of the request.
 
-    THE SEGMENTS ALWAYS SUM TO THE BAR. Each part's percentage is its share of
-    the bar's own total, and the total printed beside the bar is the sum of the
-    parts — so the picture and the arithmetic cannot disagree, whatever the
-    underlying measurements do. What the parts are worth in milliseconds is in
-    every segment's tooltip, unrounded to a share.
+    THE BAR IS THE SERVICE'S OWN LATENCY, the same number the chart in RED
+    draws, and the segments are cut out of it. `total` is passed in rather than
+    summed from the parts for exactly that reason: the parts are measured per
+    request and the total is a percentile, so summing the parts produced a
+    "total" that disagreed with the latency shown directly above it. The parts
+    decide the SHARES; the total decides what a share is worth.
 
-    `groups` is `[{"name", "parts": [{"name", "value", "note"?}]}]`.
+    Shares are whole percentages that add to 100, and each segment's width is
+    the same rounded number its tooltip prints — so nothing is visibly wider
+    than the figure written on it.
+
+    `groups` is `[{"name", "total", "parts": [{"name", "value", "note"?}]}]`.
     """
     groups = [g for g in (groups or [])
-              if sum(p["value"] for p in g.get("parts") or []) > 0]
+              if g.get("total") and sum(p["value"] for p in g.get("parts") or []) > 0]
     if not groups:
         return _empty(empty)
 
     out = ['<div class="split-bars">']
     for group in groups:
-        parts = group["parts"]
-        total = sum(part["value"] for part in parts)
+        parts, total = group["parts"], group["total"]
         shares = _percentages([part["value"] for part in parts])
         out.append('<div class="split-row">'
                    f'<div class="split-head">'
@@ -598,19 +602,24 @@ def divided(groups, unit="", empty="nothing is instrumented yet"):
                    '</div><div class="split-bar">')
         for index, (part, share) in enumerate(zip(parts, shares)):
             note = f' ({part["note"]})' if part.get("note") else ""
-            tip = (f'{part["name"]}{note}: {fmt(part["value"], unit)} of '
-                   f'{group["name"]}’s {fmt(total, unit)} — {share}%')
-            # The WIDTH is the same rounded share the label prints. Drawing an
-            # exact fraction under a rounded caption is how a segment ends up
+            tip = (f'{part["name"]}{note}: {share}% of {group["name"]}’s '
+                   f'{fmt(total, unit)} — {fmt(total * share / 100.0, unit)}')
+            # The WIDTH is the same rounded share the tooltip prints. Drawing
+            # an exact fraction under a rounded figure is how a segment ends up
             # visibly wider than the number written on it.
             out.append(f'<i style="width:{share}%;'
                        f'background:var({series_var(index)})" '
                        f'data-tip="{_esc(tip)}"></i>')
-        out.append('</div><div class="split-keys">')
-        for index, (part, share) in enumerate(zip(parts, shares)):
+        # The SAME legend the charts above use, class and all — this sits in a
+        # column of charts and a key that is bigger than theirs reads as a
+        # different kind of thing. The percentage is not repeated here: it is
+        # in the segment's own tooltip, and printing it twice made the key
+        # wider than the bar it explains.
+        out.append('</div><div class="chart-legend">')
+        for index, part in enumerate(parts):
             out.append(f'<span class="chart-key">'
                        f'<i style="background:var({series_var(index)})"></i>'
-                       f'{_esc(part["name"])} {share}%</span>')
+                       f'{_esc(part["name"])}</span>')
         out.append('</div></div>')
     out.append('</div>')
     return _wrap("".join(out))

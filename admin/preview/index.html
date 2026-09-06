@@ -1109,8 +1109,10 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
 .split-bar { display: flex; height: 12px; border-radius: 3px; overflow: hidden;
              background: var(--surface-2); }
 .split-bar > i { display: block; height: 100%; min-width: 2px; cursor: help; }
-.split-keys { display: flex; flex-wrap: wrap; gap: 4px var(--s-3);
-              margin-top: 5px; }
+/* The key itself is `.chart-legend`, shared with every chart in the column, so
+   it cannot end up a different size from theirs. Only the gap above it is
+   local: there is no x-axis here for it to sit under. */
+.split-bar + .chart-legend { margin-top: 6px; }
 
 /* A bullet, not a gauge: the number matters far less than where it sits
    relative to the line that will act on it. */
@@ -1867,8 +1869,8 @@ details.ca .conn pre { margin: 0; overflow-x: auto; font-size: 11px; line-height
             
             <span class="obs-window">latest sample</span>
           </div>
-          <p class="obs-note">each service&#39;s request, cut into where its time goes — segments are shares of that service&#39;s own total, so they sum to it</p>
-          <figure class="chart-wrap is-plain"><div class="split-bars"><div class="split-row"><div class="split-head"><span class="split-name" title="api_app">api_app</span><span class="split-total">163ms</span></div><div class="split-bar"><i style="width:68%;background:var(--s-prod)" data-tip="media.example.net: 111ms of api_app’s 163ms — 68%"></i><i style="width:9%;background:var(--s-staging)" data-tip="documents: 13.9ms of api_app’s 163ms — 9%"></i><i style="width:23%;background:var(--s-data)" data-tip="unmeasured: 38.3ms of api_app’s 163ms — 23%"></i></div><div class="split-keys"><span class="chart-key"><i style="background:var(--s-prod)"></i>media.example.net 68%</span><span class="chart-key"><i style="background:var(--s-staging)"></i>documents 9%</span><span class="chart-key"><i style="background:var(--s-data)"></i>unmeasured 23%</span></div></div><div class="split-row"><div class="split-head"><span class="split-name" title="web_app">web_app</span><span class="split-total">110ms</span></div><div class="split-bar"><i style="width:17%;background:var(--s-prod)" data-tip="queue.vendor.example: 18.9ms of web_app’s 110ms — 17%"></i><i style="width:83%;background:var(--s-staging)" data-tip="unmeasured: 91.3ms of web_app’s 110ms — 83%"></i></div><div class="split-keys"><span class="chart-key"><i style="background:var(--s-prod)"></i>queue.vendor.example 17%</span><span class="chart-key"><i style="background:var(--s-staging)"></i>unmeasured 83%</span></div></div></div></figure>
+          <p class="obs-note">the same latency RED draws, cut into where it goes — the bar is the service&#39;s own number and the shares are measured per request, so anything it does not time falls in `unmeasured`</p>
+          <figure class="chart-wrap is-plain"><div class="split-bars"><div class="split-row"><div class="split-head"><span class="split-name" title="api_app">api_app</span><span class="split-total">279ms</span></div><div class="split-bar"><i style="width:68%;background:var(--s-prod)" data-tip="media.example.net: 68% of api_app’s 279ms — 190ms"></i><i style="width:9%;background:var(--s-staging)" data-tip="documents: 9% of api_app’s 279ms — 25.1ms"></i><i style="width:23%;background:var(--s-data)" data-tip="unmeasured: 23% of api_app’s 279ms — 64.2ms"></i></div><div class="chart-legend"><span class="chart-key"><i style="background:var(--s-prod)"></i>media.example.net</span><span class="chart-key"><i style="background:var(--s-staging)"></i>documents</span><span class="chart-key"><i style="background:var(--s-data)"></i>unmeasured</span></div></div><div class="split-row"><div class="split-head"><span class="split-name" title="web_app">web_app</span><span class="split-total">121ms</span></div><div class="split-bar"><i style="width:17%;background:var(--s-prod)" data-tip="queue.vendor.example: 17% of web_app’s 121ms — 20.6ms"></i><i style="width:83%;background:var(--s-staging)" data-tip="unmeasured: 83% of web_app’s 121ms — 101ms"></i></div><div class="chart-legend"><span class="chart-key"><i style="background:var(--s-prod)"></i>queue.vendor.example</span><span class="chart-key"><i style="background:var(--s-staging)"></i>unmeasured</span></div></div></div></figure>
           
           
             <p class="obs-summary">all 2 services under the 500ms SLO</p>
@@ -2565,7 +2567,7 @@ details.ca .conn pre { margin: 0; overflow-x: auto; font-size: 11px; line-height
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-06T04:46:32Z" data-localtime>2026-09-06T04:46:32Z</time>
+          <time datetime="2026-09-06T05:05:08Z" data-localtime>2026-09-06T05:05:08Z</time>
           
         </div>
       </div>
@@ -3983,7 +3985,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-06T04:46:32Z" data-localtime>2026-09-06T04:46:32Z</time>
+          <time datetime="2026-09-06T05:05:08Z" data-localtime>2026-09-06T05:05:08Z</time>
           
         </div>
       </div>
@@ -5314,7 +5316,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-06T04:46:32Z" data-localtime>2026-09-06T04:46:32Z</time>
+          <time datetime="2026-09-06T05:05:08Z" data-localtime>2026-09-06T05:05:08Z</time>
           
         </div>
       </div>
@@ -5546,9 +5548,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis+sentinel://default:e6c94ab915efd5bd4aaf0c7ce14d047b9608ce6e041dfe4f@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
+              <code>redis+sentinel://default:f9ca6f57f942d24d7e44566a86a4eb13b90e0fe7eecfb4d6@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis+sentinel://default:e6c94ab915efd5bd4aaf0c7ce14d047b9608ce6e041dfe4f@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
+                      data-copy-text="redis+sentinel://default:f9ca6f57f942d24d7e44566a86a4eb13b90e0fe7eecfb4d6@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -5559,7 +5561,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="e6c94ab915efd5bd4aaf0c7ce14d047b9608ce6e041dfe4f">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="f9ca6f57f942d24d7e44566a86a4eb13b90e0fe7eecfb4d6">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -5625,9 +5627,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
             <div class="eyebrow">3 &middot; Point your application at this</div>
             
             <div class="conn">
-              <code>redis://default:e6c94ab915efd5bd4aaf0c7ce14d047b9608ce6e041dfe4f@127.0.0.1:6379</code>
+              <code>redis://default:f9ca6f57f942d24d7e44566a86a4eb13b90e0fe7eecfb4d6@127.0.0.1:6379</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis://default:e6c94ab915efd5bd4aaf0c7ce14d047b9608ce6e041dfe4f@127.0.0.1:6379">Copy</button>
+                      data-copy-text="redis://default:f9ca6f57f942d24d7e44566a86a4eb13b90e0fe7eecfb4d6@127.0.0.1:6379">Copy</button>
             </div>
             
             <p class="hint">Your application talks to the helper from step 2, which is running beside it and listening on this port; the helper carries the traffic through the tunnel. That is why this is a local address and not the hostname.</p>
@@ -6497,7 +6499,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-06T04:46:32Z" data-localtime>2026-09-06T04:46:32Z</time>
+          <time datetime="2026-09-06T05:05:08Z" data-localtime>2026-09-06T05:05:08Z</time>
           
         </div>
       </div>
@@ -6717,9 +6719,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>mongodb://root:9a0ee00a987ea9aded69506ce3f4385cba57b64f644a836a@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
+              <code>mongodb://root:79c3a4dc1191f18e75900dbd25e97e49b55ba0a535353665@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:9a0ee00a987ea9aded69506ce3f4385cba57b64f644a836a@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
+                      data-copy-text="mongodb://root:79c3a4dc1191f18e75900dbd25e97e49b55ba0a535353665@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -6730,7 +6732,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="9a0ee00a987ea9aded69506ce3f4385cba57b64f644a836a">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="79c3a4dc1191f18e75900dbd25e97e49b55ba0a535353665">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -6802,9 +6804,9 @@ Without that, a user can save a row and not see it on the next page load, and no
             <div class="eyebrow">3 &middot; Point your application at this</div>
             
             <div class="conn">
-              <code>mongodb://root:9a0ee00a987ea9aded69506ce3f4385cba57b64f644a836a@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority</code>
+              <code>mongodb://root:79c3a4dc1191f18e75900dbd25e97e49b55ba0a535353665@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:9a0ee00a987ea9aded69506ce3f4385cba57b64f644a836a@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority">Copy</button>
+                      data-copy-text="mongodb://root:79c3a4dc1191f18e75900dbd25e97e49b55ba0a535353665@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority">Copy</button>
             </div>
             
             <p class="hint">Your application talks to the helper from step 2, which is running beside it and listening on this port; the helper carries the traffic through the tunnel. That is why this is a local address and not the hostname.</p>
@@ -10986,7 +10988,7 @@ Without that, a user can save a row and not see it on the next page load, and no
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788666392.209536" data-localtime-epoch>1788666392</time>
+              <time datetime="1788667508.521955" data-localtime-epoch>1788667508</time>
             
           </td>
           <td>
@@ -11678,7 +11680,7 @@ Without that, a user can save a row and not see it on the next page load, and no
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788666392.209536" data-localtime-epoch>1788666392</time>
+              <time datetime="1788667508.521955" data-localtime-epoch>1788667508</time>
             
           </td>
           <td>

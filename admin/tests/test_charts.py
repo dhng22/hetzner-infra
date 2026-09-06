@@ -490,20 +490,43 @@ class ColumnTest(unittest.TestCase):
         self.assertIn("data-tip", body)              # hover names each segment
         self.assertIn(charts.SERIES_VARS[0], body)   # and they are told apart
         self.assertIn(charts.SERIES_VARS[1], body)
+        # The key is the SAME one every chart in the column uses, and it does
+        # not repeat the percentage: that is in the segment's tooltip, and
+        # printing it twice made the key wider than the bar it explains.
+        self.assertIn('class="chart-legend"', body)
+        self.assertNotIn("split-keys", body)
+        self.assertNotIn("media.example 6", body)
 
     def test_the_segments_sum_to_the_bar(self):
-        # The whole reason the percentages are shares of the bar's OWN total:
-        # the picture and the arithmetic cannot then disagree, whatever the
-        # underlying measurements do.
-        body = charts.divided([{"name": "api_app", "parts": [
+        body = charts.divided([{"name": "api_app", "total": 1200.0, "parts": [
             {"name": "tikdrama", "value": 800.0},
             {"name": "database", "value": 200.0},
             {"name": "unmeasured", "value": 200.0}]}], "ms")
         widths = [int(w) for w in re.findall(r"width:(\d+)%", body)]
         self.assertEqual(sum(widths), 100)
         self.assertIn("1.2kms", body)                # the total beside the bar
-        self.assertIn("tikdrama 67%", body)
-        self.assertIn("800ms of api_app", body)      # millis live in the tip
+        # The share is what was measured; the millisecond figure is that share
+        # of the bar, so the two can never disagree.
+        self.assertIn("tikdrama: 67% of api_app’s 1.2kms — 804ms", body)
+
+    def test_the_bar_is_the_latency_red_draws_not_the_sum_of_the_parts(self):
+        """
+        The parts are measured per request and the total is a percentile, so
+        adding the parts up produced a "total" that disagreed with the number
+        shown for the same service one card away.
+        """
+        groups = shape._composition(
+            {("api_app", "media.example"): series(120.0),
+             ("api_app", "unmeasured"): series(60.0)},
+            {"api_app": series(466.0)})
+        self.assertEqual(groups[0]["total"], 466.0)
+        self.assertIn("466ms", charts.divided(groups, "ms"))
+
+    def test_parts_with_no_latency_to_be_parts_of_are_dropped(self):
+        # Rather than totalled from the parts themselves, which is the bug the
+        # `total` argument exists to prevent.
+        self.assertEqual(
+            shape._composition({("ghost", "a.example"): series(10.0)}, {}), [])
 
     def test_the_printed_percentages_add_up_too(self):
         # 800/1200 and two 200/1200s round to 67 + 17 + 17 = 101 one at a time,
@@ -527,7 +550,8 @@ class ColumnTest(unittest.TestCase):
         # `SERIES_VARS` is four hues wide; a fifth segment would fold into the
         # neutral and claim a distinction the colours cannot make.
         rows = shape._composition({("api_app", f"h{i}"): series(float(10 - i))
-                                   for i in range(7)})
+                                   for i in range(7)},
+                                  {"api_app": series(400.0)})
         names = [part["name"] for part in rows[0]["parts"]]
         self.assertEqual(len(names), shape.PARTS_MAX + 1)
         self.assertEqual(names[-1], "other")
@@ -537,7 +561,8 @@ class ColumnTest(unittest.TestCase):
         # `unmeasured` is what is left of the request, not a place it went, so
         # it reads as the tail of the bar rather than as the biggest dependency.
         rows = shape._composition({("api_app", "unmeasured"): series(900.0),
-                                   ("api_app", "media.example"): series(100.0)})
+                                   ("api_app", "media.example"): series(100.0)},
+                                  {"api_app": series(400.0)})
         self.assertEqual([p["name"] for p in rows[0]["parts"]],
                          ["media.example", "unmeasured"])
 

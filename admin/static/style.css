@@ -1069,8 +1069,10 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
 .split-bar { display: flex; height: 12px; border-radius: 3px; overflow: hidden;
              background: var(--surface-2); }
 .split-bar > i { display: block; height: 100%; min-width: 2px; cursor: help; }
-.split-keys { display: flex; flex-wrap: wrap; gap: 4px var(--s-3);
-              margin-top: 5px; }
+/* The key itself is `.chart-legend`, shared with every chart in the column, so
+   it cannot end up a different size from theirs. Only the gap above it is
+   local: there is no x-axis here for it to sit under. */
+.split-bar + .chart-legend { margin-top: 6px; }
 
 /* A bullet, not a gauge: the number matters far less than where it sits
    relative to the line that will act on it. */
