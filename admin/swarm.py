@@ -65,6 +65,13 @@ def vm_query(expr):
         return None
 
 
+#: cadvisor writes the Swarm TASK id here, as it writes the service name into
+#: `signals.expressions.CPU_LABEL`. Per task rather than per service because a
+#: chip on the map is one replica on one machine, and two replicas of the same
+#: service on different nodes are the case the map exists to show.
+TASK_LABEL = "container_label_com_docker_swarm_task_id"
+
+
 def vm_query_by(expr, label="instance"):
     """Instant query returning {label_value: float} instead of a single number."""
     out = {}
@@ -939,6 +946,32 @@ def topology():
             "mem_res": int(reservations.get("MemoryBytes", 0) or 0),
         })
 
+    # WHAT EACH TASK IS ACTUALLY USING, beside what it reserved. cadvisor
+    # labels every container with its Swarm task id, so this is one grouped
+    # query per resource for the whole cluster rather than one per chip.
+    #
+    # The two numbers routinely disagree by an order of magnitude in BOTH
+    # directions, which is the entire reason for showing them together: a task
+    # reserving 640MB and touching 39MB is money on the floor, and one using
+    # more than it reserved is a task Swarm will evict first under pressure.
+    task_cpu = vm_query_by(f'sum by ({TASK_LABEL}) '
+                           f'(rate(container_cpu_usage_seconds_total'
+                           f'{{{TASK_LABEL}!=""}}[3m]))', label=TASK_LABEL)
+    task_mem = vm_query_by(f'sum by ({TASK_LABEL}) '
+                           f'(container_memory_working_set_bytes'
+                           f'{{{TASK_LABEL}!=""}})', label=TASK_LABEL)
+    # `max`, not `sum`: cadvisor reports one series per filesystem the container
+    # can see, and several of them are views of the same root device. Summing
+    # counts the same bytes repeatedly and puts a 4% container over 100%.
+    task_disk = vm_query_by(f'max by ({TASK_LABEL}) '
+                            f'(container_fs_usage_bytes'
+                            f'{{{TASK_LABEL}!=""}})', label=TASK_LABEL)
+    # Keyed to match the id the chips carry. Task ids are unique in their first
+    # twelve characters the same way docker's own short ids are, and the map has
+    # printed the short form since it was written.
+    task_cpu, task_mem, task_disk = ({k[:12]: v for k, v in table.items()}
+                                     for table in (task_cpu, task_mem, task_disk))
+
     cpu = vm_query_by('100 - (avg by (instance) '
                       '(rate(node_cpu_seconds_total{mode="idle"}[2m])) * 100)')
     mem = vm_query_by('100 * (1 - node_memory_MemAvailable_bytes '
@@ -960,11 +993,21 @@ def topology():
         items = by_node.get(n["full_id"], [])
         node_cpu = (n.get("cpus") or 0) * 1_000_000_000
         node_mem = (n.get("memory_gb") or 0) * 1024 ** 3
+        node_disk = disk_size.get(n["hostname"]) or 0
         for it in items:
             # As a fraction of the machine, so a chip can draw "how much of this
-            # box am I holding" without the template doing arithmetic.
-            it["cpu_share"] = round(it["cpu_res"] / node_cpu * 100, 1) if node_cpu else 0
-            it["mem_share"] = round(it["mem_res"] / node_mem * 100, 1) if node_mem else 0
+            # box am I holding" without the template doing arithmetic. USED and
+            # RESERVED share every denominator, which is what lets one band
+            # carry both: the tick and the fill are on the same scale.
+            it["cpu_share"] = _share(it["cpu_res"], node_cpu)
+            it["mem_share"] = _share(it["mem_res"], node_mem)
+            # Cores, then nanocores, so it divides by the same node_cpu.
+            it["cpu_used"] = _share((task_cpu.get(it["id"]) or 0) * 1_000_000_000,
+                                    node_cpu)
+            it["mem_used"] = _share(task_mem.get(it["id"]), node_mem)
+            # Disk has no reservation to draw a tick at — Swarm does not let you
+            # reserve any — so this band is a fill and nothing else.
+            it["disk_used"] = _share(task_disk.get(it["id"]), node_disk)
         # Grouped by band, then by name, so replicas of one service sit together
         # and the bands read as blocks without needing colour to do the work.
         items.sort(key=lambda x: (band_rank.get(x["band"], 99), x["name"], x["id"]))
@@ -997,6 +1040,19 @@ def topology():
 
 def _gb(value):
     return round(value / 1024 ** 3, 1) if value else None
+
+
+def _share(value, total):
+    """`value` as a percentage of `total`, clamped to something drawable.
+
+    Capped at 100 because these are drawn as bar widths: a task using more of a
+    resource than the node is supposed to have — which cgroup accounting does
+    produce briefly — must not paint outside its chip. The uncapped figures are
+    in the tooltip.
+    """
+    if not total or not value:
+        return 0
+    return round(min(100.0, value / total * 100), 1)
 
 
 def node(node_id):

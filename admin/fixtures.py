@@ -281,6 +281,14 @@ def _tasks(spec):
             share = {"victoriametrics": (7.5, 10.1), "loki": (5.0, 8.4),
                      "api": (18.0, 12.0), "grafana": (2.5, 3.4),
                      "cache": (10.5, 16.8)}.get(name, (1.5, 2.5))
+            # USED, beside reserved, and deliberately on both sides of it: the
+            # chip's chart exists to make "this reservation is the wrong size"
+            # visible, and a preview where everything sits neatly under its
+            # tick shows the picture without showing the point of it. `cache`
+            # is the live shape — 640MB reserved against 39MB touched.
+            used = {"victoriametrics": (3.1, 8.8, 6.2), "loki": (1.4, 5.9, 11.0),
+                    "api": (9.0, 14.6, 1.2), "grafana": (0.4, 2.2, 0.6),
+                    "cache": (0.9, 1.4, 0.3)}.get(name, (0.5, 1.1, 0.4))
             # Two tags on `api`, one of them on a single replica: a rolling
             # update caught halfway is the state the Map tab exists for, so the
             # preview shows one rather than a uniform fleet.
@@ -295,7 +303,9 @@ def _tasks(spec):
                                  "failed": "bad"}.get(state, "mute"),
                         "cpu_res": int(share[0] / 100 * 4e9),
                         "mem_res": int(share[1] / 100 * 7.6 * 1024 ** 3),
-                        "cpu_share": share[0], "mem_share": share[1]})
+                        "cpu_share": share[0], "mem_share": share[1],
+                        "cpu_used": used[0], "mem_used": used[1],
+                        "disk_used": used[2]})
     out.sort(key=lambda x: (rank.get(x["band"], 99), x["name"], x["id"]))
     return out
 

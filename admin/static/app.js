@@ -576,7 +576,12 @@
     var s = "";
     for (var i = 0; i < tasks.length; i++) {
       var t = tasks[i];
-      s += t.name + "|" + t.key + "|" + t.tone + "|" + t.cpu_share + "|" + t.mem_share + ";";
+      // Usage is in the signature too. It moves on every tick, which is the
+      // point of drawing it — a chip repainted only when its reservation
+      // changed would show a frozen chart under a live label.
+      s += t.name + "|" + t.key + "|" + t.tone + "|" + t.cpu_share + "|" +
+           t.mem_share + "|" + t.cpu_used + "|" + t.mem_used + "|" +
+           t.disk_used + ";";
     }
     return s;
   }
@@ -585,15 +590,35 @@
     var el = document.createElement("span");
     el.className = "slot slot-" + t.key;
     el.tabIndex = 0;
-    // The ring is CPU reserved as a share of this node; the fill behind the
-    // label is memory. Both are set as custom properties so the drawing stays
-    // entirely in the stylesheet.
+    // Five numbers, all shares of THIS node, all set as custom properties so
+    // the drawing stays entirely in the stylesheet — same contract the server
+    // renders `_map.html` under, so the first paint and every repaint after it
+    // cannot disagree about how a chip looks.
     el.style.setProperty("--cpu", t.cpu_share);
     el.style.setProperty("--mem", t.mem_share);
+    el.style.setProperty("--cpu-use", t.cpu_used);
+    el.style.setProperty("--mem-use", t.mem_used);
+    el.style.setProperty("--disk-use", t.disk_used);
     el.setAttribute("data-tip", t.service + " — task " + t.id +
                     " · state: " + t.state +
-                    " · reserves " + t.cpu_share + "% of this node's CPU and " +
-                    t.mem_share + "% of its memory");
+                    "\ncpu " + t.cpu_used + "% used of this node, " +
+                    t.cpu_share + "% reserved" +
+                    "\nmemory " + t.mem_used + "% used, " +
+                    t.mem_share + "% reserved" +
+                    "\ndisk " + t.disk_used + "% used");
+    // The chart, behind the label. Three bands: fill is what the task uses,
+    // the tick is what it reserved. Disk has no tick because Swarm has no
+    // disk reservation to draw one at.
+    var chart = document.createElement("i");
+    chart.className = "slot-chart";
+    chart.setAttribute("aria-hidden", "true");
+    var bands = ["cpu", "mem", "disk"];
+    for (var b = 0; b < bands.length; b++) {
+      var band = document.createElement("b");
+      band.className = "band band-" + bands[b];
+      chart.appendChild(band);
+    }
+    el.appendChild(chart);
     var dot = document.createElement("i");
     dot.className = "dot dot-" + t.tone;      // what it is DOING; the chip tint
     el.appendChild(dot);                      // already says what it IS

@@ -759,23 +759,54 @@ a.tnode.is-link:focus-visible { outline: 2px solid var(--accent); outline-offset
 .dot-bad  { background: var(--bad); }
 .dot-mute { background: var(--text-mute); }
 
-/* The ring is the share of the node's CPU this task reserves; a complete ring
-   means it has claimed the whole machine. Drawn as a conic gradient in the
-   border box, so it follows the chip's rounded corners instead of needing a
-   second element. */
+/* A CHART ON EVERY CHIP: three bands, one per resource, sitting on the type
+   tint and under the name.
+     fill = what this task is USING       tick = what it RESERVED
+   Both are shares of the machine the chip is on, which is what lets one band
+   carry both numbers — they are on the same scale, so "the fill is past the
+   tick" means something without reading either figure.
+   Disk gets no tick: Swarm has no disk reservation to draw one at.
+
+   This replaced a conic-gradient ring for CPU and a linear-gradient fill for
+   memory. Two of the five numbers, in two idioms that could not be compared
+   with each other, and no way to add a third — the border box holds one ring
+   and the padding box one fill, and that is the whole budget. Three elements
+   cost three <b> tags and answer "is this reservation the right size" at a
+   glance, which the ring never could. */
 .slot {
-  --cpu: 0; --mem: 0;
-  border: 2px solid transparent;
-  background:
-    /* memory fill, laid OVER the band tint so the type colour survives */
-    linear-gradient(90deg,
-      color-mix(in srgb, var(--text) 12%, transparent) calc(var(--mem) * 1%),
-      transparent 0) padding-box,
-    linear-gradient(var(--slot-bg, var(--surface-2)), var(--slot-bg, var(--surface-2))) padding-box,
-    conic-gradient(from 180deg,
-      var(--slot-ring, var(--accent)) calc(var(--cpu) * 1%),
-      color-mix(in srgb, var(--line) 70%, transparent) 0) border-box;
+  --cpu: 0; --mem: 0; --cpu-use: 0; --mem-use: 0; --disk-use: 0;
+  position: relative;
+  padding-top: 15px;                     /* the chart's own room, above the name */
+  background: var(--slot-bg, var(--surface-2));
 }
+.slot-chart {
+  position: absolute; left: 7px; right: 9px; top: 4px;
+  display: flex; flex-direction: column; gap: 1px; pointer-events: none;
+}
+.band {
+  position: relative; display: block; height: 3px; border-radius: 2px;
+  background: color-mix(in srgb, var(--line) 55%, transparent);
+}
+/* The fill. `--use` is set per band below rather than repeating this rule
+   three times, so a change to how usage is drawn happens in one place. */
+.band::before {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 0;
+  width: calc(var(--use, 0) * 1%); border-radius: 2px;
+  background: var(--slot-ring, var(--accent));
+}
+/* The reservation tick, standing slightly proud of the band so it reads as a
+   mark ON the scale rather than as more fill. */
+.band::after {
+  content: ""; position: absolute; top: -1px; bottom: -1px;
+  left: calc(var(--res, 0) * 1%); width: 2px; border-radius: 1px;
+  background: color-mix(in srgb, var(--text) 65%, transparent);
+}
+.band-cpu  { --use: var(--cpu-use); --res: var(--cpu); }
+.band-mem  { --use: var(--mem-use); --res: var(--mem); }
+.band-disk { --use: var(--disk-use); }
+.band-disk::after { content: none; }
+.slot.is-empty .slot-chart { display: none; }
+.slot.is-empty { padding-top: 5px; }
 .slot-prod     { --slot-bg: color-mix(in srgb, var(--s-prod) 14%, var(--surface));
                  --slot-ring: var(--s-prod); }
 .slot-staging  { --slot-bg: color-mix(in srgb, var(--s-staging) 14%, var(--surface));

@@ -119,6 +119,78 @@ class StylesheetTest(unittest.TestCase):
         self.assertIn("[hidden] { display: none !important; }", self.code)
 
 
+class TaskChipTest(unittest.TestCase):
+    """
+    The chip's chart is rendered TWICE — by Jinja on first paint and by
+    `app.js` on every poll after it — and nothing in either half fails when
+    they disagree. The chart simply stops moving, or stops existing, five
+    seconds after the page loads, which reads as "the panel is broken" and is
+    invisible to every other test here.
+
+    So the two are pinned against each other: same five custom properties, same
+    three bands, same signature fields in the same order.
+    """
+
+    JS = ADMIN / "static" / "app.js"
+    PROPS = ("--cpu", "--mem", "--cpu-use", "--mem-use", "--disk-use")
+    BANDS = ("band-cpu", "band-mem", "band-disk")
+    #: What `sig()` hashes, in order. A field the server leaves out is a chip
+    #: that never repaints when only that field changed.
+    SIG = ("name", "key", "tone", "cpu_share", "mem_share",
+           "cpu_used", "mem_used", "disk_used")
+
+    def chip_templates(self):
+        return [TEMPLATES / "_overview.html", TEMPLATES / "_map.html"]
+
+    def test_both_templates_draw_the_whole_chart(self):
+        for path in self.chip_templates():
+            body = path.read_text()
+            with self.subTest(template=path.name):
+                for prop in self.PROPS:
+                    self.assertIn(f"{prop}:", body)
+                for band in self.BANDS:
+                    self.assertIn(band, body)
+
+    def test_the_poller_sets_the_same_properties_the_server_does(self):
+        js = self.JS.read_text()
+        for prop in self.PROPS:
+            self.assertIn(f'"{prop}"', js,
+                          f"app.js never sets {prop}, so it vanishes on the "
+                          f"first repaint")
+        for band in self.BANDS:
+            self.assertIn(band.split("-")[1], js)
+
+    def test_the_signature_lists_the_same_fields_on_both_sides(self):
+        js = self.JS.read_text()
+        sig = re.search(r"function sig\(tasks\) \{(.*?)\n  \}", js, re.S)
+        self.assertIsNotNone(sig, "sig() moved; this test cannot check it")
+        rendered = (TEMPLATES / "_overview.html").read_text()
+        marker = re.search(r'data-sig="(.*?)"', rendered, re.S)
+        self.assertIsNotNone(marker)
+        for field in self.SIG:
+            self.assertIn(f"t.{field}", sig.group(1),
+                          f"sig() ignores {field}")
+            self.assertIn(f"t.{field}", marker.group(1),
+                          f"data-sig omits {field}, so the first tick rebuilds "
+                          f"every chip on an unchanged cluster")
+
+    def test_the_chart_is_under_the_name_and_over_the_tint(self):
+        # The whole visual contract in one assertion: the chip is a positioning
+        # context, the chart is absolutely placed inside it, and it takes no
+        # pointer events — the chip's own tooltip has to win over it.
+        css = CSS.read_text()
+        block = re.search(r"\.slot-chart \{(.*?)\}", css, re.S)
+        self.assertIsNotNone(block)
+        self.assertIn("position: absolute", block.group(1))
+        self.assertIn("pointer-events: none", block.group(1))
+
+    def test_disk_has_no_reservation_tick(self):
+        # Swarm has no disk reservation, so a tick there would be a mark at a
+        # number nobody set.
+        css = CSS.read_text()
+        self.assertIn(".band-disk::after { content: none; }", css)
+
+
 class TemplateTest(unittest.TestCase):
     def templates(self):
         return sorted(TEMPLATES.glob("*.html"))

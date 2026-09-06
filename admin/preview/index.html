@@ -799,23 +799,54 @@ a.tnode.is-link:focus-visible { outline: 2px solid var(--accent); outline-offset
 .dot-bad  { background: var(--bad); }
 .dot-mute { background: var(--text-mute); }
 
-/* The ring is the share of the node's CPU this task reserves; a complete ring
-   means it has claimed the whole machine. Drawn as a conic gradient in the
-   border box, so it follows the chip's rounded corners instead of needing a
-   second element. */
+/* A CHART ON EVERY CHIP: three bands, one per resource, sitting on the type
+   tint and under the name.
+     fill = what this task is USING       tick = what it RESERVED
+   Both are shares of the machine the chip is on, which is what lets one band
+   carry both numbers — they are on the same scale, so "the fill is past the
+   tick" means something without reading either figure.
+   Disk gets no tick: Swarm has no disk reservation to draw one at.
+
+   This replaced a conic-gradient ring for CPU and a linear-gradient fill for
+   memory. Two of the five numbers, in two idioms that could not be compared
+   with each other, and no way to add a third — the border box holds one ring
+   and the padding box one fill, and that is the whole budget. Three elements
+   cost three <b> tags and answer "is this reservation the right size" at a
+   glance, which the ring never could. */
 .slot {
-  --cpu: 0; --mem: 0;
-  border: 2px solid transparent;
-  background:
-    /* memory fill, laid OVER the band tint so the type colour survives */
-    linear-gradient(90deg,
-      color-mix(in srgb, var(--text) 12%, transparent) calc(var(--mem) * 1%),
-      transparent 0) padding-box,
-    linear-gradient(var(--slot-bg, var(--surface-2)), var(--slot-bg, var(--surface-2))) padding-box,
-    conic-gradient(from 180deg,
-      var(--slot-ring, var(--accent)) calc(var(--cpu) * 1%),
-      color-mix(in srgb, var(--line) 70%, transparent) 0) border-box;
+  --cpu: 0; --mem: 0; --cpu-use: 0; --mem-use: 0; --disk-use: 0;
+  position: relative;
+  padding-top: 15px;                     /* the chart's own room, above the name */
+  background: var(--slot-bg, var(--surface-2));
 }
+.slot-chart {
+  position: absolute; left: 7px; right: 9px; top: 4px;
+  display: flex; flex-direction: column; gap: 1px; pointer-events: none;
+}
+.band {
+  position: relative; display: block; height: 3px; border-radius: 2px;
+  background: color-mix(in srgb, var(--line) 55%, transparent);
+}
+/* The fill. `--use` is set per band below rather than repeating this rule
+   three times, so a change to how usage is drawn happens in one place. */
+.band::before {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 0;
+  width: calc(var(--use, 0) * 1%); border-radius: 2px;
+  background: var(--slot-ring, var(--accent));
+}
+/* The reservation tick, standing slightly proud of the band so it reads as a
+   mark ON the scale rather than as more fill. */
+.band::after {
+  content: ""; position: absolute; top: -1px; bottom: -1px;
+  left: calc(var(--res, 0) * 1%); width: 2px; border-radius: 1px;
+  background: color-mix(in srgb, var(--text) 65%, transparent);
+}
+.band-cpu  { --use: var(--cpu-use); --res: var(--cpu); }
+.band-mem  { --use: var(--mem-use); --res: var(--mem); }
+.band-disk { --use: var(--disk-use); }
+.band-disk::after { content: none; }
+.slot.is-empty .slot-chart { display: none; }
+.slot.is-empty { padding-top: 5px; }
 .slot-prod     { --slot-bg: color-mix(in srgb, var(--s-prod) 14%, var(--surface));
                  --slot-ring: var(--s-prod); }
 .slot-staging  { --slot-bg: color-mix(in srgb, var(--s-staging) 14%, var(--surface));
@@ -1379,103 +1410,117 @@ details.ca .conn pre { margin: 0; overflow-x: auto; font-size: 11px; line-height
                 <!-- data-sig matches the signature the poller computes, so the first
                      tick on an unchanged cluster rebuilds nothing at all. -->
                 <div class="slots" data-slots
-                     data-sig="cache|data|ok|10.5|16.8;documents|data|ok|1.5|2.5;cloudflared|staging|ok|1.5|2.5;alertmanager|observe|ok|1.5|2.5;cadvisor|observe|ok|1.5|2.5;grafana|observe|ok|2.5|3.4;loki|observe|ok|5.0|8.4;node-exporter|observe|ok|1.5|2.5;redis-exporter|observe|ok|1.5|2.5;victoriametrics|observe|ok|7.5|10.1;vmagent|observe|ok|1.5|2.5;vmalert|observe|ok|1.5|2.5;autoscaler|platform|ok|1.5|2.5;ui|platform|ok|1.5|2.5;">
+                     data-sig="cache|data|ok|10.5|16.8|0.9|1.4|0.3;documents|data|ok|1.5|2.5|0.5|1.1|0.4;cloudflared|staging|ok|1.5|2.5|0.5|1.1|0.4;alertmanager|observe|ok|1.5|2.5|0.5|1.1|0.4;cadvisor|observe|ok|1.5|2.5|0.5|1.1|0.4;grafana|observe|ok|2.5|3.4|0.4|2.2|0.6;loki|observe|ok|5.0|8.4|1.4|5.9|11.0;node-exporter|observe|ok|1.5|2.5|0.5|1.1|0.4;redis-exporter|observe|ok|1.5|2.5|0.5|1.1|0.4;victoriametrics|observe|ok|7.5|10.1|3.1|8.8|6.2;vmagent|observe|ok|1.5|2.5|0.5|1.1|0.4;vmalert|observe|ok|1.5|2.5|0.5|1.1|0.4;autoscaler|platform|ok|1.5|2.5|0.5|1.1|0.4;ui|platform|ok|1.5|2.5|0.5|1.1|0.4;">
                   
                     
                     <span class="slot slot-data" tabindex="0"
-                          style="--cpu:10.5;--mem:16.8"
-                          data-tip="cache_redis-1 — task cache0kd93jf on aichat-master&#10;state: running&#10;reserves 10.5% of this node's CPU, 16.8% of its memory">
+                          style="--cpu:10.5;--mem:16.8;--cpu-use:0.9;--mem-use:1.4;--disk-use:0.3"
+                          data-tip="cache_redis-1 — task cache0kd93jf on aichat-master&#10;state: running&#10;cpu 0.9% used of this node, 10.5% reserved&#10;memory 1.4% used, 16.8% reserved&#10;disk 0.3% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>cache
                     </span>
                   
                     
                     <span class="slot slot-data" tabindex="0"
-                          style="--cpu:1.5;--mem:2.5"
-                          data-tip="documents_mongo-1 — task docume0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                          style="--cpu:1.5;--mem:2.5;--cpu-use:0.5;--mem-use:1.1;--disk-use:0.4"
+                          data-tip="documents_mongo-1 — task docume0kd93j on aichat-master&#10;state: running&#10;cpu 0.5% used of this node, 1.5% reserved&#10;memory 1.1% used, 2.5% reserved&#10;disk 0.4% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>documents
                     </span>
                   
                     
                     <span class="slot slot-staging" tabindex="0"
-                          style="--cpu:1.5;--mem:2.5"
-                          data-tip="ingress_cloudflared — task cloudf0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                          style="--cpu:1.5;--mem:2.5;--cpu-use:0.5;--mem-use:1.1;--disk-use:0.4"
+                          data-tip="ingress_cloudflared — task cloudf0kd93j on aichat-master&#10;state: running&#10;cpu 0.5% used of this node, 1.5% reserved&#10;memory 1.1% used, 2.5% reserved&#10;disk 0.4% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>cloudflared
                     </span>
                   
                     
                     <span class="slot slot-observe" tabindex="0"
-                          style="--cpu:1.5;--mem:2.5"
-                          data-tip="monitoring_alertmanager — task alertm0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                          style="--cpu:1.5;--mem:2.5;--cpu-use:0.5;--mem-use:1.1;--disk-use:0.4"
+                          data-tip="monitoring_alertmanager — task alertm0kd93j on aichat-master&#10;state: running&#10;cpu 0.5% used of this node, 1.5% reserved&#10;memory 1.1% used, 2.5% reserved&#10;disk 0.4% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>alertmanager
                     </span>
                   
                     
                     <span class="slot slot-observe" tabindex="0"
-                          style="--cpu:1.5;--mem:2.5"
-                          data-tip="monitoring_cadvisor — task cadvis0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                          style="--cpu:1.5;--mem:2.5;--cpu-use:0.5;--mem-use:1.1;--disk-use:0.4"
+                          data-tip="monitoring_cadvisor — task cadvis0kd93j on aichat-master&#10;state: running&#10;cpu 0.5% used of this node, 1.5% reserved&#10;memory 1.1% used, 2.5% reserved&#10;disk 0.4% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>cadvisor
                     </span>
                   
                     
                     <span class="slot slot-observe" tabindex="0"
-                          style="--cpu:2.5;--mem:3.4"
-                          data-tip="monitoring_grafana — task grafan0kd93j on aichat-master&#10;state: running&#10;reserves 2.5% of this node's CPU, 3.4% of its memory">
+                          style="--cpu:2.5;--mem:3.4;--cpu-use:0.4;--mem-use:2.2;--disk-use:0.6"
+                          data-tip="monitoring_grafana — task grafan0kd93j on aichat-master&#10;state: running&#10;cpu 0.4% used of this node, 2.5% reserved&#10;memory 2.2% used, 3.4% reserved&#10;disk 0.6% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>grafana
                     </span>
                   
                     
                     <span class="slot slot-observe" tabindex="0"
-                          style="--cpu:5.0;--mem:8.4"
-                          data-tip="monitoring_loki — task loki0kd93jf0 on aichat-master&#10;state: running&#10;reserves 5.0% of this node's CPU, 8.4% of its memory">
+                          style="--cpu:5.0;--mem:8.4;--cpu-use:1.4;--mem-use:5.9;--disk-use:11.0"
+                          data-tip="monitoring_loki — task loki0kd93jf0 on aichat-master&#10;state: running&#10;cpu 1.4% used of this node, 5.0% reserved&#10;memory 5.9% used, 8.4% reserved&#10;disk 11.0% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>loki
                     </span>
                   
                     
                     <span class="slot slot-observe" tabindex="0"
-                          style="--cpu:1.5;--mem:2.5"
-                          data-tip="monitoring_node-exporter — task node-e0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                          style="--cpu:1.5;--mem:2.5;--cpu-use:0.5;--mem-use:1.1;--disk-use:0.4"
+                          data-tip="monitoring_node-exporter — task node-e0kd93j on aichat-master&#10;state: running&#10;cpu 0.5% used of this node, 1.5% reserved&#10;memory 1.1% used, 2.5% reserved&#10;disk 0.4% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>node-exporter
                     </span>
                   
                     
                     <span class="slot slot-observe" tabindex="0"
-                          style="--cpu:1.5;--mem:2.5"
-                          data-tip="monitoring_redis-exporter — task redis-0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                          style="--cpu:1.5;--mem:2.5;--cpu-use:0.5;--mem-use:1.1;--disk-use:0.4"
+                          data-tip="monitoring_redis-exporter — task redis-0kd93j on aichat-master&#10;state: running&#10;cpu 0.5% used of this node, 1.5% reserved&#10;memory 1.1% used, 2.5% reserved&#10;disk 0.4% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>redis-exporter
                     </span>
                   
                     
                     <span class="slot slot-observe" tabindex="0"
-                          style="--cpu:7.5;--mem:10.1"
-                          data-tip="monitoring_victoriametrics — task victor0kd93j on aichat-master&#10;state: running&#10;reserves 7.5% of this node's CPU, 10.1% of its memory">
+                          style="--cpu:7.5;--mem:10.1;--cpu-use:3.1;--mem-use:8.8;--disk-use:6.2"
+                          data-tip="monitoring_victoriametrics — task victor0kd93j on aichat-master&#10;state: running&#10;cpu 3.1% used of this node, 7.5% reserved&#10;memory 8.8% used, 10.1% reserved&#10;disk 6.2% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>victoriametrics
                     </span>
                   
                     
                     <span class="slot slot-observe" tabindex="0"
-                          style="--cpu:1.5;--mem:2.5"
-                          data-tip="monitoring_vmagent — task vmagen0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                          style="--cpu:1.5;--mem:2.5;--cpu-use:0.5;--mem-use:1.1;--disk-use:0.4"
+                          data-tip="monitoring_vmagent — task vmagen0kd93j on aichat-master&#10;state: running&#10;cpu 0.5% used of this node, 1.5% reserved&#10;memory 1.1% used, 2.5% reserved&#10;disk 0.4% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>vmagent
                     </span>
                   
                     
                     <span class="slot slot-observe" tabindex="0"
-                          style="--cpu:1.5;--mem:2.5"
-                          data-tip="monitoring_vmalert — task vmaler0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                          style="--cpu:1.5;--mem:2.5;--cpu-use:0.5;--mem-use:1.1;--disk-use:0.4"
+                          data-tip="monitoring_vmalert — task vmaler0kd93j on aichat-master&#10;state: running&#10;cpu 0.5% used of this node, 1.5% reserved&#10;memory 1.1% used, 2.5% reserved&#10;disk 0.4% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>vmalert
                     </span>
                   
                     
                     <span class="slot slot-platform" tabindex="0"
-                          style="--cpu:1.5;--mem:2.5"
-                          data-tip="monitoring_autoscaler — task autosc0kd93j on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                          style="--cpu:1.5;--mem:2.5;--cpu-use:0.5;--mem-use:1.1;--disk-use:0.4"
+                          data-tip="monitoring_autoscaler — task autosc0kd93j on aichat-master&#10;state: running&#10;cpu 0.5% used of this node, 1.5% reserved&#10;memory 1.1% used, 2.5% reserved&#10;disk 0.4% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>autoscaler
                     </span>
                   
                     
                     <span class="slot slot-platform" tabindex="0"
-                          style="--cpu:1.5;--mem:2.5"
-                          data-tip="admin_ui — task ui0kd93jf01 on aichat-master&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                          style="--cpu:1.5;--mem:2.5;--cpu-use:0.5;--mem-use:1.1;--disk-use:0.4"
+                          data-tip="admin_ui — task ui0kd93jf01 on aichat-master&#10;state: running&#10;cpu 0.5% used of this node, 1.5% reserved&#10;memory 1.1% used, 2.5% reserved&#10;disk 0.4% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>ui
                     </span>
                   
@@ -1511,47 +1556,53 @@ details.ca .conn pre { margin: 0; overflow-x: auto; font-size: 11px; line-height
                 <!-- data-sig matches the signature the poller computes, so the first
                      tick on an unchanged cluster rebuilds nothing at all. -->
                 <div class="slots" data-slots
-                     data-sig="api|prod|ok|18.0|12.0;api|prod|ok|18.0|12.0;api|prod|warn|18.0|12.0;cloudflared|staging|ok|1.5|2.5;cadvisor|observe|ok|1.5|2.5;node-exporter|observe|ok|1.5|2.5;">
+                     data-sig="api|prod|ok|18.0|12.0|9.0|14.6|1.2;api|prod|ok|18.0|12.0|9.0|14.6|1.2;api|prod|warn|18.0|12.0|9.0|14.6|1.2;cloudflared|staging|ok|1.5|2.5|0.5|1.1|0.4;cadvisor|observe|ok|1.5|2.5|0.5|1.1|0.4;node-exporter|observe|ok|1.5|2.5|0.5|1.1|0.4;">
                   
                     
                     <span class="slot slot-prod" tabindex="0"
-                          style="--cpu:18.0;--mem:12.0"
-                          data-tip="api_app — task api0kd93jf01 on aichat-worker-1754812203&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
+                          style="--cpu:18.0;--mem:12.0;--cpu-use:9.0;--mem-use:14.6;--disk-use:1.2"
+                          data-tip="api_app — task api0kd93jf01 on aichat-worker-1754812203&#10;state: running&#10;cpu 9.0% used of this node, 18.0% reserved&#10;memory 14.6% used, 12.0% reserved&#10;disk 1.2% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>api
                     </span>
                   
                     
                     <span class="slot slot-prod" tabindex="0"
-                          style="--cpu:18.0;--mem:12.0"
-                          data-tip="api_app — task api1kd93jf01 on aichat-worker-1754812203&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
+                          style="--cpu:18.0;--mem:12.0;--cpu-use:9.0;--mem-use:14.6;--disk-use:1.2"
+                          data-tip="api_app — task api1kd93jf01 on aichat-worker-1754812203&#10;state: running&#10;cpu 9.0% used of this node, 18.0% reserved&#10;memory 14.6% used, 12.0% reserved&#10;disk 1.2% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>api
                     </span>
                   
                     
                     <span class="slot slot-prod" tabindex="0"
-                          style="--cpu:18.0;--mem:12.0"
-                          data-tip="api_app — task api2kd93jf01 on aichat-worker-1754812203&#10;state: starting&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
+                          style="--cpu:18.0;--mem:12.0;--cpu-use:9.0;--mem-use:14.6;--disk-use:1.2"
+                          data-tip="api_app — task api2kd93jf01 on aichat-worker-1754812203&#10;state: starting&#10;cpu 9.0% used of this node, 18.0% reserved&#10;memory 14.6% used, 12.0% reserved&#10;disk 1.2% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-warn" aria-hidden="true"></i>api
                     </span>
                   
                     
                     <span class="slot slot-staging" tabindex="0"
-                          style="--cpu:1.5;--mem:2.5"
-                          data-tip="ingress_cloudflared — task cloudf0kd93j on aichat-worker-1754812203&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                          style="--cpu:1.5;--mem:2.5;--cpu-use:0.5;--mem-use:1.1;--disk-use:0.4"
+                          data-tip="ingress_cloudflared — task cloudf0kd93j on aichat-worker-1754812203&#10;state: running&#10;cpu 0.5% used of this node, 1.5% reserved&#10;memory 1.1% used, 2.5% reserved&#10;disk 0.4% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>cloudflared
                     </span>
                   
                     
                     <span class="slot slot-observe" tabindex="0"
-                          style="--cpu:1.5;--mem:2.5"
-                          data-tip="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754812203&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                          style="--cpu:1.5;--mem:2.5;--cpu-use:0.5;--mem-use:1.1;--disk-use:0.4"
+                          data-tip="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754812203&#10;state: running&#10;cpu 0.5% used of this node, 1.5% reserved&#10;memory 1.1% used, 2.5% reserved&#10;disk 0.4% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>cadvisor
                     </span>
                   
                     
                     <span class="slot slot-observe" tabindex="0"
-                          style="--cpu:1.5;--mem:2.5"
-                          data-tip="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754812203&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                          style="--cpu:1.5;--mem:2.5;--cpu-use:0.5;--mem-use:1.1;--disk-use:0.4"
+                          data-tip="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754812203&#10;state: running&#10;cpu 0.5% used of this node, 1.5% reserved&#10;memory 1.1% used, 2.5% reserved&#10;disk 0.4% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>node-exporter
                     </span>
                   
@@ -1587,47 +1638,53 @@ details.ca .conn pre { margin: 0; overflow-x: auto; font-size: 11px; line-height
                 <!-- data-sig matches the signature the poller computes, so the first
                      tick on an unchanged cluster rebuilds nothing at all. -->
                 <div class="slots" data-slots
-                     data-sig="api|prod|ok|18.0|12.0;api|prod|ok|18.0|12.0;api-staging|prod|bad|1.5|2.5;cloudflared|staging|ok|1.5|2.5;cadvisor|observe|ok|1.5|2.5;node-exporter|observe|ok|1.5|2.5;">
+                     data-sig="api|prod|ok|18.0|12.0|9.0|14.6|1.2;api|prod|ok|18.0|12.0|9.0|14.6|1.2;api-staging|prod|bad|1.5|2.5|0.5|1.1|0.4;cloudflared|staging|ok|1.5|2.5|0.5|1.1|0.4;cadvisor|observe|ok|1.5|2.5|0.5|1.1|0.4;node-exporter|observe|ok|1.5|2.5|0.5|1.1|0.4;">
                   
                     
                     <span class="slot slot-prod" tabindex="0"
-                          style="--cpu:18.0;--mem:12.0"
-                          data-tip="api_app — task api0kd93jf01 on aichat-worker-1754819114&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
+                          style="--cpu:18.0;--mem:12.0;--cpu-use:9.0;--mem-use:14.6;--disk-use:1.2"
+                          data-tip="api_app — task api0kd93jf01 on aichat-worker-1754819114&#10;state: running&#10;cpu 9.0% used of this node, 18.0% reserved&#10;memory 14.6% used, 12.0% reserved&#10;disk 1.2% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>api
                     </span>
                   
                     
                     <span class="slot slot-prod" tabindex="0"
-                          style="--cpu:18.0;--mem:12.0"
-                          data-tip="api_app — task api1kd93jf01 on aichat-worker-1754819114&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
+                          style="--cpu:18.0;--mem:12.0;--cpu-use:9.0;--mem-use:14.6;--disk-use:1.2"
+                          data-tip="api_app — task api1kd93jf01 on aichat-worker-1754819114&#10;state: running&#10;cpu 9.0% used of this node, 18.0% reserved&#10;memory 14.6% used, 12.0% reserved&#10;disk 1.2% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>api
                     </span>
                   
                     
                     <span class="slot slot-prod" tabindex="0"
-                          style="--cpu:1.5;--mem:2.5"
-                          data-tip="api-staging_app — task api-st0kd93j on aichat-worker-1754819114&#10;state: failed&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                          style="--cpu:1.5;--mem:2.5;--cpu-use:0.5;--mem-use:1.1;--disk-use:0.4"
+                          data-tip="api-staging_app — task api-st0kd93j on aichat-worker-1754819114&#10;state: failed&#10;cpu 0.5% used of this node, 1.5% reserved&#10;memory 1.1% used, 2.5% reserved&#10;disk 0.4% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-bad" aria-hidden="true"></i>api-staging
                     </span>
                   
                     
                     <span class="slot slot-staging" tabindex="0"
-                          style="--cpu:1.5;--mem:2.5"
-                          data-tip="ingress_cloudflared — task cloudf0kd93j on aichat-worker-1754819114&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                          style="--cpu:1.5;--mem:2.5;--cpu-use:0.5;--mem-use:1.1;--disk-use:0.4"
+                          data-tip="ingress_cloudflared — task cloudf0kd93j on aichat-worker-1754819114&#10;state: running&#10;cpu 0.5% used of this node, 1.5% reserved&#10;memory 1.1% used, 2.5% reserved&#10;disk 0.4% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>cloudflared
                     </span>
                   
                     
                     <span class="slot slot-observe" tabindex="0"
-                          style="--cpu:1.5;--mem:2.5"
-                          data-tip="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754819114&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                          style="--cpu:1.5;--mem:2.5;--cpu-use:0.5;--mem-use:1.1;--disk-use:0.4"
+                          data-tip="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754819114&#10;state: running&#10;cpu 0.5% used of this node, 1.5% reserved&#10;memory 1.1% used, 2.5% reserved&#10;disk 0.4% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>cadvisor
                     </span>
                   
                     
                     <span class="slot slot-observe" tabindex="0"
-                          style="--cpu:1.5;--mem:2.5"
-                          data-tip="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754819114&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                          style="--cpu:1.5;--mem:2.5;--cpu-use:0.5;--mem-use:1.1;--disk-use:0.4"
+                          data-tip="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754819114&#10;state: running&#10;cpu 0.5% used of this node, 1.5% reserved&#10;memory 1.1% used, 2.5% reserved&#10;disk 0.4% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>node-exporter
                     </span>
                   
@@ -1663,26 +1720,29 @@ details.ca .conn pre { margin: 0; overflow-x: auto; font-size: 11px; line-height
                 <!-- data-sig matches the signature the poller computes, so the first
                      tick on an unchanged cluster rebuilds nothing at all. -->
                 <div class="slots" data-slots
-                     data-sig="api|prod|ok|18.0|12.0;cadvisor|observe|ok|1.5|2.5;node-exporter|observe|ok|1.5|2.5;">
+                     data-sig="api|prod|ok|18.0|12.0|9.0|14.6|1.2;cadvisor|observe|ok|1.5|2.5|0.5|1.1|0.4;node-exporter|observe|ok|1.5|2.5|0.5|1.1|0.4;">
                   
                     
                     <span class="slot slot-prod" tabindex="0"
-                          style="--cpu:18.0;--mem:12.0"
-                          data-tip="api_app — task api0kd93jf01 on aichat-worker-1754823887&#10;state: running&#10;reserves 18.0% of this node's CPU, 12.0% of its memory">
+                          style="--cpu:18.0;--mem:12.0;--cpu-use:9.0;--mem-use:14.6;--disk-use:1.2"
+                          data-tip="api_app — task api0kd93jf01 on aichat-worker-1754823887&#10;state: running&#10;cpu 9.0% used of this node, 18.0% reserved&#10;memory 14.6% used, 12.0% reserved&#10;disk 1.2% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>api
                     </span>
                   
                     
                     <span class="slot slot-observe" tabindex="0"
-                          style="--cpu:1.5;--mem:2.5"
-                          data-tip="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754823887&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                          style="--cpu:1.5;--mem:2.5;--cpu-use:0.5;--mem-use:1.1;--disk-use:0.4"
+                          data-tip="monitoring_cadvisor — task cadvis0kd93j on aichat-worker-1754823887&#10;state: running&#10;cpu 0.5% used of this node, 1.5% reserved&#10;memory 1.1% used, 2.5% reserved&#10;disk 0.4% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>cadvisor
                     </span>
                   
                     
                     <span class="slot slot-observe" tabindex="0"
-                          style="--cpu:1.5;--mem:2.5"
-                          data-tip="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754823887&#10;state: running&#10;reserves 1.5% of this node's CPU, 2.5% of its memory">
+                          style="--cpu:1.5;--mem:2.5;--cpu-use:0.5;--mem-use:1.1;--disk-use:0.4"
+                          data-tip="monitoring_node-exporter — task node-e0kd93j on aichat-worker-1754823887&#10;state: running&#10;cpu 0.5% used of this node, 1.5% reserved&#10;memory 1.1% used, 2.5% reserved&#10;disk 0.4% used">
+                      <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                       <i class="dot dot-ok" aria-hidden="true"></i>node-exporter
                     </span>
                   
@@ -2567,7 +2627,7 @@ details.ca .conn pre { margin: 0; overflow-x: auto; font-size: 11px; line-height
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-06T08:36:15Z" data-localtime>2026-09-06T08:36:15Z</time>
+          <time datetime="2026-09-06T14:11:17Z" data-localtime>2026-09-06T14:11:17Z</time>
           
         </div>
       </div>
@@ -3075,21 +3135,27 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
 
             <div class="slots">
               
+                
                 <span class="slot slot-staging" tabindex="0"
-                      style="--cpu:18.0;--mem:12.0"
-                      data-tip="ghcr.io/acme/aichat-api:sha-c40e8b7&#10;task api0kd93jf01 on aichat-worker-1754812203&#10;state: running">
+                      style="--cpu:18.0;--mem:12.0;--cpu-use:9.0;--mem-use:14.6;--disk-use:1.2"
+                      data-tip="ghcr.io/acme/aichat-api:sha-c40e8b7&#10;task api0kd93jf01 on aichat-worker-1754812203&#10;state: running&#10;cpu 9.0% used of this node, 18.0% reserved&#10;memory 14.6% used, 12.0% reserved&#10;disk 1.2% used">
+                  <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                   <i class="dot dot-ok" aria-hidden="true"></i>sha-c40e8b7
                 </span>
               
+                
                 <span class="slot slot-prod" tabindex="0"
-                      style="--cpu:18.0;--mem:12.0"
-                      data-tip="ghcr.io/acme/aichat-api:sha-9f3ac21&#10;task api1kd93jf01 on aichat-worker-1754812203&#10;state: running">
+                      style="--cpu:18.0;--mem:12.0;--cpu-use:9.0;--mem-use:14.6;--disk-use:1.2"
+                      data-tip="ghcr.io/acme/aichat-api:sha-9f3ac21&#10;task api1kd93jf01 on aichat-worker-1754812203&#10;state: running&#10;cpu 9.0% used of this node, 18.0% reserved&#10;memory 14.6% used, 12.0% reserved&#10;disk 1.2% used">
+                  <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                   <i class="dot dot-ok" aria-hidden="true"></i>sha-9f3ac21
                 </span>
               
+                
                 <span class="slot slot-prod" tabindex="0"
-                      style="--cpu:18.0;--mem:12.0"
-                      data-tip="ghcr.io/acme/aichat-api:sha-9f3ac21&#10;task api2kd93jf01 on aichat-worker-1754812203&#10;state: starting">
+                      style="--cpu:18.0;--mem:12.0;--cpu-use:9.0;--mem-use:14.6;--disk-use:1.2"
+                      data-tip="ghcr.io/acme/aichat-api:sha-9f3ac21&#10;task api2kd93jf01 on aichat-worker-1754812203&#10;state: starting&#10;cpu 9.0% used of this node, 18.0% reserved&#10;memory 14.6% used, 12.0% reserved&#10;disk 1.2% used">
+                  <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                   <i class="dot dot-warn" aria-hidden="true"></i>sha-9f3ac21
                 </span>
               
@@ -3111,15 +3177,19 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
 
             <div class="slots">
               
+                
                 <span class="slot slot-staging" tabindex="0"
-                      style="--cpu:18.0;--mem:12.0"
-                      data-tip="ghcr.io/acme/aichat-api:sha-c40e8b7&#10;task api0kd93jf01 on aichat-worker-1754819114&#10;state: running">
+                      style="--cpu:18.0;--mem:12.0;--cpu-use:9.0;--mem-use:14.6;--disk-use:1.2"
+                      data-tip="ghcr.io/acme/aichat-api:sha-c40e8b7&#10;task api0kd93jf01 on aichat-worker-1754819114&#10;state: running&#10;cpu 9.0% used of this node, 18.0% reserved&#10;memory 14.6% used, 12.0% reserved&#10;disk 1.2% used">
+                  <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                   <i class="dot dot-ok" aria-hidden="true"></i>sha-c40e8b7
                 </span>
               
+                
                 <span class="slot slot-prod" tabindex="0"
-                      style="--cpu:18.0;--mem:12.0"
-                      data-tip="ghcr.io/acme/aichat-api:sha-9f3ac21&#10;task api1kd93jf01 on aichat-worker-1754819114&#10;state: running">
+                      style="--cpu:18.0;--mem:12.0;--cpu-use:9.0;--mem-use:14.6;--disk-use:1.2"
+                      data-tip="ghcr.io/acme/aichat-api:sha-9f3ac21&#10;task api1kd93jf01 on aichat-worker-1754819114&#10;state: running&#10;cpu 9.0% used of this node, 18.0% reserved&#10;memory 14.6% used, 12.0% reserved&#10;disk 1.2% used">
+                  <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                   <i class="dot dot-ok" aria-hidden="true"></i>sha-9f3ac21
                 </span>
               
@@ -3141,9 +3211,11 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
 
             <div class="slots">
               
+                
                 <span class="slot slot-staging" tabindex="0"
-                      style="--cpu:18.0;--mem:12.0"
-                      data-tip="ghcr.io/acme/aichat-api:sha-c40e8b7&#10;task api0kd93jf01 on aichat-worker-1754823887&#10;state: running">
+                      style="--cpu:18.0;--mem:12.0;--cpu-use:9.0;--mem-use:14.6;--disk-use:1.2"
+                      data-tip="ghcr.io/acme/aichat-api:sha-c40e8b7&#10;task api0kd93jf01 on aichat-worker-1754823887&#10;state: running&#10;cpu 9.0% used of this node, 18.0% reserved&#10;memory 14.6% used, 12.0% reserved&#10;disk 1.2% used">
+                  <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                   <i class="dot dot-ok" aria-hidden="true"></i>sha-c40e8b7
                 </span>
               
@@ -3985,7 +4057,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-06T08:36:15Z" data-localtime>2026-09-06T08:36:15Z</time>
+          <time datetime="2026-09-06T14:11:17Z" data-localtime>2026-09-06T14:11:17Z</time>
           
         </div>
       </div>
@@ -4454,9 +4526,11 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
             <div class="slots">
               
+                
                 <span class="slot slot-prod" tabindex="0"
-                      style="--cpu:1.5;--mem:2.5"
-                      data-tip="ghcr.io/acme/aichat-api:sha-c40e8b7&#10;task api-st0kd93j on aichat-worker-1754819114&#10;state: failed">
+                      style="--cpu:1.5;--mem:2.5;--cpu-use:0.5;--mem-use:1.1;--disk-use:0.4"
+                      data-tip="ghcr.io/acme/aichat-api:sha-c40e8b7&#10;task api-st0kd93j on aichat-worker-1754819114&#10;state: failed&#10;cpu 0.5% used of this node, 1.5% reserved&#10;memory 1.1% used, 2.5% reserved&#10;disk 0.4% used">
+                  <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                   <i class="dot dot-bad" aria-hidden="true"></i>sha-c40e8b7
                 </span>
               
@@ -5316,7 +5390,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-06T08:36:15Z" data-localtime>2026-09-06T08:36:15Z</time>
+          <time datetime="2026-09-06T14:11:17Z" data-localtime>2026-09-06T14:11:17Z</time>
           
         </div>
       </div>
@@ -5548,9 +5622,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis+sentinel://default:936cdc6575f167669123c6776abb2d62a9c9b9b2fba14293@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
+              <code>redis+sentinel://default:c73420028f7ee2a7532ab6791580284cb37f50f5b0a24e0b@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis+sentinel://default:936cdc6575f167669123c6776abb2d62a9c9b9b2fba14293@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
+                      data-copy-text="redis+sentinel://default:c73420028f7ee2a7532ab6791580284cb37f50f5b0a24e0b@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -5561,7 +5635,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="936cdc6575f167669123c6776abb2d62a9c9b9b2fba14293">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="c73420028f7ee2a7532ab6791580284cb37f50f5b0a24e0b">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -5627,9 +5701,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
             <div class="eyebrow">3 &middot; Point your application at this</div>
             
             <div class="conn">
-              <code>redis://default:936cdc6575f167669123c6776abb2d62a9c9b9b2fba14293@127.0.0.1:6379</code>
+              <code>redis://default:c73420028f7ee2a7532ab6791580284cb37f50f5b0a24e0b@127.0.0.1:6379</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis://default:936cdc6575f167669123c6776abb2d62a9c9b9b2fba14293@127.0.0.1:6379">Copy</button>
+                      data-copy-text="redis://default:c73420028f7ee2a7532ab6791580284cb37f50f5b0a24e0b@127.0.0.1:6379">Copy</button>
             </div>
             
             <p class="hint">Your application talks to the helper from step 2, which is running beside it and listening on this port; the helper carries the traffic through the tunnel. That is why this is a local address and not the hostname.</p>
@@ -5758,9 +5832,11 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
 
             <div class="slots">
               
+                
                 <span class="slot slot-prod" tabindex="0"
-                      style="--cpu:10.5;--mem:16.8"
-                      data-tip="redis:7.4-alpine&#10;task cache0kd93jf on aichat-master&#10;state: running">
+                      style="--cpu:10.5;--mem:16.8;--cpu-use:0.9;--mem-use:1.4;--disk-use:0.3"
+                      data-tip="redis:7.4-alpine&#10;task cache0kd93jf on aichat-master&#10;state: running&#10;cpu 0.9% used of this node, 10.5% reserved&#10;memory 1.4% used, 16.8% reserved&#10;disk 0.3% used">
+                  <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                   <i class="dot dot-ok" aria-hidden="true"></i>7.4-alpine
                 </span>
               
@@ -6499,7 +6575,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-06T08:36:15Z" data-localtime>2026-09-06T08:36:15Z</time>
+          <time datetime="2026-09-06T14:11:17Z" data-localtime>2026-09-06T14:11:17Z</time>
           
         </div>
       </div>
@@ -6719,9 +6795,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>mongodb://root:020d05df6419a3ae6eee42b23245843650c90907cd3146c5@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
+              <code>mongodb://root:f2547d61681d13eaf603724a20afaade40809f249bd1f435@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:020d05df6419a3ae6eee42b23245843650c90907cd3146c5@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
+                      data-copy-text="mongodb://root:f2547d61681d13eaf603724a20afaade40809f249bd1f435@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -6732,7 +6808,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="020d05df6419a3ae6eee42b23245843650c90907cd3146c5">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="f2547d61681d13eaf603724a20afaade40809f249bd1f435">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -6804,9 +6880,9 @@ Without that, a user can save a row and not see it on the next page load, and no
             <div class="eyebrow">3 &middot; Point your application at this</div>
             
             <div class="conn">
-              <code>mongodb://root:020d05df6419a3ae6eee42b23245843650c90907cd3146c5@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority</code>
+              <code>mongodb://root:f2547d61681d13eaf603724a20afaade40809f249bd1f435@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:020d05df6419a3ae6eee42b23245843650c90907cd3146c5@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority">Copy</button>
+                      data-copy-text="mongodb://root:f2547d61681d13eaf603724a20afaade40809f249bd1f435@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority">Copy</button>
             </div>
             
             <p class="hint">Your application talks to the helper from step 2, which is running beside it and listening on this port; the helper carries the traffic through the tunnel. That is why this is a local address and not the hostname.</p>
@@ -6937,9 +7013,11 @@ Without that, a user can save a row and not see it on the next page load, and no
 
             <div class="slots">
               
+                
                 <span class="slot slot-secondary" tabindex="0"
-                      style="--cpu:1.5;--mem:2.5"
-                      data-tip="mongo:7.0&#10;task docume0kd93j on aichat-master&#10;state: running">
+                      style="--cpu:1.5;--mem:2.5;--cpu-use:0.5;--mem-use:1.1;--disk-use:0.4"
+                      data-tip="mongo:7.0&#10;task docume0kd93j on aichat-master&#10;state: running&#10;cpu 0.5% used of this node, 1.5% reserved&#10;memory 1.1% used, 2.5% reserved&#10;disk 0.4% used">
+                  <i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
                   <i class="dot dot-ok" aria-hidden="true"></i>SECONDARY
                 </span>
               
@@ -10988,7 +11066,7 @@ Without that, a user can save a row and not see it on the next page load, and no
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788680175.403677" data-localtime-epoch>1788680175</time>
+              <time datetime="1788700277.442323" data-localtime-epoch>1788700277</time>
             
           </td>
           <td>
@@ -11680,7 +11758,7 @@ Without that, a user can save a row and not see it on the next page load, and no
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788680175.403677" data-localtime-epoch>1788680175</time>
+              <time datetime="1788700277.442323" data-localtime-epoch>1788700277</time>
             
           </td>
           <td>
@@ -13292,7 +13370,12 @@ Without that, a user can save a row and not see it on the next page load, and no
     var s = "";
     for (var i = 0; i < tasks.length; i++) {
       var t = tasks[i];
-      s += t.name + "|" + t.key + "|" + t.tone + "|" + t.cpu_share + "|" + t.mem_share + ";";
+      // Usage is in the signature too. It moves on every tick, which is the
+      // point of drawing it — a chip repainted only when its reservation
+      // changed would show a frozen chart under a live label.
+      s += t.name + "|" + t.key + "|" + t.tone + "|" + t.cpu_share + "|" +
+           t.mem_share + "|" + t.cpu_used + "|" + t.mem_used + "|" +
+           t.disk_used + ";";
     }
     return s;
   }
@@ -13301,15 +13384,35 @@ Without that, a user can save a row and not see it on the next page load, and no
     var el = document.createElement("span");
     el.className = "slot slot-" + t.key;
     el.tabIndex = 0;
-    // The ring is CPU reserved as a share of this node; the fill behind the
-    // label is memory. Both are set as custom properties so the drawing stays
-    // entirely in the stylesheet.
+    // Five numbers, all shares of THIS node, all set as custom properties so
+    // the drawing stays entirely in the stylesheet — same contract the server
+    // renders `_map.html` under, so the first paint and every repaint after it
+    // cannot disagree about how a chip looks.
     el.style.setProperty("--cpu", t.cpu_share);
     el.style.setProperty("--mem", t.mem_share);
+    el.style.setProperty("--cpu-use", t.cpu_used);
+    el.style.setProperty("--mem-use", t.mem_used);
+    el.style.setProperty("--disk-use", t.disk_used);
     el.setAttribute("data-tip", t.service + " — task " + t.id +
                     " · state: " + t.state +
-                    " · reserves " + t.cpu_share + "% of this node's CPU and " +
-                    t.mem_share + "% of its memory");
+                    "\ncpu " + t.cpu_used + "% used of this node, " +
+                    t.cpu_share + "% reserved" +
+                    "\nmemory " + t.mem_used + "% used, " +
+                    t.mem_share + "% reserved" +
+                    "\ndisk " + t.disk_used + "% used");
+    // The chart, behind the label. Three bands: fill is what the task uses,
+    // the tick is what it reserved. Disk has no tick because Swarm has no
+    // disk reservation to draw one at.
+    var chart = document.createElement("i");
+    chart.className = "slot-chart";
+    chart.setAttribute("aria-hidden", "true");
+    var bands = ["cpu", "mem", "disk"];
+    for (var b = 0; b < bands.length; b++) {
+      var band = document.createElement("b");
+      band.className = "band band-" + bands[b];
+      chart.appendChild(band);
+    }
+    el.appendChild(chart);
     var dot = document.createElement("i");
     dot.className = "dot dot-" + t.tone;      // what it is DOING; the chip tint
     el.appendChild(dot);                      // already says what it IS
