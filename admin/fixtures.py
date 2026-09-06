@@ -632,8 +632,10 @@ _RANGES = {
         ("api_app", "media.example.net"): _wave(121, 40),
         ("api_app", "documents"): _wave(18, 6, phase=1),
         ("api_app", "unmeasured"): _wave(44, 12, phase=2),
-        ("web_app", "queue.vendor.example"): _wave(21, 8),
-        ("web_app", "unmeasured"): _wave(88, 20, phase=3),
+        # No `unmeasured` on this one on purpose: its timed calls already
+        # account for everything measured, which is an ordinary shape and the
+        # one a preview showing only tidy cases would hide.
+        ("web_app", "queue.vendor.example"): _wave(96, 20),
     },
 }
 for _name, _expr in shape.Q_UTILISATION:

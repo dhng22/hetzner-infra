@@ -298,16 +298,23 @@ class RequestCompositionTest(unittest.TestCase):
         self.assertEqual(D.request_composition([D.Watched(service())], {})["api_app"],
                          [(classify.CAUSE_LOCAL, D.UNMEASURED, 200.0)])
 
-    def test_concurrent_calls_cannot_push_the_remainder_below_zero(self):
-        # Two 200ms calls in parallel cost one request 200ms of wall-clock and
-        # 400ms of dependency time. Floored, and the card says so; the
-        # alternative is a picture that silently rescales itself.
+    def test_calls_that_overrun_the_request_leave_no_remainder(self):
+        """
+        400ms of timed calls inside a 200ms average request. `_sum` on a client
+        timer is CALL DURATION, so summing it counts concurrent work: five
+        parallel 139ms calls cost one request 139ms of latency and 695ms of
+        call time. The remainder is floored away and the bar is then made
+        entirely of the calls — which is the true statement that nothing
+        measured is left over, not a claim that the service is idle.
+        """
         self.latency()
         self.answer({"ktor_http_server_requests_seconds_sum": {"api_app": 200.0},
                      "http_client_requests_seconds_sum":
                          {("api_app", "a.example"): 400.0}})
-        rows = D.request_composition([D.Watched(service())], self.deps())["api_app"]
-        self.assertEqual(rows, [(classify.CAUSE_UPSTREAM, "a.example", 400.0)])
+        rows = D.request_composition([D.Watched(service())], self.deps())
+        self.assertEqual(rows["api_app"],
+                         [(classify.CAUSE_UPSTREAM, "a.example", 400.0)])
+        self.assertNotIn(D.UNMEASURED, [r[1] for r in rows["api_app"]])
 
     def test_a_service_with_no_end_to_end_number_is_not_broken_down(self):
         # A stack whose parts are known and whose whole is not is not a

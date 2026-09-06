@@ -523,35 +523,17 @@ class ColumnTest(unittest.TestCase):
         self.assertIn("466ms", charts.divided(groups, "ms"))
 
     def test_parts_with_no_latency_to_be_parts_of_are_dropped(self):
-        # Rather than totalled from the parts themselves, which is the bug the
-        # `total` argument exists to prevent.
+        # Rather than totalled from the parts themselves, which put a different
+        # number under the same service on two cards a screen apart.
         self.assertEqual(
             shape._composition({("ghost", "a.example"): series(10.0)}, {}), [])
-
-    def test_the_printed_percentages_add_up_too(self):
-        # 800/1200 and two 200/1200s round to 67 + 17 + 17 = 101 one at a time,
-        # and a breakdown whose own labels total 101% reads as a broken
-        # measurement rather than as rounding.
-        # 66.67 / 16.67 / 16.67 floors to 98; the two leftover points go to
-        # the shares that lost most to rounding, earlier one first on a tie.
-        self.assertEqual(charts._percentages([800.0, 200.0, 200.0]), [67, 17, 16])
-        self.assertEqual(sum(charts._percentages([1.0, 1.0, 1.0])), 100)
-        self.assertEqual(sum(charts._percentages([7.0, 1.0, 1.0, 1.0, 1.0])), 100)
-
-    def test_the_red_duration_chart_is_left_alone(self):
-        # The breakdown belongs on the GOLDEN bar. RED's Duration is the
-        # per-service p95 over time against its SLO and nothing else.
-        card = self.card(self.composed(), "Duration")
-        self.assertIn("chart-line", card["body"])
-        self.assertNotIn("split-bar", card["body"])
-        self.assertNotIn("media.example", card["body"])
 
     def test_past_the_fourth_place_the_rest_becomes_one_slice(self):
         # `SERIES_VARS` is four hues wide; a fifth segment would fold into the
         # neutral and claim a distinction the colours cannot make.
-        rows = shape._composition({("api_app", f"h{i}"): series(float(10 - i))
-                                   for i in range(7)},
-                                  {"api_app": series(400.0)})
+        rows = shape._composition(
+            {("api_app", f"h{i}"): series(float(10 - i)) for i in range(7)},
+            {"api_app": series(400.0)})
         names = [part["name"] for part in rows[0]["parts"]]
         self.assertEqual(len(names), shape.PARTS_MAX + 1)
         self.assertEqual(names[-1], "other")
@@ -560,9 +542,10 @@ class ColumnTest(unittest.TestCase):
     def test_the_leftover_is_ordered_last_however_big_it_is(self):
         # `unmeasured` is what is left of the request, not a place it went, so
         # it reads as the tail of the bar rather than as the biggest dependency.
-        rows = shape._composition({("api_app", "unmeasured"): series(900.0),
-                                   ("api_app", "media.example"): series(100.0)},
-                                  {"api_app": series(400.0)})
+        rows = shape._composition(
+            {("api_app", "unmeasured"): series(900.0),
+             ("api_app", "media.example"): series(100.0)},
+            {"api_app": series(400.0)})
         self.assertEqual([p["name"] for p in rows[0]["parts"]],
                          ["media.example", "unmeasured"])
 

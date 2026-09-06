@@ -969,6 +969,7 @@ def publish_composition(composition):
         G_REQUEST_MS.remove(*labels)
 
 
+
 def _forget_target(name):
     """Drop this service's dependency row, whatever target it named."""
     for labels in [l for l in list(G_TARGET._metrics)

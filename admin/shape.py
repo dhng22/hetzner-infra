@@ -768,15 +768,19 @@ UNMEASURED = "unmeasured"
 
 def _composition(series, latency):
     """
-    `[{name, total, parts}]` — each service's latency, cut into where it goes.
+    `[{name, total, parts}]` — each service's latency, cut into what it waits on.
 
-    TWO SOURCES, AND THE SPLIT BETWEEN THEM IS THE POINT. `total` is the
-    service's own latency, the identical number the Duration chart in RED
-    draws, so the two cards cannot disagree about how slow something is. The
-    parts only decide the SHARES: they are measured per request, which is the
-    only decomposition that can be divided into proportions at all, and a p95
-    is not the sum of anything, so using them as the total put a different
-    number under the same service on two cards a screen apart.
+    TWO SOURCES FOR ONE BAR. `total` is the service's own latency, the same
+    number the Duration chart in RED draws, so the two cards cannot disagree
+    about how slow something is. The parts decide only the SHARES: they are
+    measured per request, which is the one decomposition that divides into
+    proportions at all, and a p95 is not the sum of anything.
+
+    The shares are shares of the MEASURED time, and `unmeasured` is a part like
+    any other — the slice no timer accounted for, which is the service's own
+    work plus any dependency it does not time. A bar with no `unmeasured` slice
+    is one whose timed calls already account for everything measured; that is a
+    finding about the service, not a gap in the picture.
 
     Parts are biggest first, everything past the fourth rolled into one `other`
     slice so no segment ends up a colour the legend cannot name, and
@@ -791,7 +795,8 @@ def _composition(series, latency):
         points = (latency or {}).get(service)
         if not points:
             # Parts with no whole to be parts OF. Skipped rather than totalled
-            # from the parts themselves, which is the bug this argument fixes.
+            # from the parts themselves, which put a different number under the
+            # same service on two cards a screen apart.
             continue
         rows.sort(key=lambda row: (row[0] == UNMEASURED, -row[1]))
         parts = [{"name": name, "value": value} for name, value in rows[:PARTS_MAX]]
@@ -919,9 +924,9 @@ def observability(vm_range, vm_query, charts):
         # segments say where 1200ms goes, the summary underneath says which
         # services are over the line.
         _card("Latency",
-              "the same latency RED draws, cut into where it goes — the bar is "
-              "the service's own number and the shares are measured per "
-              "request, so anything it does not time falls in `unmeasured`",
+              "the same latency RED draws, cut into what the request waits on "
+              "— `unmeasured` is whatever no timer accounted for, including "
+              "the service's own work",
               charts.divided(composition, "ms",
                              empty="no service is publishing a timer yet"),
               _window(LATEST_SPAN, Q_LATENCY, Q_REQUEST_MS),
