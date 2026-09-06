@@ -81,14 +81,19 @@ class WatchedTest(unittest.TestCase):
 
 
 class AttributionTest(unittest.TestCase):
+    """
+    The DECISION, over readings somebody else fetched.
+
+    `attribute` used to issue the queries itself, so every case here had to
+    stub VictoriaMetrics to say "this dependency is slow". The measuring moved
+    to `dependency_readings` — it now runs for every service, every loop, so
+    the panel can draw the breakdown before anything is on fire — and what is
+    left here is arithmetic on three numbers. See `DependencyReadingsTest`
+    below for the fetching half.
+    """
+
     def setUp(self):
         self.s = D.Watched(service())          # budget 400ms
-        discovery.reset_caches()
-        self.saved = (D.query.vm_query, D.query.vm_query_map)
-
-    def tearDown(self):
-        D.query.vm_query, D.query.vm_query_map = self.saved
-        discovery.reset_caches()
 
     def test_busy_replicas_are_their_own_cause(self):
         self.assertEqual(D.attribute(self.s, 80.0, 5.0, {}),
@@ -104,15 +109,13 @@ class AttributionTest(unittest.TestCase):
                          (classify.CAUSE_UNKNOWN, None))
 
     def test_a_slow_outbound_timer_names_the_third_party(self):
-        D.query.vm_query_map = lambda expr, label=None: {"vendor.example": 2200.0}
-        deps = {"api_app": [(classify.CAUSE_UPSTREAM, "e", "http_client_requests_seconds", "host")]}
-        self.assertEqual(D.attribute(self.s, 3.0, 4.0, deps),
+        readings = [(classify.CAUSE_UPSTREAM, "vendor.example", 2200.0)]
+        self.assertEqual(D.attribute(self.s, 3.0, 4.0, readings),
                          (classify.CAUSE_UPSTREAM, "vendor.example"))
 
     def test_an_outbound_timer_inside_budget_is_not_the_cause(self):
-        D.query.vm_query_map = lambda expr, label=None: {"vendor.example": 12.0}
-        deps = {"api_app": [(classify.CAUSE_UPSTREAM, "e", "http_client_requests_seconds", "host")]}
-        self.assertEqual(D.attribute(self.s, 3.0, 4.0, deps),
+        readings = [(classify.CAUSE_UPSTREAM, "vendor.example", 12.0)]
+        self.assertEqual(D.attribute(self.s, 3.0, 4.0, readings),
                          (classify.CAUSE_UNKNOWN, None))
 
     def test_a_dependency_under_the_budget_still_names_it_if_it_ate_the_request(self):
@@ -127,31 +130,23 @@ class AttributionTest(unittest.TestCase):
         application was already publishing. A dependency does not have to blow
         the budget on its own to be where the time went.
         """
-        D.query.vm_query_map = lambda expr, label=None: {"media.example": 344.0}
-        deps = {"api_app": [(classify.CAUSE_UPSTREAM, "e",
-                             "http_client_requests_seconds", "host")]}
+        readings = [(classify.CAUSE_UPSTREAM, "media.example", 344.0)]
         self.assertLess(344.0, self.s.budget_ms)          # under the old bar
-        self.assertEqual(D.attribute(self.s, 3.0, 4.0, deps, latency_ms=466.0),
+        self.assertEqual(D.attribute(self.s, 3.0, 4.0, readings, latency_ms=466.0),
                          (classify.CAUSE_UPSTREAM, "media.example"))
 
     def test_a_minor_dependency_is_still_not_blamed(self):
         # Below half the request, something else is the bigger story and naming
         # this one sends somebody to read the wrong log — which is the mistake
         # `unknown` exists to avoid.
-        D.query.vm_query_map = lambda expr, label=None: {"media.example": 40.0}
-        deps = {"api_app": [(classify.CAUSE_UPSTREAM, "e",
-                             "http_client_requests_seconds", "host")]}
-        self.assertEqual(D.attribute(self.s, 3.0, 4.0, deps, latency_ms=466.0),
+        readings = [(classify.CAUSE_UPSTREAM, "media.example", 40.0)]
+        self.assertEqual(D.attribute(self.s, 3.0, 4.0, readings, latency_ms=466.0),
                          (classify.CAUSE_UNKNOWN, None))
 
     def test_the_worst_dependency_wins_when_several_are_over_budget(self):
-        readings = {"db": [(classify.CAUSE_DATABASE, "e1", "mongodb_driver_commands_seconds", "host")],
-                    }
-        D.query.vm_query_map = lambda expr, label=None: (
-            {"mongo.internal": 900.0} if "e1" in expr else {"vendor.example": 2200.0})
-        deps = {"api_app": readings["db"] +
-                [(classify.CAUSE_UPSTREAM, "e2", "http_client_requests_seconds", "host")]}
-        cause, target = D.attribute(self.s, 3.0, 4.0, deps)
+        readings = [(classify.CAUSE_DATABASE, "mongo.internal", 900.0),
+                    (classify.CAUSE_UPSTREAM, "vendor.example", 2200.0)]
+        cause, target = D.attribute(self.s, 3.0, 4.0, readings)
         self.assertEqual((cause, target), (classify.CAUSE_UPSTREAM, "vendor.example"))
 
     def test_an_uninstrumented_service_is_unknown_not_a_guess(self):
@@ -169,9 +164,115 @@ class AttributionTest(unittest.TestCase):
         # moment somebody re-added it as a fallback.
         import inspect
         self.assertEqual(list(inspect.signature(D.attribute).parameters),
-                         ["service", "cpu_pct", "mem_pct", "dependencies",
+                         ["service", "cpu_pct", "mem_pct", "readings",
                           "latency_ms"])
         self.assertNotIn("busy_components", inspect.getsource(D))
+
+
+class DependencyReadingsTest(unittest.TestCase):
+    """
+    The FETCHING half: every outbound timer, for every service, once per loop.
+    """
+
+    def setUp(self):
+        self.saved = D.query.vm_query_map
+        self.asked = []
+        discovery.reset_caches()
+
+    def tearDown(self):
+        D.query.vm_query_map = self.saved
+        discovery.reset_caches()
+
+    def answer(self, table):
+        def vm_query_map(expr, label="service"):
+            self.asked.append((expr, label))
+            return table.get(expr, {})
+        D.query.vm_query_map = vm_query_map
+
+    def test_a_reading_belongs_to_the_service_that_made_the_call(self):
+        """
+        Two services on the same client library share one expression, and the
+        answer carries both. Keyed by the target alone they overwrite each
+        other and a quiet service inherits a noisy one's verdict.
+        """
+        self.answer({"e": {("api_app", "vendor.example"): 900.0,
+                           ("web_app", "vendor.example"): 20.0}})
+        deps = {"api_app": [(classify.CAUSE_UPSTREAM, "e", "http_client_requests_seconds", "host")],
+                "web_app": [(classify.CAUSE_UPSTREAM, "e", "http_client_requests_seconds", "host")]}
+        readings = D.dependency_readings(deps)
+        self.assertEqual(readings["api_app"],
+                         [(classify.CAUSE_UPSTREAM, "vendor.example", 900.0)])
+        self.assertEqual(readings["web_app"],
+                         [(classify.CAUSE_UPSTREAM, "vendor.example", 20.0)])
+
+    def test_one_expression_is_asked_once_however_many_services_share_it(self):
+        # Ten components x six queries at a 15s timeout does not fit in a 60s
+        # loop. The dedup is what makes measuring EVERY service affordable.
+        self.answer({"e": {("api_app", "v"): 1.0, "web_app": 2.0}})
+        entry = (classify.CAUSE_UPSTREAM, "e", "http_client_requests_seconds", "host")
+        D.dependency_readings({"api_app": [entry], "web_app": [entry]})
+        self.assertEqual(len(self.asked), 1)
+        self.assertEqual(self.asked[0][1], ("service", "host"))
+
+    def test_a_timer_with_no_target_label_is_named_by_its_metric(self):
+        # Nothing on the series says WHICH host, so the finest honest name is
+        # the timer itself — "this app's outbound HTTP", not a guess at a host.
+        self.answer({"e": {"api_app": 88.0}})
+        deps = {"api_app": [(classify.CAUSE_UPSTREAM, "e",
+                             "http_client_requests_seconds", None)]}
+        self.assertEqual(D.dependency_readings(deps)["api_app"],
+                         [(classify.CAUSE_UPSTREAM,
+                           "http_client_requests_seconds", 88.0)])
+        self.assertEqual(self.asked[0][1], "service")
+
+    def test_only_the_worst_few_are_kept(self):
+        """
+        A hostname is a label, and a service that calls a thousand of them
+        would otherwise cost the metrics store a thousand series. The cap is
+        what lets the target be a label at all.
+        """
+        wide = {("api_app", f"h{i}"): float(i) for i in range(40)}
+        self.answer({"e": wide})
+        deps = {"api_app": [(classify.CAUSE_UPSTREAM, "e", "b", "host")]}
+        rows = D.dependency_readings(deps)["api_app"]
+        self.assertEqual(len(rows), D.DEPENDENCY_ROWS_MAX)
+        self.assertEqual([r[1] for r in rows],
+                         [f"h{i}" for i in range(39, 39 - D.DEPENDENCY_ROWS_MAX, -1)])
+
+
+class PublishDependenciesTest(unittest.TestCase):
+    """
+    The breakdown gauge, which the panel draws "where the time goes" from.
+    """
+
+    def rows(self):
+        return {labels: value for labels, value
+                in [(l, D.G_DEP_MS.labels(*l)._value.get())
+                    for l in list(D.G_DEP_MS._metrics)]}
+
+    def tearDown(self):
+        D.publish_dependencies({})
+
+    def test_every_dependency_is_published_not_only_the_blamed_one(self):
+        # The alert needs one culprit. The picture needs all of them, or a
+        # dependency creeping from 20% of a request to 60% is invisible until
+        # it is already the culprit.
+        D.publish_dependencies({"api_app": [
+            (classify.CAUSE_UPSTREAM, "vendor.example", 900.0),
+            (classify.CAUSE_DATABASE, "documents", 20.0)]})
+        self.assertEqual(self.rows(), {
+            ("api_app", "upstream", "vendor.example"): 900.0,
+            ("api_app", "database", "documents"): 20.0})
+
+    def test_a_dependency_that_stops_being_called_stops_being_drawn(self):
+        # Level-triggered. A stale row looks exactly like a current one, and
+        # the panel would draw a retired third party as eating the request.
+        D.publish_dependencies({"api_app": [
+            (classify.CAUSE_UPSTREAM, "old.example", 900.0)]})
+        D.publish_dependencies({"api_app": [
+            (classify.CAUSE_UPSTREAM, "new.example", 120.0)]})
+        self.assertEqual(self.rows(),
+                         {("api_app", "upstream", "new.example"): 120.0})
 
 
 class DependencyNameTest(unittest.TestCase):

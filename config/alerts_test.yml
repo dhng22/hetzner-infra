@@ -503,7 +503,8 @@ tests:
             exp_annotations: { summary: "Alerting pipeline is alive" }
 
   # --- ThrottledByUnownedDependency ----------------------------------------
-  # Nothing claims the cause and it is not muted -> a human has to hear it.
+  # Nothing claims the cause, it is not muted, and NO TARGET IS KNOWN -> the
+  # vague alert is all there is, and a category beats silence.
   - interval: 1m
     input_series:
       - series: 'overseer_signal_unowned{service="api_app", cause="upstream"}'
@@ -515,7 +516,33 @@ tests:
           - exp_labels: { severity: warning, service: api_app, cause: upstream }
             exp_annotations:
               summary: "api_app is slow because of upstream, and nothing handles it"
-              description: "p95 has been over budget for half an hour while the replicas themselves are idle, so the autoscaler is deliberately not scaling. The suspected cause is upstream; the overseer's log names the specific target. Either give something the infra.handles=upstream label, or mute it on the component with autoscale.mute_causes."
+              description: "p95 has been over budget for half an hour while the replicas themselves are idle, so the autoscaler is deliberately not scaling. The suspected cause is upstream. Either give something the infra.handles=upstream label, or mute it on the component with autoscale.mute_causes."
+
+  # --- ThrottledByNamedDependency ------------------------------------------
+  # The same half hour WITH a target published. This is the case that shipped
+  # broken: `*` binds tighter than `==`, so the rule's own expression parsed as
+  # a comparison against a vector match and returned nothing, forever — while
+  # the `unless` above correctly went quiet, because a target now existed. Two
+  # rules, one condition, and nobody was told anything.
+  - interval: 1m
+    input_series:
+      - series: 'overseer_signal_unowned{service="api_app", cause="upstream"}'
+        values: '1x40'
+      - series: 'overseer_service_dependency{service="api_app", cause="upstream", target="media.tikdrama.asia"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: ThrottledByNamedDependency
+        exp_alerts:
+          - exp_labels: { severity: warning, service: api_app, cause: upstream, target: media.tikdrama.asia }
+            exp_annotations:
+              summary: "api_app is slow because of media.tikdrama.asia, and nothing handles it"
+              description: "Half an hour over budget with the replicas idle, and the time is going into media.tikdrama.asia (upstream). More replicas cannot fix it — nothing in this cluster is on the other end of that call. Either give something the infra.handles=upstream label, or mute it on the component with autoscale.mute_causes=upstream:media.tikdrama.asia."
+      # And the vague one must stay quiet, or the useful alert arrives beside a
+      # blurrier copy of itself.
+      - eval_time: 35m
+        alertname: ThrottledByUnownedDependency
+        exp_alerts: []
 
   # Claimed or muted: the autoscaler zeroes the gauge, so the rule stays quiet
   # with no list of exceptions to maintain here. This is what makes adding

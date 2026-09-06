@@ -1110,8 +1110,36 @@ OBSERVABILITY_MEMO_SECONDS = 10
 
 
 @memo(OBSERVABILITY_MEMO_SECONDS)
+def vm_query_multi(expr, *labels):
+    """
+    Instant query keyed by SEVERAL labels: {(v1, v2, ...): float}.
+
+    `vm_query_by` beside it keys on one, which is enough for anything measured
+    per node or per service. A dependency reading is measured per service AND
+    per target, and either label alone collapses rows that are not the same
+    thing. A series missing any of them is dropped, not keyed on a None.
+    """
+    out = {}
+    try:
+        r = requests.get(f"{VM_URL}/api/v1/query", params={"query": expr}, timeout=8)
+        r.raise_for_status()
+        rows = r.json().get("data", {}).get("result", [])
+    except Exception:
+        return out
+    for row in rows:
+        metric = row.get("metric") or {}
+        key = tuple(metric.get(name) for name in labels)
+        if not all(key):
+            continue
+        try:
+            out[key] = float(row["value"][1])
+        except (KeyError, IndexError, ValueError):
+            continue
+    return out
+
+
 def observability():
-    return shape.observability(vm_query_range, vm_query, charts)
+    return shape.observability(vm_query_range, vm_query, vm_query_multi, charts)
 
 
 @memo(PANEL_MEMO_SECONDS)

@@ -600,6 +600,14 @@ SATURATION_DANGER = 80.0
 #: and the alert rule cannot drift apart without somebody seeing it.
 ERROR_BUDGET_PCT = 5.0
 
+#: The share of a request at which the overseer stops calling a dependency a
+#: contributor and starts calling it THE CAUSE — `DEPENDENCY_SHARE` in
+#: `overseer/overseer.py`. Restated here rather than imported because the panel
+#: image does not carry the overseer, and quoted rather than re-chosen because a
+#: panel that draws one bar while the alert fires at another is how somebody
+#: ends up arguing with a graph.
+DEPENDENCY_SHARE = 0.5
+
 Q_STATUS_CLASS = (
     'sum by (class) (label_replace(rate(cloudflared_tunnel_response_by_code[5m]),'
     ' "class", "${1}xx", "status_code", "(.).*"))')
@@ -614,6 +622,11 @@ Q_REQUEST_RATE = 'sum(rate(cloudflared_tunnel_response_by_code[5m]))'
 # has stopped updating, when what stopped is the series it was drawing.
 Q_LATENCY = 'max by (service) (overseer_service_latency_ms)'
 Q_SLO = 'max(autoscaler_service_slo_p95_ms)'
+#: Where each service's time goes. `max by` for the same reason Q_LATENCY uses
+#: it — the overseer's `task_id` is on every row, so a restart would otherwise
+#: leave the old task's readings sitting beside the new one's.
+Q_DEPENDENCY = ('max by (service, cause, target) '
+                '(overseer_service_dependency_ms)')
 #: WHICH STATISTIC Q_LATENCY currently is. Not decorative — see `_latency_note`.
 Q_LATENCY_KIND = ('max by (kind) (overseer_service_latency_signal) == 1')
 
@@ -756,9 +769,62 @@ def _points(series):
     return next((v for v in (series or {}).values() if v), [])
 
 
-def observability(vm_range, vm_query, charts):
+def _breakdown(latency, dependencies):
+    """
+    Each service's outbound calls, worst first, beside its own request latency.
+
+    Joined HERE rather than in PromQL because the two numbers come from
+    different shapes — a range for the request, an instant for the calls — and
+    a service with dependencies but no latency series has nothing to be a share
+    OF. Those are dropped rather than drawn against a total of zero.
+    """
+    parts = {}
+    for (service, cause, target), value in (dependencies or {}).items():
+        parts.setdefault(service, []).append(
+            {"name": target, "value": value, "note": cause})
+    out = []
+    for service, points in sorted((latency or {}).items()):
+        rows = parts.get(service)
+        if not rows or not points:
+            continue
+        out.append({"name": service, "total": points[-1][1],
+                    "parts": sorted(rows, key=lambda r: -r["value"])})
+    return out
+
+
+def _breakdown_summary(breakdown):
+    """
+    The one sentence the picture cannot say: is any call BIG ENOUGH to be the
+    answer, by the same bar the overseer blames one at.
+
+    `DEPENDENCY_SHARE` in `overseer/overseer.py` is that bar — half the request
+    — and it is quoted rather than re-chosen so the panel and the alert cannot
+    disagree about which dependency is "the reason".
+    """
+    biggest = None
+    for group in breakdown:
+        for part in group["parts"]:
+            share = part["value"] / group["total"]
+            if biggest is None or share > biggest[0]:
+                biggest = (share, group["name"], part["name"])
+    if biggest is None:
+        return ""
+    share, service, target = biggest
+    if share >= DEPENDENCY_SHARE:
+        return (f"{target} is {share * 100:.0f}% of {service}'s request — "
+                f"most of the request is this one call, and more replicas "
+                f"cannot shorten it")
+    return (f"the largest single call is {target} at {share * 100:.0f}% of "
+            f"{service}'s request — no one dependency is where the time goes")
+
+
+def observability(vm_range, vm_query, vm_map, charts):
     """
     The RED / USE / Golden column, already drawn.
+
+    `vm_map` is the third reader: an instant query keyed by SEVERAL labels,
+    which the dependency breakdown needs because a reading is only meaningful
+    per (service, cause, target) and `vm_query` answers with one number.
 
     `charts` is a parameter rather than an import for the same reason
     `summary()` takes `vm_query`: this stays a pure function of its arguments,
@@ -780,6 +846,8 @@ def observability(vm_range, vm_query, charts):
     status = rng(Q_STATUS_CLASS, "class")
     traffic = _points(rng(Q_REQUEST_RATE))
     error_points = _points(errors)
+    breakdown = _breakdown(latency, vm_map(Q_DEPENDENCY,
+                                           "service", "cause", "target"))
 
     red = [
         _card("Duration", latency_note,
@@ -787,6 +855,14 @@ def observability(vm_range, vm_query, charts):
                           empty="no service is publishing a timer yet"),
               _window(RANGE_SPAN, Q_LATENCY),
               charts.reading(latency, "ms", reference=slo)),
+        _card("Where the time goes",
+              "each outbound call a service makes, against the request it sits "
+              "inside — these are separate percentiles, so they overlap and do "
+              "NOT add up to the request",
+              charts.shares(breakdown, "ms",
+                            empty="no service publishes an outbound timer yet"),
+              _window(LATEST_SPAN, Q_DEPENDENCY),
+              _breakdown_summary(breakdown)),
         _card("Rate", "responses per second, split by status class",
               charts.stack(status, "/s"),
               _window(RANGE_SPAN, Q_STATUS_CLASS),
@@ -826,6 +902,18 @@ def observability(vm_range, vm_query, charts):
     else:
         latency_summary = (f"all {len(latency)} services under the "
                            f"{charts.fmt(slo, 'ms')} SLO")
+
+    # WHAT the slowest one is waiting on, on the card that reports it being
+    # slowest. The breakdown chart above already draws every service; naming it
+    # again here is not the picture repeated, it is the one fact this card is
+    # missing — "api_app is over its SLO" and "api_app is over its SLO because
+    # of media.tikdrama.asia" are a different amount of help at 3am.
+    waiting_on = next((g["parts"][0] for g in breakdown if g["name"] == slowest),
+                      None)
+    if waiting_on and latency_summary and slowest_now:
+        latency_summary += (f" · {slowest} spends "
+                            f"{100.0 * waiting_on['value'] / slowest_now:.0f}% "
+                            f"of a request in {waiting_on['name']}")
 
     traffic_now = traffic[-1][1] if traffic else None
     traffic_peak = max((v for _, v in traffic), default=0.0)

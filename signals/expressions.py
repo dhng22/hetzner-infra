@@ -40,9 +40,9 @@ def p95_expr(histogram, unit, by="service"):
             f"(rate({histogram}[2m]))) * {scale}")
 
 
-def mean_expr(base, unit):
+def mean_expr(base, unit, by="service"):
     """
-    Mean latency by service, in milliseconds.
+    Mean latency, in milliseconds, grouped by `by`.
 
     Used when a service publishes a timer but no buckets. It is NOT a p95 and is
     not pretended to be one: the mean sits below the tail, so a service compared
@@ -51,6 +51,10 @@ def mean_expr(base, unit):
     and it is the common case — a Micrometer/Prometheus timer publishes _sum and
     _count by default and publishes buckets only when someone enables them.
 
+    `by` exists for the same reason it does on `p95_expr`: a DEPENDENCY timer
+    with no buckets still has to be split per service and per target, or one
+    service's outbound calls are averaged into another's.
+
     THE 2-MINUTE WINDOW IS WHY LOW TRAFFIC LIES. With four requests in it, this
     fraction is one request's duration, held steady for two minutes — long
     enough to satisfy any sustain check. That is not a bug in the expression; it
@@ -58,5 +62,5 @@ def mean_expr(base, unit):
     anything acts on it. See signals.classify.saturated.
     """
     scale = 1000 if unit == "seconds" else 1
-    return (f"(sum by (service) (rate({base}_sum[2m])) "
-            f"/ sum by (service) (rate({base}_count[2m]))) * {scale}")
+    return (f"(sum by ({by}) (rate({base}_sum[2m])) "
+            f"/ sum by ({by}) (rate({base}_count[2m]))) * {scale}")

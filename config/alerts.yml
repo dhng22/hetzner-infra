@@ -458,9 +458,23 @@ groups:
       # a `local` or `unknown` cause has no target to name — and losing those
       # entirely would be worse than a category. This one is the useful page;
       # the one above is the guarantee that nothing goes unreported.
+      #
+      # THE PARENTHESES ARE LOAD-BEARING. `*` binds tighter than `==`, so
+      # `a == 1 * on (...) group_left (...) b` parses as
+      # `a == (1 * on (...) group_left (...) b)` — a comparison whose right
+      # side is a vector match against the scalar 1, which matches nothing and
+      # returns nothing. This rule was written without them and was therefore
+      # INCAPABLE OF EVER FIRING, silently: vmalert reported it healthy and
+      # inactive, because "no result" is also what a quiet cluster looks like.
+      #
+      # And it took the other rule down with it. The `unless` above suppresses
+      # the vague alert precisely when a target IS known, so the moment the
+      # overseer learned to name `media.tikdrama.asia` the categorical alert
+      # went quiet and the named one could not speak — a service half an hour
+      # over its SLO with a fully diagnosed cause and total silence.
       - alert: ThrottledByNamedDependency
         expr: |
-          overseer_signal_unowned == 1
+          (overseer_signal_unowned == 1)
             * on (service, cause) group_left (target)
               overseer_service_dependency
         for: 30m

@@ -56,13 +56,23 @@ def vm_query_map(expr, label="service"):
     Every per-service signal is aggregated `by (service)` and read through this
     rather than issued once per service. Ten components x six queries at a 15s
     timeout does not fit in a 60s loop, and AutoscalerStalled fires at 300s.
+
+    `label` may be a TUPLE of label names, in which case the key is a tuple of
+    their values. A dependency timer needs that: its reading is only meaningful
+    per (service, target), and keyed by the target alone two services calling
+    the same third party overwrite each other.
+
+    A series missing any of the named labels is dropped rather than keyed on a
+    None — a partial key is not a smaller answer, it is a wrong one.
     """
+    names = label if isinstance(label, tuple) else (label,)
     out = {}
     try:
         for row in _get("/api/v1/query", {"query": expr}).get("data", {}).get("result", []):
-            key = row.get("metric", {}).get(label)
-            if key:
-                out[key] = float(row["value"][1])
+            metric = row.get("metric", {})
+            key = tuple(metric.get(name) for name in names)
+            if all(key):
+                out[key if len(names) > 1 else key[0]] = float(row["value"][1])
     except Exception as exc:  # noqa: BLE001
         on_error("query")
         log.warning("grouped query failed (%s): %s", expr[:60], exc)

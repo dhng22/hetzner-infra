@@ -403,6 +403,26 @@ G_LATENCY_KIND = Gauge("overseer_service_latency_signal",
 G_TARGET = Gauge("overseer_service_dependency",
                  "1 for the dependency currently blamed for this service",
                  _SVC + ["cause", "target"])
+#: HOW LONG each of a service's outbound calls takes, next to how long the
+#: request it sits inside takes. `G_TARGET` above names the one currently
+#: blamed; this one publishes the whole picture, all the time.
+#:
+#: The distinction matters because they answer different questions. The alert
+#: needs a culprit and only while there is one. The panel needs to show where a
+#: request's time goes BEFORE the service is in trouble — a dependency creeping
+#: from 20% of the request to 60% is the interesting half, and by the time it
+#: has a culprit's row it is already half an hour into an alert.
+#:
+#: NOT SUMMABLE, and nothing here or on the panel pretends otherwise. These are
+#: percentiles of different distributions: a p95 of one outbound call inside a
+#: p95 request. One dependency can legitimately read ABOVE the request it sits
+#: in — its own tail is longer than the request tail — and stacking them into a
+#: total would invent a number nobody measured.
+#:
+#: Cardinality is bounded by `DEPENDENCY_ROWS_MAX`, not by trust: see there.
+G_DEP_MS = Gauge("overseer_service_dependency_ms",
+                 "Latency of one outbound dependency of a service",
+                 _SVC + ["cause", "target"])
 G_CLAIMS = Gauge("overseer_claimed_causes", "Causes some service claims", ["cause"])
 G_LOOP = Gauge("overseer_last_loop_timestamp_seconds", "Unix time of the last loop")
 G_SERVICES = Gauge("overseer_watched_services", "Application services being watched")
@@ -715,7 +735,56 @@ def measure(services):
 DEPENDENCY_SHARE = 0.5
 
 
-def attribute(service, cpu_pct, mem_pct, dependencies, latency_ms=None):
+#: How many of one service's dependencies are published with a value.
+#:
+#: `overseer_service_dependency_ms` carries a third-party hostname as a label,
+#: which is the unbounded cardinality every other gauge here deliberately
+#: refuses. It is bounded here instead of by hope: the WORST few per service,
+#: rewritten each loop by `publish_dependencies`, which also drops the rows it
+#: did not write. Six because that is more outbound calls than any panel row
+#: can usefully show, so a service that talks to a thousand hosts costs the
+#: metrics store the same as one that talks to two.
+DEPENDENCY_ROWS_MAX = 6
+
+
+def dependency_readings(dependencies):
+    """
+    {service: [(cause, target, milliseconds)]}, worst first.
+
+    Every outbound timer, for every watched service, read once per loop —
+    whether or not that service is currently slow. It used to be measured only
+    for a service already breaching, which was enough to name a culprit in an
+    alert and not enough to ever DRAW the picture: the panel could show that a
+    request took 466ms and never where the 466ms went, until the thing was
+    already on fire.
+
+    Queries are deduplicated by EXPRESSION, not issued per service. Two
+    services publishing the same client library share one expression grouped by
+    `(service, target)`, so the cost is one instant query per distinct
+    dependency timer in the cluster, not one per service per timer.
+    """
+    answers, out = {}, {}
+    for svc, entries in dependencies.items():
+        rows = []
+        for cause, expr, base, target_label in entries:
+            key = (expr, target_label)
+            if key not in answers:
+                labels = ("service", target_label) if target_label else "service"
+                answers[key] = query.vm_query_map(expr, label=labels)
+            for found, value in answers[key].items():
+                # Without a target label the series names nothing but the
+                # service, so the timer's own metric name IS the finest name
+                # there is — "this app's outbound HTTP", not which host.
+                name, target = (found, base) if not target_label else (found[0], found[1])
+                if name == svc and value is not None:
+                    rows.append((cause, target, value))
+        rows.sort(key=lambda row: -row[2])
+        if rows:
+            out[svc] = rows[:DEPENDENCY_ROWS_MAX]
+    return out
+
+
+def attribute(service, cpu_pct, mem_pct, readings, latency_ms=None):
     """
     Why is this service slow? Returns (cause, target or None).
 
@@ -728,6 +797,10 @@ def attribute(service, cpu_pct, mem_pct, dependencies, latency_ms=None):
                                        named by its own label.
       3. Nothing                    -> `unknown`, which is what it is. Guessing
                                        here sends somebody to read the wrong log.
+
+    `readings` is this service's rows from `dependency_readings` — the
+    measuring is done there, once for the whole cluster, so this function is a
+    pure decision over numbers somebody else fetched and can be tested as one.
 
     There used to be a rule between 2 and 3: if some component in the cluster
     looked busy, blame that one. It read as a cheap upgrade over "good luck" —
@@ -763,20 +836,10 @@ def attribute(service, cpu_pct, mem_pct, dependencies, latency_ms=None):
     if latency_ms:
         threshold = min(threshold, latency_ms * DEPENDENCY_SHARE)
 
-    worst = None
-    for cause, expr, base, target_label in dependencies.get(service.name, ()):
-        if target_label:
-            readings = query.vm_query_map(f"topk(1, {expr}) by ({target_label})",
-                                          label=target_label)
-        else:
-            readings = {base: query.vm_query(expr)}
-        for key, value in readings.items():
-            if value is None or value <= threshold:
-                continue
-            if worst is None or value > worst[2]:
-                worst = (cause, key, value)
-    if worst:
-        return worst[0], worst[1]
+    over = [row for row in (readings or ()) if row[2] > threshold]
+    if over:
+        cause, target, _ = max(over, key=lambda row: row[2])
+        return cause, target
     return classify.CAUSE_UNKNOWN, None
 
 
@@ -817,6 +880,26 @@ def publish(service, verdict, handled, alert):
                       "replicas cannot fix this. Either give something "
                       "infra.handles=%s, or mute it with %s.",
                  service.name, cause, where, cause, classify.MUTE_LABEL)
+
+
+def publish_dependencies(readings):
+    """
+    Every dependency reading, for every service, so the panel can draw where a
+    request's time goes.
+
+    Level-triggered like everything else here: the rows measured this loop are
+    written and every row that was NOT is removed. Without the removal a
+    dependency that stops being called — a hostname retired, a feature turned
+    off — leaves its last reading behind looking current, and the panel draws a
+    third party as eating 60% of a request nobody makes any more.
+    """
+    live = set()
+    for name, rows in readings.items():
+        for cause, target, value in rows:
+            live.add((name, cause, str(target)))
+            G_DEP_MS.labels(service=name, cause=cause, target=str(target)).set(value)
+    for labels in [l for l in list(G_DEP_MS._metrics) if l and tuple(l) not in live]:
+        G_DEP_MS.remove(*labels)
 
 
 def _forget_target(name):
@@ -3083,12 +3166,22 @@ def judge(watched):
         if direction == classify.DIRECTION_HOLD and reason:
             needs_cause.append((s, cpu, mem, lat))
 
-    if needs_cause:
-        dependencies = discovery.discover_dependencies(
-            [s.name for s, _, _, _ in needs_cause])
-        for s, cpu, mem, lat in needs_cause:
-            cause, target = attribute(s, cpu, mem, dependencies, lat)
-            decided[s.name].update(cause=cause, target=target)
+    # Measured for EVERY watched service, not only the ones in trouble. The
+    # readings are what the panel draws its breakdown from, and a breakdown
+    # that only exists while a service is breaching is a picture nobody can use
+    # to see the breach coming. It costs one instant query per distinct
+    # dependency timer in the cluster — see `dependency_readings`.
+    #
+    # Discovery is asked about every service for the same reason: its cache is
+    # keyed by nothing but time, so a call that passed only the breaching names
+    # cached an answer with the other services MISSING from it, and they stayed
+    # missing for the next fifteen minutes.
+    readings = dependency_readings(
+        discovery.discover_dependencies([s.name for s in watched]))
+    publish_dependencies(readings)
+    for s, cpu, mem, lat in needs_cause:
+        cause, target = attribute(s, cpu, mem, readings.get(s.name, ()), lat)
+        decided[s.name].update(cause=cause, target=target)
 
     for s in watched:
         verdict = decided[s.name]

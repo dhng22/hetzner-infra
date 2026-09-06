@@ -507,6 +507,64 @@ def bars(rows, unit="", empty="nothing to compare"):
     return _wrap("".join(out))
 
 
+def shares(groups, unit="", empty="nothing is instrumented yet"):
+    """
+    Where a service's time goes: each outbound call as a share of the request
+    it sits inside, one coloured row per dependency, grouped by service.
+
+    NOT A STACK, AND THAT IS THE DESIGN. `stack` exists directly above and was
+    the obvious thing to reach for, because the question sounds like "what is
+    this total made of". It is not. These are PERCENTILES OF DIFFERENT
+    DISTRIBUTIONS — the p95 of one outbound call measured inside the p95 of a
+    request — so they do not sum to the request and never will. A dependency
+    can legitimately read over 100%: its own tail is longer than the request
+    tail it sits in, which happens whenever the slow calls and the slow
+    requests are not the same requests. Drawing these end to end would produce
+    a total nobody measured, sitting under a colour key that makes it look
+    measured, and the reader would then subtract to find "the app's own time" —
+    a number that would be pure arithmetic on an invented total.
+
+    So each part gets its own bar against the same 100% track. Overlap is
+    visible as overlap, and a bar that fills the track means "this call is the
+    request", which is exactly the finding.
+
+    `groups` is `[{"name", "total", "parts": [{"name", "value", "note"?}]}]`.
+    """
+    groups = [g for g in (groups or []) if g.get("total") and g.get("parts")]
+    if not groups:
+        return _empty(empty)
+
+    out = ['<div class="share-groups">']
+    for group in groups:
+        total = group["total"]
+        out.append('<div class="share-group">'
+                   f'<div class="share-head">'
+                   f'<span class="share-name" title="{_esc(group["name"])}">'
+                   f'{_esc(group["name"])}</span>'
+                   f'<span class="share-total">{fmt(total, unit)} per request</span>'
+                   '</div><div class="bar-rows">')
+        for index, part in enumerate(group["parts"]):
+            pct = 100.0 * part["value"] / total
+            note = f' ({part["note"]})' if part.get("note") else ""
+            tip = (f'{part["name"]}{note}: {fmt(part["value"], unit)} of '
+                   f'{group["name"]}’s {fmt(total, unit)} — {pct:.0f}%')
+            if pct > 100.0:
+                # Said in words, because the bar cannot say it: a full track
+                # already means 100% and there is nowhere further to draw.
+                tip += ", longer than the request it sits inside"
+            out.append(
+                f'<div class="bar-row" data-tip="{_esc(tip)}">'
+                f'<span class="bar-name" title="{_esc(part["name"])}">'
+                f'{_esc(part["name"])}</span>'
+                f'<span class="bar-track"><i style="width:{min(100.0, pct):.1f}%;'
+                f'background:var({series_var(index)})"></i></span>'
+                f'<span class="bar-value">{pct:.0f}%</span>'
+                f'</div>')
+        out.append('</div></div>')
+    out.append('</div>')
+    return _wrap("".join(out))
+
+
 def columns(rows, unit="", empty="none in this window"):
     """
     Vertical bars for counts over a window — error tallies, not rates.

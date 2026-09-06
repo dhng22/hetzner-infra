@@ -330,7 +330,7 @@ class WindowTest(unittest.TestCase):
     def test_every_card_states_the_span_it_measured_over(self):
         sections = shape.observability(
             lambda expr, minutes, step, label=None: {},
-            lambda expr: None, charts)
+            lambda expr: None, lambda expr, *labels: {}, charts)
         for section in sections:
             for card in section["cards"]:
                 with self.subTest(card=f'{section["key"]}/{card["title"]}'):
@@ -344,7 +344,7 @@ class WindowTest(unittest.TestCase):
         """
         sections = shape.observability(
             lambda expr, minutes, step, label=None: {},
-            lambda expr: None, charts)
+            lambda expr: None, lambda expr, *labels: {}, charts)
         cards = {(s["key"], c["title"]): c["window"]
                  for s in sections for c in s["cards"]}
         self.assertTrue(cards[("use", "Utilisation")].startswith(shape.LATEST_SPAN))
@@ -369,7 +369,7 @@ class LatencyCaptionTest(unittest.TestCase):
         ranges = {shape.Q_LATENCY_KIND: {k: series(1.0, 1.0) for k in kinds}}
         sections = shape.observability(
             lambda expr, minutes, step, label=None: ranges.get(expr, {}),
-            lambda expr: None, charts)
+            lambda expr: None, lambda expr, *labels: {}, charts)
         cards = {c["title"]: c for s in sections for c in s["cards"]}
         return cards["Duration"]["note"]
 
@@ -396,12 +396,13 @@ class LatencyCaptionTest(unittest.TestCase):
 class ColumnTest(unittest.TestCase):
     """The assembled RED / USE / Golden column."""
 
-    def build(self, ranges=None, instants=None):
+    def build(self, ranges=None, instants=None, dependencies=None):
         ranges = ranges or {}
         instants = instants or {}
         return shape.observability(
             lambda expr, minutes, step, label=None: ranges.get(expr, {}),
             lambda expr: instants.get(expr),
+            lambda expr, *labels: (dependencies or {}),
             charts)
 
     def populated(self):
@@ -464,6 +465,73 @@ class ColumnTest(unittest.TestCase):
                       summaries[("golden", "Traffic")])
         self.assertIn("budget", summaries[("golden", "Errors")])
         self.assertIn("headroom", summaries[("golden", "Saturation")])
+
+    def test_the_breakdown_names_every_call_and_whose_it_is(self):
+        """
+        The card exists because "api_app is slow because of upstream" named a
+        CATEGORY. Every row has to carry the hostname, the service it belongs
+        to, and its share, or the card repeats the mistake in colour.
+        """
+        sections = self.build(
+            ranges={shape.Q_LATENCY: {"api_app": series(400.0)}},
+            dependencies={("api_app", "upstream", "media.example"): 300.0,
+                          ("api_app", "database", "documents"): 40.0})
+        card = {c["title"]: c for s in sections for c in s["cards"]}["Where the time goes"]
+        self.assertIn("media.example", card["body"])
+        self.assertIn("documents", card["body"])
+        self.assertIn("75%", card["body"])          # 300 of 400
+        self.assertIn("api_app", card["body"])
+        # Hover names it: every row carries the tip the panel renders globally.
+        self.assertIn("data-tip", card["body"])
+        # And the hues are distinct, which is the whole point of the colours.
+        self.assertIn(charts.SERIES_VARS[0], card["body"])
+        self.assertIn(charts.SERIES_VARS[1], card["body"])
+
+    def test_one_service_dependencies_are_never_drawn_under_another(self):
+        sections = self.build(
+            ranges={shape.Q_LATENCY: {"api_app": series(400.0),
+                                      "web_app": series(100.0)}},
+            dependencies={("api_app", "upstream", "only.api.example"): 300.0})
+        groups = shape._breakdown(
+            {"api_app": series(400.0), "web_app": series(100.0)},
+            {("api_app", "upstream", "only.api.example"): 300.0})
+        self.assertEqual([g["name"] for g in groups], ["api_app"])
+        self.assertTrue(sections)
+
+    def test_a_call_longer_than_the_request_is_said_not_hidden(self):
+        """
+        These are percentiles of different distributions. A dependency CAN read
+        above the request it sits inside, and a chart that clamps it silently
+        turns the most interesting reading into an ordinary full bar.
+        """
+        body = charts.shares([{"name": "api_app", "total": 400.0, "parts": [
+            {"name": "slow.example", "value": 520.0, "note": "upstream"}]}], "ms")
+        self.assertIn("130%", body)
+        self.assertIn("longer than the request it sits inside", body)
+        self.assertIn("width:100.0%", body)          # the track cannot overflow
+
+    def test_the_breakdown_summary_uses_the_bar_the_overseer_blames_at(self):
+        # A panel that draws one threshold while the alert fires at another is
+        # how somebody ends up arguing with a graph.
+        big = shape._breakdown_summary([{"name": "api_app", "total": 400.0, "parts": [
+            {"name": "media.example", "value": 300.0}]}])
+        small = shape._breakdown_summary([{"name": "api_app", "total": 400.0, "parts": [
+            {"name": "media.example", "value": 40.0}]}])
+        self.assertIn("more replicas cannot shorten it", big)
+        self.assertIn("no one dependency is where the time goes", small)
+        self.assertEqual(shape.DEPENDENCY_SHARE, 0.5)
+
+    def test_the_golden_latency_card_says_what_the_slowest_is_waiting_on(self):
+        # "api_app is over its SLO" and "api_app is over its SLO because of
+        # media.example" are a different amount of help at 3am.
+        sections = self.build(
+            ranges={shape.Q_LATENCY: {"api_app": series(900.0)}},
+            instants={shape.Q_SLO: 500.0},
+            dependencies={("api_app", "upstream", "media.example"): 630.0})
+        summary = {(s["key"], c["title"]): c["summary"]
+                   for s in sections for c in s["cards"]}[("golden", "Latency")]
+        self.assertIn("media.example", summary)
+        self.assertIn("70%", summary)
 
     def test_a_service_past_its_slo_is_named_not_just_counted(self):
         sections = self.build(ranges={shape.Q_LATENCY: {"api": series(900.0),

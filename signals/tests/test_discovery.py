@@ -98,10 +98,12 @@ class DependencyStatisticTest(unittest.TestCase):
             ["api_app"])["api_app"]
         self.assertEqual(cause, "upstream")
         self.assertIn("histogram_quantile", expr)
-        # Grouped by the thing being CALLED, not by the calling service, or one
-        # slow third party is averaged into every fast one and nothing is named.
+        # Grouped by the thing being CALLED, or one slow third party is
+        # averaged into every fast one and nothing is named — AND by the
+        # calling service, or two applications using the same client library
+        # are averaged into each other and the reading is neither one's.
         self.assertEqual(target, "host")
-        self.assertIn("by (host, le)", expr)
+        self.assertIn("by (service, host, le)", expr)
 
     def test_a_dependency_without_buckets_still_falls_back_to_a_mean(self):
         # Most timers publish _sum and _count and nothing else. A mean is worth
@@ -110,6 +112,10 @@ class DependencyStatisticTest(unittest.TestCase):
         [(_cause, expr, _base, _target)] = discovery.discover_dependencies(
             ["api_app"])["api_app"]
         self.assertNotIn("histogram_quantile", expr)
+        # The fallback splits per service and per target too. It used to group
+        # by `service` alone, so the mean of every outbound call a service made
+        # was reported as the latency of whichever host got named.
+        self.assertIn("by (service, host)", expr)
 
 
 if __name__ == "__main__":

@@ -636,9 +636,27 @@ def vm_query_range(expr, minutes=60, step=60, label=None):
     return _RANGES.get(expr, {})
 
 
+#: A breakdown with the two shapes worth seeing in the preview: one call that
+#: is most of the request, and one that is a rounding error beside it. The
+#: third is deliberately OVER the request — the case the chart exists to draw
+#: honestly, and the one a stacked chart would have had to hide.
+_DEPENDENCIES = {
+    ("api_app", "upstream", "media.example.net"): 268.0,
+    ("api_app", "database", "documents"): 31.0,
+    ("web_app", "upstream", "queue.vendor.example"): 171.0,
+}
+
+
 def observability():
     """Mirrors swarm.observability() — the same function, canned series."""
-    return shape.observability(vm_query_range, _obs_instant, charts)
+    return shape.observability(vm_query_range, _obs_instant, _obs_multi, charts)
+
+
+def _obs_multi(expr, *labels):
+    """The multi-label instant readings — today, the dependency breakdown."""
+    if expr == shape.Q_DEPENDENCY:
+        return dict(_DEPENDENCIES)
+    return {}
 
 
 def _obs_instant(expr):

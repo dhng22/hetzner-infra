@@ -181,10 +181,19 @@ def discover_dependencies(service_names):
                 continue
             target = next((lab for lab in TARGET_LABELS if labels.get(lab)), None)
             unit = unit_of(base)
+            # ALWAYS grouped by `service` as well as by the target. It used to
+            # be grouped by the target ALONE, which silently merged every
+            # service publishing the same client library: two applications
+            # calling the same third party produced one reading that was
+            # neither one's, and attributing it to both is how a healthy
+            # service inherits its noisy neighbour's verdict. Nothing failed
+            # while it did — there is one application per cluster here, so the
+            # merge had nothing to merge.
+            by = f"service, {target}" if target else "service"
             if (svc, base) in histogrammed:
-                expr = p95_expr(f"{base}_bucket", unit, by=target or "service")
+                expr = p95_expr(f"{base}_bucket", unit, by=by)
             else:
-                expr = mean_expr(base, unit)
+                expr = mean_expr(base, unit, by=by)
             entry = (cause, expr, base, target)
             if entry not in found.setdefault(svc, []):
                 found[svc].append(entry)
