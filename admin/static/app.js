@@ -601,7 +601,10 @@
     el.style.setProperty("--mem", t.mem_share);
     el.style.setProperty("--cpu-use", t.cpu_used);
     el.style.setProperty("--mem-use", t.mem_used);
-    el.style.setProperty("--disk-use", t.disk_used);
+    // null when nothing measures per-container disk on this cluster; a bar has
+    // to be drawn somewhere and the floor is the only honest place, which is
+    // why the tooltip says which of the two it is rather than leaving "0%".
+    el.style.setProperty("--disk-use", t.disk_used == null ? 0 : t.disk_used);
     // One bullet per resource. The tooltip is textContent into a `pre-line`
     // box, so the newlines are the layout and the bullets are just characters
     // — no markup crosses this boundary, which is the rule for anything
@@ -612,7 +615,10 @@
                     t.cpu_share + "% reserved" +
                     "\n• memory — " + t.mem_used + "% used, " +
                     t.mem_share + "% reserved" +
-                    "\n• disk — " + t.disk_used + "% used\n" +
+                    "\n• disk — " + (t.disk_used == null
+                      ? "not measured: this cluster's cadvisor reports " +
+                        "filesystem usage for the machine only, not per container"
+                      : t.disk_used + "% used") + "\n" +
                     "\nevery figure is a share of this node");
     // The chart, after the label. Three bars: fill is what the task uses, the
     // mark across it is what it reserved. Disk has no mark because Swarm has

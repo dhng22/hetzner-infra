@@ -326,6 +326,28 @@ services:
     # nothing, so cpu/replica reads n/a forever. That is the signal that exists
     # to authorise scaling DOWN when the latency histogram is empty at low
     # traffic — so losing it silently means the fleet never shrinks.
+    #
+    # PER-CONTAINER DISK IS NOT AVAILABLE HERE AT ANY VERSION, and no flag,
+    # mount or upgrade changes that. Docker 29's image store makes the driver
+    # `overlayfs` (the containerd snapshotter). cadvisor learned that name in
+    # v0.56 — enough to find a container's rootfs — but `FsStats`
+    # (container/docker/fs.go) still switches on aufs / overlay / overlay2 / vfs
+    # / zfs / devicemapper and returns nil for anything else, so the filesystem
+    # stats are dropped with no error and no log line. Checked against v0.60.5
+    # and against master; v0.60.5 was run beside this one on the master and
+    # reported `filesystem: null` for every container before being removed.
+    # `/dev/disk` was mounted for that test and changed nothing.
+    #
+    # It is also not worth chasing. The metric is the container's WRITABLE
+    # LAYER, and measured here that is 4kB for the Redis whose data volume
+    # holds 75MB and 1MB for the panel itself. What fills a disk on this
+    # cluster is volumes — mongo 743MB, vmdata 311MB — and nothing scrapes
+    # those. The node's own disk figure, which comes from node-exporter and
+    # works, is what the alerts and the autoscaler read.
+    #
+    # So the panel says "not measured" where it would otherwise draw a bar at
+    # the floor forever: `swarm.service_usage` and `swarm.topology` return None
+    # rather than 0 when the whole query comes back empty.
     image: gcr.io/cadvisor/cadvisor:v0.55.1
     command: ["--docker_only=true", "--housekeeping_interval=15s"]
     volumes:

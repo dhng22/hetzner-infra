@@ -1012,8 +1012,12 @@ def topology():
                                     node_cpu)
             it["mem_used"] = _share(task_mem.get(it["id"]), node_mem)
             # Disk has no reservation to draw a tick at — Swarm does not let you
-            # reserve any — so this band is a fill and nothing else.
-            it["disk_used"] = _share(task_disk.get(it["id"]), node_disk)
+            # reserve any — so this band is a fill and nothing else. None, not
+            # zero, when the whole query came back empty: see the note on
+            # `service_usage`. On Docker 29 that is the standing case, and a
+            # band drawn at the floor forever is a claim rather than a reading.
+            it["disk_used"] = (_share(task_disk.get(it["id"]), node_disk)
+                               if task_disk else None)
         # Grouped by band, then by name, so replicas of one service sit together
         # and the bands read as blocks without needing colour to do the work.
         items.sort(key=lambda x: (band_rank.get(x["band"], 99), x["name"], x["id"]))

@@ -236,6 +236,26 @@ class TaskChipTest(unittest.TestCase):
         self.assertNotIn("no reservation", js)
         self.assertIn("disk_used_gb", js)
 
+    def test_an_unmeasured_disk_reads_as_unmeasured_and_not_as_empty(self):
+        """
+        Docker 29's `overlayfs` driver falls through cadvisor's `FsStats` switch
+        to `default: return nil`, at every released version and on master — so
+        `container_fs_usage_bytes` carries no container labels at all and the
+        disk band would sit at the floor forever. A bar at zero is a reading;
+        this one is not, and the difference has to survive both renderers.
+        """
+        for path in self.chip_templates():
+            body = path.read_text()
+            with self.subTest(template=path.name):
+                self.assertIn("t.disk_used is none", body)
+                self.assertIn("not measured", body)
+                # It still has to be drawn somewhere, and the floor is the only
+                # honest place — `--disk-use:None` would break the whole chart.
+                self.assertIn("--disk-use:{{ t.disk_used or 0 }}", body)
+        js = self.JS.read_text()
+        self.assertIn("t.disk_used == null", js)
+        self.assertIn("not measured", js)
+
     def test_disk_has_no_reservation_tick(self):
         # Swarm has no disk reservation, so a tick there would be a mark at a
         # number nobody set.
