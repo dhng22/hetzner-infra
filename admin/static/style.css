@@ -36,10 +36,6 @@
   --ok:   var(--grass);
   --warn: var(--sodium);
   --bad:  var(--ember);
-  /* Reserved-capacity gauges: red is CPU, blue is memory. Blue is its own token
-     rather than the accent, because the accent already means "interactive" and
-     a gauge is not something you click. */
-  --info: #4f8ff0;
 
   --rail: 252px;
   --r-sm: 5px;
@@ -84,7 +80,6 @@
     --ok:   #3f9757;
     --warn: #ad741a;
     --bad:  #c4453c;
-    --info: #2f6fd0;
   }
 }
 
@@ -93,14 +88,14 @@
   --bg: #eff4f6; --surface: #ffffff; --surface-2: #f4f8f9; --line: #d6e2e7;
   --text: #16242b; --text-mute: #5a6f7a; --accent: #0e9c90; --accent-ink: #fff;
   --shadow: 0 1px 2px rgb(16 40 50 / .06), 0 8px 24px -14px rgb(16 40 50 / .22);
-  --ok: #3f9757; --warn: #ad741a; --bad: #c4453c; --info: #2f6fd0;
+  --ok: #3f9757; --warn: #ad741a; --bad: #c4453c;
 }
 :root[data-theme="dark"] {
   --bg: var(--abyss); --surface: var(--steel); --surface-2: var(--steel-2);
   --line: var(--hairline); --text: var(--chalk); --text-mute: var(--mist);
   --accent: var(--beacon); --accent-ink: #04211f;
   --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 8px 24px -12px rgb(0 0 0 / .6);
-  --ok: var(--grass); --warn: var(--sodium); --bad: var(--ember); --info: #4f8ff0;
+  --ok: var(--grass); --warn: var(--sodium); --bad: var(--ember);
 }
 
 /* The panel's own theme button writes a class to <body>, not <html>.
@@ -111,14 +106,14 @@ body.theme-light {
   --bg: #eff4f6; --surface: #ffffff; --surface-2: #f4f8f9; --line: #d6e2e7;
   --text: #16242b; --text-mute: #5a6f7a; --accent: #0e9c90; --accent-ink: #fff;
   --shadow: 0 1px 2px rgb(16 40 50 / .06), 0 8px 24px -14px rgb(16 40 50 / .22);
-  --ok: #3f9757; --warn: #ad741a; --bad: #c4453c; --info: #2f6fd0;
+  --ok: #3f9757; --warn: #ad741a; --bad: #c4453c;
 }
 body.theme-dark {
   --bg: var(--abyss); --surface: var(--steel); --surface-2: var(--steel-2);
   --line: var(--hairline); --text: var(--chalk); --text-mute: var(--mist);
   --accent: var(--beacon); --accent-ink: #04211f;
   --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 8px 24px -12px rgb(0 0 0 / .6);
-  --ok: var(--grass); --warn: var(--sodium); --bad: var(--ember); --info: #4f8ff0;
+  --ok: var(--grass); --warn: var(--sodium); --bad: var(--ember);
 }
 
 * { box-sizing: border-box; }
@@ -203,7 +198,10 @@ main.wide { max-width: 1560px; }
 .page-head h1 { font-size: var(--t-2xl); font-weight: var(--w-bold); letter-spacing: -.015em; margin: 0 0 var(--s-1); text-wrap: balance; }
 .page-head h1.sub { font-size: var(--t-xl); }
 .page-head p { margin: 0; color: var(--text-mute); max-width: 65ch; }
-.page-head .spacer { margin-left: auto; }
+/* Everywhere, not in two named containers. A `.spacer` in a flex row means
+   one thing wherever it is put, and scoping it meant the one inside a
+   service row pushed nothing at all. */
+.spacer { margin-left: auto; }
 
 .eyebrow {
   font-size: var(--t-xs); text-transform: uppercase; letter-spacing: .1em;
@@ -248,7 +246,6 @@ main.wide { max-width: 1560px; }
   padding: var(--s-3) var(--s-4); border-bottom: 1px solid var(--line);
 }
 .panel-head h2 { font-size: var(--t-lg); font-weight: var(--w-bold); margin: 0; letter-spacing: -.005em; }
-.panel-head .spacer { margin-left: auto; }
 .panel-body { padding: var(--s-4); }
 .panel-note { padding: var(--s-3) var(--s-4); background: var(--surface-2); border-top: 1px solid var(--line); color: var(--text-mute); font-size: var(--t-sm); }
 
@@ -268,15 +265,25 @@ main.wide { max-width: 1560px; }
 
 /* --- service rows --------------------------------------------------------- */
 .rows { display: flex; flex-direction: column; }
+/* FLEX, NOT FIXED TRACKS. Every row here is its own grid — the tracks never
+   lined up between rows anyway — but `3px 1fr auto auto auto` did fix the
+   number of children at five, and a row with six wrapped its last one onto a
+   second line under the stripe. That is what dropped the state pill below the
+   name on exactly those infrastructure services that also have an Open button
+   or a URL to show, and left it in place on the ones that do not. The count is
+   a template's business, so the row stops counting: the stripe is fixed, the
+   name takes the slack, everything after it is as wide as it needs to be. */
 .row {
-  display: grid; grid-template-columns: 3px 1fr auto auto auto;
-  align-items: center; gap: var(--s-4);
+  display: flex; align-items: center; gap: var(--s-4);
   padding: var(--s-3) var(--s-4) var(--s-3) 0; border-bottom: 1px solid var(--line);
   color: inherit;
 }
+.row > * { flex: none; }
+.row > .stripe + * { flex: 1 1 auto; min-width: 0; }
 .row:last-child { border-bottom: 0; }
 .row:hover { background: var(--surface-2); text-decoration: none; }
-.row .stripe { align-self: stretch; border-radius: 0 3px 3px 0; background: var(--line); }
+.row .stripe { width: 3px; align-self: stretch; border-radius: 0 3px 3px 0;
+               background: var(--line); }
 .row.ok   .stripe { background: var(--ok); }
 .row.warn .stripe { background: var(--warn); }
 .row.bad  .stripe { background: var(--bad); }
@@ -637,13 +644,26 @@ ul.tight li { margin-bottom: 2px; }
 
 .tree-top { display: flex; justify-content: center; }
 
-.tree-kids { display: flex; align-items: flex-start; justify-content: center; }
+/* SAFE centre. Plain `center` centres the hosts when they fit and, when they do
+   not, overflows them equally off BOTH edges — and the half that goes off the
+   left is unreachable, because a scroll container cannot scroll to negative.
+   Now that a branch is as wide as its tasks want, four hosts routinely do not
+   fit, so the keyword that falls back to `start` is the one that means what
+   this line was always trying to say. */
+.tree-kids { display: flex; align-items: flex-start; justify-content: safe center; }
 
 /* Each branch draws its own half of the horizontal bus plus the vertical drop
    into its own card. The first and last trim their outer half so the bus stops
    at the outermost children instead of running off into space. */
 .tree-branch { position: relative; padding: 26px 9px 0; display: flex;
   flex-direction: column; align-items: center; }
+/* NO SHRINKING, BUT ONLY WHERE THERE ARE TASKS. A branch carrying chips is as
+   wide as they need; four of them squeezed into the panel's width gave each
+   about 190px, which is one chip per line however the chips are laid out. The
+   map scrolls sideways — it always has — and a map you scroll beats a column
+   you scroll. The fleet view has no chips, and there the old shrinking is
+   right: its cards wrap their text and the page stays still. */
+.tree-branch:has(.slots) { flex: 1 0 auto; }
 .tree-branch::before, .tree-branch::after {
   content: ""; position: absolute; top: 0; height: 26px; width: 50%;
   border-top: 1px solid var(--line);
@@ -687,6 +707,15 @@ a.tnode.is-link:focus-visible { outline: 2px solid var(--accent); outline-offset
 .tnode-sub b { color: var(--text); font-family: var(--mono); font-weight: 600; }
 .tnode-meters { display: flex; gap: 12px; font-size: 12px; color: var(--text-mute); }
 .tnode-meters b { color: var(--text); font-family: var(--mono); font-weight: 600; }
+/* USED AGAINST RESERVED, in the same three bars the map draws on a task — one
+   scale per resource, the fill what the machine is using and the mark what is
+   promised out of it. It replaces two rings in the card's bottom corners: they
+   showed reservation only, in a second idiom, and a ring cannot be compared
+   with anything — which is the entire question here, because a node reading 4%
+   busy can be 100% reserved and take nothing more. */
+.tnode-res { display: flex; align-items: flex-end; gap: 10px; margin-top: 6px; }
+.tnode-res-k { font-size: var(--t-xs); text-transform: uppercase; letter-spacing: .07em;
+               color: var(--text-mute); line-height: 1.6; }
 
 /* Tasks hang off a single spine dropped from the host card's left edge, one
    tick per task — the file-tree read, which is what keeps 14 of them legible
@@ -697,13 +726,23 @@ a.tnode.is-link:focus-visible { outline: 2px solid var(--accent); outline-offset
 /* A NODE'S TASKS WRAP. They used to be one chip per row with an elbow into a
    spine, which was fine at 26px a chip and is not at 46px: a master running
    eighteen tasks became a 900px column, and the map stopped being a map.
-   They flow into as many columns as the width allows instead, so the tree is
-   as tall as its tallest node needs and no taller.
+   They flow onto a wrapping row instead, so the tree is as tall as its tallest
+   node needs and no taller.
+   EACH CHIP IS AS WIDE AS ITS OWN CONTENTS. Uniform grid tracks made every chip
+   as wide as the widest name on the node, and the chart is pushed to the chip's
+   end — so `api` rendered as four characters, a hand's width of nothing, and
+   then three bars. The name and its chart belong next to each other; only the
+   chips have to line up, and on a wrapping row they do that by themselves.
    The spine stays as the branch's own rule; the per-chip elbow is gone with
    the single column it was drawn for. */
 .slots { position: relative; align-self: stretch;
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-  gap: 6px; margin-top: 20px; padding-left: 18px; }
+  display: flex; flex-wrap: wrap; align-items: flex-start;
+  gap: 8px; margin-top: 20px; padding-left: 18px;
+  /* Wide enough to fit two or three chips on a line, narrow enough that three
+     hosts still sit side by side on an ordinary screen. Without a cap a
+     wrapping row has nothing to wrap at — the branch is sized by its contents,
+     so fourteen chips would lay themselves out in one 2000px line. */
+  max-width: 400px; }
 .slots::before { content: ""; position: absolute; left: 0; top: -20px; width: 1px;
   height: calc(100% + 20px); background: var(--line); }
 .slots > .slot { position: relative; }
@@ -721,39 +760,6 @@ a.tnode.is-link:focus-visible { outline: 2px solid var(--accent); outline-offset
 }
 .slot.is-empty { color: var(--text-mute); font-style: italic; border-style: dashed; }
 
-
-/* --- reserved capacity --------------------------------------------------- */
-/* RESERVED, not used. Whether another replica fits on a box is decided by what
-   is already promised on it, and the two numbers routinely disagree by an order
-   of magnitude — a node reading 4% busy can be 100% reserved and take nothing
-   more. Red is CPU, blue is memory, a full circle is a full machine. */
-.gauge {
-  --v: 0;
-  position: absolute; bottom: 8px;
-  width: 18px; height: 18px; border-radius: 50%;
-  background: conic-gradient(var(--gauge-fill) calc(var(--v) * 1%),
-                             var(--gauge-track) 0);
-  cursor: help;
-}
-/* The hole, so it reads as a ring rather than a pie. Filled with the card's own
-   background so it disappears into whatever surface it sits on. */
-.gauge::after {
-  content: ""; position: absolute; inset: 4px; border-radius: 50%;
-  background: var(--surface);
-}
-.gauge-cpu { inset-inline-start: 10px; --gauge-fill: var(--bad);
-             --gauge-track: color-mix(in srgb, var(--bad) 18%, transparent); }
-.gauge-mem { inset-inline-end: 10px;  --gauge-fill: var(--info);
-             --gauge-track: color-mix(in srgb, var(--info) 18%, transparent); }
-.tnode.has-gauges { position: relative; padding-bottom: 30px; }
-.tnode-root .gauge::after,
-.tnode-host .gauge::after { background: var(--surface-2); }
-.tnode-host.is-manager .gauge::after { background: var(--surface); }
-
-.gauge-key { width: 10px; height: 10px; border-radius: 50%; flex: none;
-             display: inline-block; }
-.gauge-key-cpu { background: var(--bad); }
-.gauge-key-mem { background: var(--info); }
 
 /* --- task state, and what a task reserves -------------------------------- */
 /* The chip's tint already says what a task IS, so the dot says what it is
@@ -779,7 +785,6 @@ a.tnode.is-link:focus-visible { outline: 2px solid var(--accent); outline-offset
    cost three <b> tags and answer "is this reservation the right size" at a
    glance, which the ring never could. */
 .slot {
-  --cpu: 0; --mem: 0; --cpu-use: 0; --mem-use: 0; --disk-use: 0;
   position: relative;
   gap: 14px;                             /* the name, then room, then the chart */
   padding: 7px 11px 7px 9px; min-height: 46px;
@@ -818,10 +823,24 @@ a.tnode.is-link:focus-visible { outline: 2px solid var(--accent); outline-offset
   bottom: calc(var(--res, 0) * 1%); height: 2px; border-radius: 1px;
   background: color-mix(in srgb, var(--text) 70%, transparent);
 }
-.band-cpu  { --use: var(--cpu-use); --res: var(--cpu); }
-.band-mem  { --use: var(--mem-use); --res: var(--mem); }
-.band-disk { --use: var(--disk-use); }
+/* Every band reads its pair through a fallback, so the chart is drawn by
+   whatever sets the five properties and by nothing else. That is what lets the
+   same three bars stand in a task chip, in a node card and in a component card
+   without three copies of this block — and a host that has only some of the
+   numbers simply leaves the rest at zero. */
+.band-cpu  { --use: var(--cpu-use, 0); --res: var(--cpu, 0); }
+.band-mem  { --use: var(--mem-use, 0); --res: var(--mem, 0); }
+.band-disk { --use: var(--disk-use, 0); }
 .band-disk::after { content: none; }
+/* A RESERVATION WITH NOTHING TO COMPARE IT TO. Usage is measured per task,
+   against the node that task is on; a component's replicas sit on different
+   machines, so there is no one denominator to state its usage against and the
+   component list has only the reservation. Drawing that as the tick would leave
+   an empty bar with a mark floating in it, so here the reservation IS the fill
+   and there is no tick — said in a class name rather than by quietly feeding a
+   reserved figure into the property called `-use`. */
+.band-res { --use: var(--res, 0); }
+.band-res::after { content: none; }
 .slot.is-empty .slot-chart { display: none; }
 .slot-prod     { --slot-bg: color-mix(in srgb, var(--s-prod) 14%, var(--surface));
                  --slot-ring: var(--s-prod); }
@@ -918,14 +937,13 @@ a.tnode.is-link:focus-visible { outline: 2px solid var(--accent); outline-offset
 [data-tip] { cursor: help; }
 .slot[data-tip] { cursor: default; }
 
+/* flex-end, not the footer's baseline: the bars have no text in them, so a
+   baseline lands at the bottom of their margin box and drops the label. */
 .card-foot.subtle { border-top: 1px dashed var(--line); margin-top: 2px;
-                    padding-top: 6px; font-size: 12px; }
+                    padding-top: 6px; font-size: 12px; align-items: flex-end; }
 
-/* An inline gauge sits in a row of text rather than in a card corner, so it is
-   smaller and its hole matches the surface it lands on. */
-.gauge-inline { position: relative; width: 14px; height: 14px; inset: auto; }
-.gauge-inline::after { inset: 3px; background: var(--surface); }
-.gauge-pair { display: inline-flex; gap: 6px; align-items: center; }
+/* The same bar chart the map draws on a task, in a card footer. */
+.card-res { display: flex; align-items: flex-end; margin-left: auto; }
 
 .head-reserved { font-size: 12px; color: var(--text-mute);
                  border: 1px solid var(--line); border-radius: var(--r-sm);

@@ -58,7 +58,7 @@
               <div class="tree-branch" data-node="{{ n.id }}">
                 {# Clickable here too: the map is where you notice a node, and the
                    node's own page is where you can do anything about it. #}
-                <a class="tnode tnode-host is-link has-gauges {{ 'is-manager' if n.role == 'manager' }}"
+                <a class="tnode tnode-host is-link {{ 'is-manager' if n.role == 'manager' }}"
                    href="{{ node_href(n.id, 'overview') }}">
                   <span class="tnode-head">
                     <span class="pill {{ 'accent' if n.role == 'manager' else n.tone }}">{{ n.role }}</span>
@@ -77,12 +77,19 @@
                     <span title="root filesystem — where docker keeps every volume">disk <b data-f="disk">{% if n.disk_pct is not none %}{{ n.disk_pct|round|int }}%{% else %}—{% endif %}</b></span>
                   </span>
 
-                  {# Reserved, not used: the pair that decides whether anything else
-                     can be placed here. A node can be 4% busy and 100% reserved. #}
-                  <span class="gauge gauge-cpu" data-f="cpures" style="--v:{{ n.cpu_reserved_pct }}"
-                        data-tip="CPU reserved: {{ n.cpu_reserved_pct }}% — {{ n.cpu_reserved }} of {{ n.cpus }} vCPU promised to tasks here"></span>
-                  <span class="gauge gauge-mem" data-f="memres" style="--v:{{ n.mem_reserved_pct }}"
-                        data-tip="Memory reserved: {{ n.mem_reserved_pct }}% — {{ n.mem_reserved_mb }} MB of {{ n.memory_gb }} GB promised to tasks here"></span>
+                  {# The machine's own bars, drawn exactly as its tasks' are one
+                     level down: fill is what is in use, the mark across it is
+                     what is promised out. Reservation is the number that decides
+                     whether anything else can be placed here, and a node can be
+                     4% busy and 100% reserved — which is a comparison, so it is
+                     drawn as one. Disk carries no mark: Swarm has no disk
+                     reservation to put one at. #}
+                  <span class="tnode-res" data-f="res"
+                        data-tip="{{ n.hostname }}&#10;&#10;• cpu — {{ n.cpu_pct|round|int if n.cpu_pct is not none else '—' }}% used, {{ n.cpu_reserved_pct }}% reserved ({{ n.cpu_reserved }} of {{ n.cpus }} vCPU)&#10;• memory — {{ n.mem_pct|round|int if n.mem_pct is not none else '—' }}% used, {{ n.mem_reserved_pct }}% reserved ({{ n.mem_reserved_mb }} MB of {{ n.memory_gb }} GB)&#10;• disk — {{ n.disk_pct|round|int if n.disk_pct is not none else '—' }}% used, no reservation">
+                    <span class="tnode-res-k">used · reserved</span>
+                    <i class="slot-chart" aria-hidden="true"
+                       style="--cpu:{{ n.cpu_reserved_pct }};--mem:{{ n.mem_reserved_pct }};--cpu-use:{{ n.cpu_pct|round|int if n.cpu_pct is not none else 0 }};--mem-use:{{ n.mem_pct|round|int if n.mem_pct is not none else 0 }};--disk-use:{{ n.disk_pct|round|int if n.disk_pct is not none else 0 }}"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
+                  </span>
                 </a>
 
                 <!-- data-sig matches the signature the poller computes, so the first

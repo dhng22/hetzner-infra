@@ -33,15 +33,16 @@
   <div class="panel-head">
     <h2>Nodes</h2>
     <span class="spacer"></span>
-    <span class="legend-item"><i class="gauge-key gauge-key-cpu"></i>CPU reserved</span>
-    <span class="legend-item"><i class="gauge-key gauge-key-mem"></i>memory reserved</span>
+    <span class="legend-item mono">cpu · mem · disk</span>
   </div>
 
   <p class="panel-intro">
-    The two rings on each node are <strong>reserved</strong> capacity, not usage. A full ring
-    means every core or byte on that machine is already promised to something, and no further
-    replica can be placed there however idle it looks — a node routinely reads 4% busy while
-    being 100% reserved. This is the pair the autoscaler buys and deletes servers on.
+    The three bars on each node are CPU, memory and disk. The fill is what the machine is
+    <strong>using</strong>; the mark across it is what has been <strong>reserved</strong> — and
+    it is reservation, not usage, that decides whether another replica can be placed here. A
+    node routinely reads 4% busy while being 100% reserved and able to take nothing more, which
+    is why the two are drawn on one scale rather than in two places. This is the pair the
+    autoscaler buys and deletes servers on. Disk has no mark: Swarm has no disk reservation.
   </p>
 
   <div class="tree-scroll">
@@ -65,7 +66,7 @@
              tasks, its availability — is on its own page rather than crammed in
              here, because "what is this box and what may it run" is a question
              with a dozen answers and this is a row in a fleet. #}
-          <a class="tnode tnode-host is-link has-gauges {{ 'is-manager' if n.role == 'manager' }}"
+          <a class="tnode tnode-host is-link {{ 'is-manager' if n.role == 'manager' }}"
              href="{{ node_href(n.id) }}">
             <span class="tnode-head">
               <span class="pill {{ 'accent' if n.role == 'manager' else n.tone }}">{{ n.role }}</span>
@@ -84,11 +85,15 @@
               <span title="root filesystem — where docker keeps every volume">used disk <b>{% if n.disk_pct is not none %}{{ n.disk_pct|round|int }}%{% else %}—{% endif %}</b>{% if n.disk_free_gb %} <span class="muted">({{ n.disk_free_gb }} GB free)</span>{% endif %}</span>
             </span>
 
-            {# bottom-start: CPU reserved. bottom-end: memory reserved. #}
-            <span class="gauge gauge-cpu" style="--v:{{ n.cpu_reserved_pct }}"
-                  data-tip="CPU reserved: {{ n.cpu_reserved_pct }}% — {{ n.cpu_reserved }} of {{ n.cpus }} vCPU promised to tasks on this node"></span>
-            <span class="gauge gauge-mem" style="--v:{{ n.mem_reserved_pct }}"
-                  data-tip="Memory reserved: {{ n.mem_reserved_pct }}% — {{ n.mem_reserved_mb }} MB of {{ n.memory_gb }} GB promised to tasks on this node"></span>
+            {# The same three bars a task chip carries, on the machine the tasks
+               are placed on — so "the fill is past the mark" reads the same way
+               at both levels. #}
+            <span class="tnode-res"
+                  data-tip="{{ n.hostname }}&#10;&#10;• cpu — {{ n.cpu_pct|round|int if n.cpu_pct is not none else '—' }}% used, {{ n.cpu_reserved_pct }}% reserved ({{ n.cpu_reserved }} of {{ n.cpus }} vCPU)&#10;• memory — {{ n.mem_pct|round|int if n.mem_pct is not none else '—' }}% used, {{ n.mem_reserved_pct }}% reserved ({{ n.mem_reserved_mb }} MB of {{ n.memory_gb }} GB)&#10;• disk — {{ n.disk_pct|round|int if n.disk_pct is not none else '—' }}% used, no reservation">
+              <span class="tnode-res-k">used · reserved</span>
+              <i class="slot-chart" aria-hidden="true"
+                 style="--cpu:{{ n.cpu_reserved_pct }};--mem:{{ n.mem_reserved_pct }};--cpu-use:{{ n.cpu_pct|round|int if n.cpu_pct is not none else 0 }};--mem-use:{{ n.mem_pct|round|int if n.mem_pct is not none else 0 }};--disk-use:{{ n.disk_pct|round|int if n.disk_pct is not none else 0 }}"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
+            </span>
           </a>
         </div>
         {% endfor %}

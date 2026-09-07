@@ -83,8 +83,24 @@ class StylesheetTest(unittest.TestCase):
             self.assertNotIn(".  ", head)
 
     def test_every_custom_property_used_is_defined(self):
+        """
+        A `var(--typo)` is silent: the declaration is dropped and the element
+        renders at whatever it inherited.
+
+        Set ANYWHERE the panel sets one, not only in the stylesheet. The chart's
+        five properties are supplied per element — inline by the templates, and
+        by `app.js` on every repaint — because their whole job is to differ per
+        node and per task. Reading the templates and the script too keeps the
+        typo check and adds one: a property the stylesheet draws with and
+        nothing anywhere fills in still fails.
+        """
         # Not anchored to the line start: tokens are declared several to a line.
-        defined = set(re.findall(r"(--[a-z0-9-]+)\s*:", self.code))
+        sources = [self.code, (ADMIN / "static" / "app.js").read_text()]
+        sources += [p.read_text() for p in TEMPLATES.glob("*.html")]
+        defined = set()
+        for text in sources:
+            defined |= set(re.findall(r"(--[a-z0-9-]+)\s*:", text))
+            defined |= set(re.findall(r'setProperty\(\s*"(--[a-z0-9-]+)"', text))
         used = set(re.findall(r"var\((--[a-z0-9-]+)", self.code))
         self.assertEqual(used - defined, set(), "undefined custom properties")
 
@@ -181,10 +197,14 @@ class TaskChipTest(unittest.TestCase):
         on the poller's chips only — so the page looks right until the first
         tick and wrong forever after.
         """
+        # PER LINE, because `slot-chart` is no longer unique in either file —
+        # a node card carries the same three bars for the machine itself. The
+        # chip is the line that has the dot on it.
         for path in self.chip_templates():
-            body = path.read_text()
             with self.subTest(template=path.name):
-                self.assertLess(body.index("dot dot-"), body.index("slot-chart"))
+                chip = [l for l in path.read_text().splitlines() if "dot dot-" in l]
+                self.assertEqual(len(chip), 1, "the chip moved; this cannot check it")
+                self.assertLess(chip[0].index("dot dot-"), chip[0].index("slot-chart"))
         js = self.JS.read_text()
         build = re.search(r"function buildSlot\(t\) \{(.*?)\n  \}", js, re.S)
         self.assertIsNotNone(build)
@@ -205,6 +225,119 @@ class TaskChipTest(unittest.TestCase):
         # number nobody set.
         css = CSS.read_text()
         self.assertIn(".band-disk::after { content: none; }", css)
+
+    def test_the_bars_are_the_only_way_capacity_is_drawn(self):
+        """
+        ONE IDIOM FOR ONE QUESTION.
+
+        Reservation used to be drawn twice: these bars on a task, and a pair of
+        conic-gradient rings on a node card and a component card. A ring shows a
+        number; it cannot be compared with anything, and "is this reservation
+        the right size" is nothing but a comparison. Both idioms in one map also
+        meant two legends for one fact.
+        """
+        # Comments stripped first: prose is allowed to say what a thing used to
+        # be, and this test is about what the browser is handed.
+        css = re.sub(r"/\*.*?\*/", "", CSS.read_text(), flags=re.S)
+        self.assertNotIn("conic-gradient", css)
+        for gone in (".gauge", "has-gauges", "--info"):
+            self.assertNotIn(gone, css, f"{gone} survived the rings")
+        for path in sorted(TEMPLATES.glob("*.html")):
+            body = re.sub(r"\{#.*?#\}", "", path.read_text(), flags=re.S)
+            with self.subTest(template=path.name):
+                self.assertNotIn("gauge", body)
+
+    def test_every_surface_that_draws_capacity_draws_the_same_bars(self):
+        """
+        A node card, a component card and a task chip each carry the chart, and
+        each sets the properties it actually has — a component has no disk and
+        no usage of its own. What none of them may do is invent a fourth way to
+        say it.
+        """
+        surfaces = {
+            "_overview.html": ("band-cpu", "band-mem", "band-disk"),
+            "_cluster.html": ("band-cpu", "band-mem", "band-disk"),
+            "_components_live.html": ("band-cpu band-res", "band-mem band-res"),
+        }
+        for name, bands in surfaces.items():
+            body = (TEMPLATES / name).read_text()
+            with self.subTest(template=name):
+                self.assertIn("slot-chart", body)
+                for band in bands:
+                    self.assertIn(band, body)
+
+    def test_a_reservation_with_no_usage_is_the_fill_and_has_no_tick(self):
+        # Otherwise the component card is an empty bar with a mark floating in
+        # it, which reads as "nothing is reserved".
+        css = CSS.read_text()
+        self.assertIn(".band-res { --use: var(--res, 0); }", css)
+        self.assertIn(".band-res::after { content: none; }", css)
+
+    def test_a_chip_is_as_wide_as_its_own_name(self):
+        """
+        Uniform tracks made every chip as wide as the widest name on the node,
+        and the chart is pushed to the chip's end — so `api` rendered as three
+        characters, a gap the width of `victoriametrics`, and then the bars.
+        """
+        css = CSS.read_text()
+        block = re.search(r"\.slots \{(.*?)\}", css, re.S)
+        self.assertIsNotNone(block)
+        body = block.group(1)
+        self.assertIn("flex-wrap: wrap", body)
+        self.assertNotIn("grid-template-columns", body)
+        # A wrapping row needs something to wrap AT, and the branch holding it
+        # must be allowed to be that wide.
+        self.assertIn("max-width: 400px", body)
+        self.assertIn(".tree-branch:has(.slots) { flex: 1 0 auto; }", css)
+
+    def test_hosts_that_do_not_fit_start_at_the_left_edge(self):
+        """
+        `justify-content: center` overflows equally off both edges, and the half
+        that goes off the left cannot be scrolled to — a scroll offset is never
+        negative. Once a branch is as wide as its tasks want, four hosts stop
+        fitting routinely, and the first one disappears.
+        """
+        self.assertIn("justify-content: safe center", CSS.read_text())
+
+
+class ServiceRowTest(unittest.TestCase):
+    """
+    `.row` is shared by five templates that put different things in it, so it
+    must not care how many things there are.
+    """
+
+    def test_the_row_does_not_fix_how_many_children_it_has(self):
+        """
+        THE PILL THAT FELL THROUGH THE FLOOR.
+
+        `grid-template-columns: 3px 1fr auto auto auto` gave five tracks. An
+        infrastructure service with somewhere to send you — an Open button, or a
+        URL it prints because you cannot reach it from here — has six children,
+        and the sixth wrapped onto an implicit second row, under the stripe. So
+        Grafana and VictoriaMetrics showed their state pill below the name while
+        Loki, which has neither, showed it in line. The tracks never aligned
+        between rows in the first place: each `.row` is its own grid.
+        """
+        block = re.search(r"\n\.row \{(.*?)\}", CSS.read_text(), re.S)
+        self.assertIsNotNone(block)
+        self.assertNotIn("grid", block.group(1))
+        self.assertIn("display: flex", block.group(1))
+
+    def test_the_name_takes_the_slack_and_the_stripe_does_not(self):
+        css = CSS.read_text()
+        self.assertIn(".row > * { flex: none; }", css)
+        self.assertIn(".row > .stripe + * { flex: 1 1 auto; min-width: 0; }", css)
+
+    def test_a_row_without_a_stripe_still_pushes_its_tail_to_the_end(self):
+        """
+        Not every row has a stripe — dataguard's refusal counts are a label and
+        a number — and those rely on `.spacer`, which was scoped to two named
+        containers and therefore did nothing inside a row.
+        """
+        css = CSS.read_text()
+        self.assertIn(".spacer { margin-left: auto; }", css)
+        self.assertNotIn(".panel-head .spacer", css)
+        self.assertNotIn(".page-head .spacer", css)
 
 
 class TemplateTest(unittest.TestCase):

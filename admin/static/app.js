@@ -515,6 +515,9 @@
   }
 
   function pct(v) { return v === null || v === undefined ? "—" : Math.round(v) + "%"; }
+  // A bar has to be drawn at SOME height; a missing reading is drawn at the
+  // floor, which is what the server renders for the same value.
+  function num(v) { return v === null || v === undefined ? 0 : Math.round(v); }
 
   // Signature of a node's task list. Cheap way to know whether the blocks need
   // rebuilding at all — on a quiet cluster they never do, so a tick touches
@@ -666,21 +669,30 @@
       set('[data-f="cpu"]', pct(n.cpu_pct));
       set('[data-f="mem"]', pct(n.mem_pct));
 
-      // The reserved rings. Utilisation moves constantly and reservation
-      // barely ever, but when it does it is the number that decides whether a
-      // server gets bought, so it has to be live too.
-      var gauge = function (sel, value, label, absolute) {
-        var el = row.querySelector(sel);
-        if (!el) { return; }
-        el.style.setProperty("--v", value == null ? 0 : value);
-        el.setAttribute("data-tip",
-                        label + " reserved: " + (value == null ? "—" : value + "%") +
-                        (absolute ? " — " + absolute : ""));
-      };
-      gauge('[data-f="cpures"]', n.cpu_reserved_pct, "CPU",
-            n.cpu_reserved + " of " + n.cpus + " vCPU promised to tasks here");
-      gauge('[data-f="memres"]', n.mem_reserved_pct, "Memory",
-            n.mem_reserved_mb + " MB of " + n.memory_gb + " GB promised to tasks here");
+      // The node's own bar chart, the same five properties a task chip carries.
+      // Utilisation moves constantly and reservation barely ever, but when
+      // reservation does move it is the number that decides whether a server
+      // gets bought, so both halves have to be live.
+      var res = row.querySelector('[data-f="res"]');
+      if (res) {
+        var chart = res.querySelector(".slot-chart");
+        if (chart) {
+          chart.style.setProperty("--cpu", num(n.cpu_reserved_pct));
+          chart.style.setProperty("--mem", num(n.mem_reserved_pct));
+          chart.style.setProperty("--cpu-use", num(n.cpu_pct));
+          chart.style.setProperty("--mem-use", num(n.mem_pct));
+          chart.style.setProperty("--disk-use", num(n.disk_pct));
+        }
+        res.setAttribute("data-tip",
+                         n.hostname + "\n" +
+                         "\n• cpu — " + pct(n.cpu_pct) + " used, " +
+                         n.cpu_reserved_pct + "% reserved (" +
+                         n.cpu_reserved + " of " + n.cpus + " vCPU)" +
+                         "\n• memory — " + pct(n.mem_pct) + " used, " +
+                         n.mem_reserved_pct + "% reserved (" +
+                         n.mem_reserved_mb + " MB of " + n.memory_gb + " GB)" +
+                         "\n• disk — " + pct(n.disk_pct) + " used, no reservation");
+      }
 
       var slots = row.querySelector("[data-slots]");
       if (!slots) { continue; }
