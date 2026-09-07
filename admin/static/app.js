@@ -666,8 +666,6 @@
         if (el && el.textContent !== text) { el.textContent = text; }
       };
       set('[data-f="tasks"]', String(n.tasks_total));
-      set('[data-f="cpu"]', pct(n.cpu_pct));
-      set('[data-f="mem"]', pct(n.mem_pct));
 
       // The node's own bar chart, the same five properties a task chip carries.
       // Utilisation moves constantly and reservation barely ever, but when
@@ -691,7 +689,8 @@
                          "\n• memory — " + pct(n.mem_pct) + " used, " +
                          n.mem_reserved_pct + "% reserved (" +
                          n.mem_reserved_mb + " MB of " + n.memory_gb + " GB)" +
-                         "\n• disk — " + pct(n.disk_pct) + " used, no reservation");
+                         "\n• disk — " + pct(n.disk_pct) + " used (" +
+                         n.disk_used_gb + " of " + n.disk_total_gb + " GB)");
       }
 
       var slots = row.querySelector("[data-slots]");

@@ -70,6 +70,12 @@ def vm_query(expr):
 #: chip on the map is one replica on one machine, and two replicas of the same
 #: service on different nodes are the case the map exists to show.
 TASK_LABEL = "container_label_com_docker_swarm_task_id"
+#: The same containers grouped by what they BELONG to rather than which replica
+#: they are. A component is several services and each is several replicas, so
+#: "what is this component costing" has to be summed somewhere; cadvisor labels
+#: every container with both, which means summing it here rather than adding up
+#: chips in a template.
+SERVICE_LABEL = "container_label_com_docker_swarm_service_name"
 
 
 def vm_query_by(expr, label="instance"):
@@ -1030,6 +1036,12 @@ def topology():
             # the question is whether a database will fit.
             "disk_total_gb": _gb(disk_size.get(n["hostname"])),
             "disk_free_gb": _gb(disk_avail.get(n["hostname"])),
+            # The third of the pair, derived once here rather than subtracted in
+            # two templates and again in the poller. Disk is the resource with
+            # no reservation to name, so "88% used" is all a tooltip could say
+            # about it while CPU and memory each got an absolute beside them.
+            "disk_used_gb": _gb((disk_size.get(n["hostname"]) or 0)
+                                - (disk_avail.get(n["hostname"]) or 0)),
         })
     return {
         "nodes": out,
@@ -1186,6 +1198,47 @@ def summary():
 
 
 @memo(PANEL_MEMO_SECONDS)
+def service_usage():
+    """
+    {service name: {"cpu": cores, "mem": bytes, "disk": bytes}}, summed over
+    every replica of the service wherever it is running.
+
+    ABSOLUTES, not shares. A task's usage is drawn against the node it is on,
+    because that is the machine it is competing for; a component's replicas are
+    on different machines, so the only denominator that means anything for one
+    is the cluster, and that division happens once in `shape`.
+    """
+    cpu = vm_query_by(f'sum by ({SERVICE_LABEL}) '
+                      f'(rate(container_cpu_usage_seconds_total'
+                      f'{{{SERVICE_LABEL}!=""}}[3m]))', label=SERVICE_LABEL)
+    mem = vm_query_by(f'sum by ({SERVICE_LABEL}) '
+                      f'(container_memory_working_set_bytes'
+                      f'{{{SERVICE_LABEL}!=""}})', label=SERVICE_LABEL)
+    # `max` per TASK first, then summed: cadvisor reports one series per
+    # filesystem a container can see and several are views of the same root
+    # device, so summing them counts the same bytes repeatedly. Same reasoning
+    # as the per-task disk figure on the map, one grouping level out.
+    disk = vm_query_by(f'sum by ({SERVICE_LABEL}) '
+                       f'(max by ({SERVICE_LABEL}, {TASK_LABEL}) '
+                       f'(container_fs_usage_bytes{{{SERVICE_LABEL}!=""}}))',
+                       label=SERVICE_LABEL)
+    # PER-CONTAINER DISK IS NOT ALWAYS THERE, and the difference between "this
+    # component is using no disk" and "nothing on this cluster measures disk per
+    # container" is the difference between a fact and an empty bar. cadvisor
+    # v0.55 under Docker 29's `overlayfs` driver resolves cgroups — so CPU and
+    # memory arrive fully labelled — and still emits `container_fs_usage_bytes`
+    # for the machine root only, with every `container_label_*` blank. When the
+    # whole query comes back empty that is what has happened, and it is a
+    # property of the cluster rather than of any one service, so it is answered
+    # once here with None and said in words further up.
+    measured = bool(disk)
+    return {name: {"cpu": cpu.get(name) or 0.0,
+                   "mem": mem.get(name) or 0.0,
+                   "disk": (disk.get(name) or 0.0) if measured else None}
+            for name in set(cpu) | set(mem) | set(disk)}
+
+
+@memo(PANEL_MEMO_SECONDS)
 def component_views():
     """
     Every component, with what it reserves expressed as a share of the cluster.
@@ -1195,7 +1248,12 @@ def component_views():
     without knowing there are two cores.
     """
     views = shape.component_views(_service_fn_with_counts())
-    return shape.with_cluster_share(views, nodes())
+    # `topology()`, not `nodes()`: the cluster's disk size is measured rather
+    # than advertised — Swarm reports cores and memory and says nothing about
+    # the filesystem — so the totals a share is taken against all live there.
+    # It is memoised for the same two seconds and the Overview asks for it
+    # anyway, so this costs that page nothing.
+    return shape.with_cluster_share(views, topology()["nodes"], service_usage())
 
 
 def autoscaler_state():

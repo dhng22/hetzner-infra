@@ -139,10 +139,31 @@ def component_view(component):
     return shape.component_view(component, service)
 
 
+def service_usage():
+    """
+    A double for the live per-service query, keyed the same way — by the full
+    Swarm service name.
+
+    Deliberately uneven: `api` runs hot against what it reserved, `cache` sits
+    at a fraction of it. A card that draws both is only worth drawing if the
+    fixtures can tell those two apart.
+    """
+    mb = 1024 * 1024
+    return {
+        "api_app":         {"cpu": 1.45, "mem": 1180 * mb, "disk": 2400 * mb},
+        "api-staging_app": {"cpu": 0.08, "mem": 190 * mb,  "disk": 320 * mb},
+        "cache_redis-1":   {"cpu": 0.01, "mem": 41 * mb,   "disk": 90 * mb},
+        "documents_mongo-1": {"cpu": 0.22, "mem": 610 * mb, "disk": 18400 * mb},
+    }
+
+
 def component_views():
     # Same shape as the live panel, cluster share included — the preview exists
-    # to catch a template reaching for a key one of them does not set.
-    return shape.with_cluster_share(shape.component_views(service), nodes())
+    # to catch a template reaching for a key one of them does not set. The nodes
+    # come from `topology()` for the same reason they do live: it is the only
+    # one of the two that knows how big the disks are.
+    return shape.with_cluster_share(shape.component_views(service),
+                                    topology()["nodes"], service_usage())
 
 
 def system_view():
@@ -346,7 +367,8 @@ def topology():
                     "cpu_pct": cpu, "mem_pct": mem,
                     "disk_pct": used_pct,
                     "disk_total_gb": total,
-                    "disk_free_gb": round(total * (100 - used_pct) / 100, 1)})
+                    "disk_free_gb": round(total * (100 - used_pct) / 100, 1),
+                    "disk_used_gb": round(total * used_pct / 100, 1)})
     return {"nodes": out,
             "bands": [{"band": b, "key": k} for b, k in _BANDS],
             "max_tasks": max(x["tasks_total"] for x in out)}

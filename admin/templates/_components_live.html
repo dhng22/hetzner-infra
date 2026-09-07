@@ -73,23 +73,24 @@
           {% endif %}
         </div>
         {% if v.reserved and (v.reserved.cpu or v.reserved.mem_mb) %}
-        {# Share of the whole cluster, in the same bars the map draws on a task
-           and the fleet view draws on a node — CPU then memory, left to right,
-           in that order everywhere. A percentage rather than an absolute
-           because this is the view where components are compared with each
-           other, and "0.04 vCPU" says nothing without knowing the fleet size.
+        {# THE WHOLE PICTURE, in the same three bars the map draws on a task and
+           the fleet view draws on a node: CPU, memory, disk, left to right, in
+           that order everywhere. The fill is what this component is using, the
+           mark across it is what it reserved, and both are shares of the whole
+           cluster — a percentage rather than an absolute because this is the
+           view where components are compared with each other, and "0.04 vCPU"
+           says nothing without knowing the fleet size.
 
-           Two bars, not three, and no mark on either: a component has no disk
-           reservation and no usage figure of its own — usage is measured per
-           task against the node that task sits on, and these replicas are on
-           different machines. So the reservation is the fill, which is what
-           `band-res` says. #}
+           Of the CLUSTER and not of a node, because the replicas are on
+           different machines and no single node's total would be true of them.
+           Disk carries no mark for the reason it carries none anywhere else:
+           Swarm has no disk reservation to put one at. #}
         <div class="card-foot subtle">
-          <span class="muted">reserved of cluster</span>
+          <span class="muted">used · reserved, of cluster</span>
           <span class="card-res"
-                data-tip="{{ v.name }} across {{ v.desired }} replica(s)&#10;&#10;• cpu — {{ v.reserved.cpu_pct }}% of the cluster ({{ v.reserved.cpu }} vCPU)&#10;• memory — {{ v.reserved.mem_pct }}% of the cluster ({{ v.reserved.mem_mb }} MB)">
+                data-tip="{{ v.name }} across {{ v.desired }} replica(s)&#10;&#10;• cpu — {{ v.used.cpu_pct }}% used ({{ v.used.cpu }} vCPU), {{ v.reserved.cpu_pct }}% reserved ({{ v.reserved.cpu }} vCPU)&#10;• memory — {{ v.used.mem_pct }}% used ({{ v.used.mem_mb }} MB), {{ v.reserved.mem_pct }}% reserved ({{ v.reserved.mem_mb }} MB)&#10;• disk — {% if v.used.disk_mb is none %}not measured: this cluster&#39;s cadvisor reports filesystem usage for the machine only, not per container{% else %}{{ v.used.disk_pct }}% used ({{ v.used.disk_mb }} MB), and no reservation to make — Swarm has none to ask for{% endif %}&#10;&#10;every figure is a share of the whole cluster">
             <i class="slot-chart" aria-hidden="true"
-               style="--cpu:{{ v.reserved.cpu_pct }};--mem:{{ v.reserved.mem_pct }}"><b class="band band-cpu band-res"></b><b class="band band-mem band-res"></b></i>
+               style="--cpu:{{ v.reserved.cpu_pct }};--mem:{{ v.reserved.mem_pct }};--cpu-use:{{ v.used.cpu_pct }};--mem-use:{{ v.used.mem_pct }};--disk-use:{{ v.used.disk_pct }}"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
           </span>
         </div>
         {% endif %}

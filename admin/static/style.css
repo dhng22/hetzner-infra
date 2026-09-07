@@ -705,8 +705,6 @@ a.tnode.is-link:focus-visible { outline: 2px solid var(--accent); outline-offset
 .tnode-title { font: 600 13px/1.35 var(--mono); overflow-wrap: anywhere; }
 .tnode-sub { font-size: 12px; color: var(--text-mute); }
 .tnode-sub b { color: var(--text); font-family: var(--mono); font-weight: 600; }
-.tnode-meters { display: flex; gap: 12px; font-size: 12px; color: var(--text-mute); }
-.tnode-meters b { color: var(--text); font-family: var(--mono); font-weight: 600; }
 /* USED AGAINST RESERVED, in the same three bars the map draws on a task — one
    scale per resource, the fill what the machine is using and the mark what is
    promised out of it. It replaces two rings in the card's bottom corners: they
@@ -733,19 +731,38 @@ a.tnode.is-link:focus-visible { outline: 2px solid var(--accent); outline-offset
    end — so `api` rendered as four characters, a hand's width of nothing, and
    then three bars. The name and its chart belong next to each other; only the
    chips have to line up, and on a wrapping row they do that by themselves.
-   The spine stays as the branch's own rule; the per-chip elbow is gone with
-   the single column it was drawn for. */
-.slots { position: relative; align-self: stretch;
-  display: flex; flex-wrap: wrap; align-items: flex-start;
-  gap: 8px; margin-top: 20px; padding-left: 18px;
+   CENTRED UNDER THE CARD, on the tree's own connectors. The left-hand spine
+   was the last piece of the single column: it ran down the outside of a block
+   that no longer has a single edge to hang off, and it left the chips pinned
+   left under a card that is centred. So the tasks are centred too and joined
+   the way every other level of this tree is joined — a drop from the middle of
+   the card into a bus, and a tick from the bus down into each chip. */
+.slots { position: relative; align-self: center;
+  display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-start;
+  gap: 8px; margin-top: 26px;
   /* Wide enough to fit two or three chips on a line, narrow enough that three
      hosts still sit side by side on an ordinary screen. Without a cap a
      wrapping row has nothing to wrap at — the branch is sized by its contents,
      so fourteen chips would lay themselves out in one 2000px line. */
   max-width: 400px; }
-.slots::before { content: ""; position: absolute; left: 0; top: -20px; width: 1px;
-  height: calc(100% + 20px); background: var(--line); }
-.slots > .slot { position: relative; }
+/* The drop out of the card, into the middle of the bus. */
+.slots::after { content: ""; position: absolute; left: 50%; top: -26px;
+  width: 1px; height: 18px; background: var(--line); }
+/* Each chip draws its own half of the bus above it plus the tick down into
+   itself — the same construction `.tree-branch` uses one level up, so the two
+   ranks of the tree are drawn by one idea rather than two. The first and last
+   chip on a line trim their outer half, which is what stops the bus running off
+   into space; on a WRAPPED line the same halves make a shorter bus of their
+   own, joined to the line above by the ticks between them. */
+.slots > .slot { position: relative; margin-top: 8px; }
+.slots > .slot::before, .slots > .slot::after {
+  content: ""; position: absolute; top: -8px; height: 8px; width: 50%;
+  border-top: 1px solid var(--line); pointer-events: none;
+}
+.slots > .slot::before { right: 50%; border-right: 1px solid var(--line); }
+.slots > .slot::after  { left: 50%; }
+.slots > .slot:first-child::before { border-top-color: transparent; }
+.slots > .slot:last-child::after   { border-top-color: transparent; }
 .slot {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 5px 9px 5px 7px; min-height: 26px;
@@ -832,15 +849,6 @@ a.tnode.is-link:focus-visible { outline: 2px solid var(--accent); outline-offset
 .band-mem  { --use: var(--mem-use, 0); --res: var(--mem, 0); }
 .band-disk { --use: var(--disk-use, 0); }
 .band-disk::after { content: none; }
-/* A RESERVATION WITH NOTHING TO COMPARE IT TO. Usage is measured per task,
-   against the node that task is on; a component's replicas sit on different
-   machines, so there is no one denominator to state its usage against and the
-   component list has only the reservation. Drawing that as the tick would leave
-   an empty bar with a mark floating in it, so here the reservation IS the fill
-   and there is no tick — said in a class name rather than by quietly feeding a
-   reserved figure into the property called `-use`. */
-.band-res { --use: var(--res, 0); }
-.band-res::after { content: none; }
 .slot.is-empty .slot-chart { display: none; }
 .slot-prod     { --slot-bg: color-mix(in srgb, var(--s-prod) 14%, var(--surface));
                  --slot-ring: var(--s-prod); }

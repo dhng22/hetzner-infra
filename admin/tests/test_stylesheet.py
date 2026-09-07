@@ -220,6 +220,22 @@ class TaskChipTest(unittest.TestCase):
         self.assertIn("margin-left: auto", block.group(1))
         self.assertIn("pointer-events: none", block.group(1))
 
+    def test_the_disk_line_says_how_much_disk_not_that_there_is_no_number(self):
+        """
+        CPU and memory each print an absolute beside their percentage; disk
+        printed "no reservation", which is a fact about Swarm and not about this
+        machine. `disk_used_gb` is derived once in `topology()` so the two
+        templates and the poller cannot disagree about it.
+        """
+        for name in ("_overview.html", "_cluster.html"):
+            body = (TEMPLATES / name).read_text()
+            with self.subTest(template=name):
+                self.assertNotIn("no reservation", body)
+                self.assertIn("n.disk_used_gb", body)
+        js = (ADMIN / "static" / "app.js").read_text()
+        self.assertNotIn("no reservation", js)
+        self.assertIn("disk_used_gb", js)
+
     def test_disk_has_no_reservation_tick(self):
         # Swarm has no disk reservation, so a tick there would be a mark at a
         # number nobody set.
@@ -247,31 +263,22 @@ class TaskChipTest(unittest.TestCase):
             with self.subTest(template=path.name):
                 self.assertNotIn("gauge", body)
 
-    def test_every_surface_that_draws_capacity_draws_the_same_bars(self):
+    def test_every_surface_that_draws_capacity_draws_the_whole_chart(self):
         """
-        A node card, a component card and a task chip each carry the chart, and
-        each sets the properties it actually has — a component has no disk and
-        no usage of its own. What none of them may do is invent a fourth way to
-        say it.
+        A task, the node it runs on and the component it belongs to each get the
+        same three bars with the same five properties. None of them may show a
+        subset: a reservation on its own cannot tell 640MB held for a cache
+        using 39MB apart from 640MB held for one using 600MB, and those are
+        opposite situations.
         """
-        surfaces = {
-            "_overview.html": ("band-cpu", "band-mem", "band-disk"),
-            "_cluster.html": ("band-cpu", "band-mem", "band-disk"),
-            "_components_live.html": ("band-cpu band-res", "band-mem band-res"),
-        }
-        for name, bands in surfaces.items():
+        for name in ("_overview.html", "_cluster.html", "_components_live.html"):
             body = (TEMPLATES / name).read_text()
             with self.subTest(template=name):
                 self.assertIn("slot-chart", body)
-                for band in bands:
+                for band in self.BANDS:
                     self.assertIn(band, body)
-
-    def test_a_reservation_with_no_usage_is_the_fill_and_has_no_tick(self):
-        # Otherwise the component card is an empty bar with a mark floating in
-        # it, which reads as "nothing is reserved".
-        css = CSS.read_text()
-        self.assertIn(".band-res { --use: var(--res, 0); }", css)
-        self.assertIn(".band-res::after { content: none; }", css)
+                for prop in self.PROPS:
+                    self.assertIn(f"{prop}:", body)
 
     def test_a_chip_is_as_wide_as_its_own_name(self):
         """
@@ -289,6 +296,34 @@ class TaskChipTest(unittest.TestCase):
         # must be allowed to be that wide.
         self.assertIn("max-width: 400px", body)
         self.assertIn(".tree-branch:has(.slots) { flex: 1 0 auto; }", css)
+
+    def test_the_tasks_hang_off_the_card_they_run_on(self):
+        """
+        The left-hand spine was the last piece of the single column: it ran down
+        the outside of a block that no longer has one edge to hang off, and it
+        left the chips pinned left under a card that is centred. Now every rank
+        of the tree is joined the same way — a drop from the middle, a bus, a
+        tick into each child — which is one idea rather than two.
+        """
+        css = CSS.read_text()
+        block = re.search(r"\.slots \{(.*?)\}", css, re.S).group(1)
+        self.assertIn("justify-content: center", block)
+        self.assertNotIn("padding-left", block)
+        self.assertIn(".slots::after", css)                  # the drop
+        self.assertIn(".slots > .slot::before, .slots > .slot::after", css)
+        # The outer halves are trimmed, or the bus runs off into space.
+        self.assertIn(".slots > .slot:first-child::before", css)
+        self.assertIn(".slots > .slot:last-child::after", css)
+
+    def test_a_node_card_says_nothing_the_bars_already_say(self):
+        """
+        The three percentages above the chart were the chart in words, minus
+        the reservation it is drawn against.
+        """
+        for name in ("_overview.html", "_cluster.html"):
+            with self.subTest(template=name):
+                self.assertNotIn("tnode-meters", (TEMPLATES / name).read_text())
+        self.assertNotIn(".tnode-meters", CSS.read_text())
 
     def test_hosts_that_do_not_fit_start_at_the_left_edge(self):
         """

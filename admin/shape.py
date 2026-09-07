@@ -333,25 +333,75 @@ def broken_view(name, problem):
         # Same keys as a healthy view: a template that reaches for these must
         # not have to know it is looking at a broken component.
         "managed": {}, "reserved": {"cpu": 0, "mem_mb": 0},
+        "used": {"cpu": 0, "mem_mb": 0, "disk_mb": 0},
     }
 
 
-def with_cluster_share(views, nodes):
+def component_used(services, usage):
     """
-    Add each component's reservation as a percentage of total cluster capacity.
+    What this component is ACTUALLY using across all of its services, in the
+    same units its reservation is quoted in.
+
+    Disk is here and has no counterpart above: Swarm has no disk reservation to
+    ask for, which does not make the number less worth seeing — it is the one
+    resource that shedding load cannot recover.
+    """
+    cpu = mem = disk = 0.0
+    # None, not zero, when nothing measured it at all — see `swarm.service_usage`.
+    # A component using no disk and a cluster that cannot see per-container disk
+    # both draw an empty bar, and only one of them is a fact.
+    measured = False
+    for svc in services:
+        row = usage.get(svc.get("name")) or {}
+        cpu += row.get("cpu") or 0.0
+        mem += (row.get("mem") or 0.0) / (1024 * 1024)
+        if row.get("disk") is not None:
+            measured = True
+            disk += row["disk"] / (1024 * 1024)
+    return {"cpu": round(cpu, 3), "mem_mb": int(mem),
+            "disk_mb": int(disk) if measured else None}
+
+
+def with_cluster_share(views, nodes, usage=None):
+    """
+    Add each component's reservation AND its usage as a percentage of total
+    cluster capacity.
 
     Of the WHOLE cluster, not of one node: a component's replicas are spread
     across machines, so "12% of the cluster" is the honest answer and "12% of a
     node" would be true of no node in particular.
+
+    Both halves, on one scale, because a reservation on its own answers nothing.
+    A card showing only what was promised cannot tell 640MB held for a cache
+    using 39MB apart from 640MB held for one using 600MB, and those are opposite
+    situations — the first is money on the floor and the second is a component
+    about to need more. The map has drawn the pair on every task since it was
+    written; there is no reason the component the tasks belong to shows less.
     """
+    usage = usage or {}
     total_cpu = sum((n.get("cpus") or 0) for n in nodes)
     total_mem = sum((n.get("memory_gb") or 0) for n in nodes) * 1024
+    total_disk = sum((n.get("disk_total_gb") or 0) for n in nodes) * 1024
+
+    def pct(value, total):
+        # Capped for the same reason the map caps a task's: these are drawn as
+        # bar heights and cgroup accounting does briefly report more than the
+        # machine has. The absolute figures in the tooltip are uncapped.
+        return round(min(100.0, value / total * 100), 1) if total and value else 0
+
     for view in views:
         reserved = view.get("reserved") or {}
+        used = component_used(view.get("services") or [], usage)
         view["reserved"] = {
             **reserved,
-            "cpu_pct": round((reserved.get("cpu") or 0) / total_cpu * 100, 1) if total_cpu else 0,
-            "mem_pct": round((reserved.get("mem_mb") or 0) / total_mem * 100, 1) if total_mem else 0,
+            "cpu_pct": pct(reserved.get("cpu") or 0, total_cpu),
+            "mem_pct": pct(reserved.get("mem_mb") or 0, total_mem),
+        }
+        view["used"] = {
+            **used,
+            "cpu_pct": pct(used["cpu"], total_cpu),
+            "mem_pct": pct(used["mem_mb"], total_mem),
+            "disk_pct": pct(used["disk_mb"] or 0, total_disk),
         }
     return views
 
