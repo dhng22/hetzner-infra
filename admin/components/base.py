@@ -390,6 +390,19 @@ class Component:
         return {f.name: f.default for f in cls.fields()}
 
     @classmethod
+    def managed_names(cls):
+        """
+        The fields something OTHER than this file owns once the service exists.
+
+        `Field.managed` already says so per type — the autoscaler owns an app's
+        reservations, CI owns its image — and the settings form already refuses
+        to offer those for editing. This is the same question asked from the
+        renderer, so that "who owns this number" has one answer rather than one
+        per reader.
+        """
+        return frozenset(f.name for f in cls.fields() if f.managed)
+
+    @classmethod
     def coerce_spec(cls, raw):
         """
         {field: text} -> (spec, problems). Unknown keys are ignored rather than
@@ -620,11 +633,30 @@ class Component:
         A service with none makes the master look idle, so replicas get packed
         on top of VictoriaMetrics until something is OOM-killed.
         """
-        # The live sizing wins where it exists; the spec is the seed used before
-        # anything has been measured, and the fallback when the service is gone.
+        # The live sizing wins ONLY WHERE SOMETHING ELSE OWNS IT. For an app
+        # that is the autoscaler, which re-sizes from what the service actually
+        # uses, and emitting the spec's copy would undo that on the next
+        # unrelated save. For a database nothing re-sizes anything: the two
+        # reservation fields are ordinary inputs on the settings form, and
+        # preferring the live value there means the form takes the number,
+        # writes it to `component.json`, and then the renderer throws it away —
+        # silently, forever, because the value it prefers is the one it just
+        # deployed. Which is precisely what `Field.managed` exists to prevent,
+        # one layer up: a managed field is not offered for editing "because
+        # something else overwrites it and a form that silently loses your input
+        # is worse than no form".
+        #
+        # Live shape: a Redis created back when the default cache was 512MB kept
+        # reserving 640MB per member. Max memory was cut to 60MB and the
+        # reservation to 90MB in the panel, the spec on disk says 90, every
+        # member still reserved 640, and the Overview went on reporting a sixth
+        # of the machine held for a cache holding 39MB. No amount of re-saving
+        # could have moved it.
+        managed = type(self).managed_names()
         live = self.live_resources()
-        cpu_r = live.get("cpu_reservation") or self.spec.get("cpu_reservation")
-        mem_r = live.get("memory_reservation_mb") or self.spec.get("memory_reservation_mb")
+        owned = lambda f: live.get(f) if f in managed else None
+        cpu_r = owned("cpu_reservation") or self.spec.get("cpu_reservation")
+        mem_r = owned("memory_reservation_mb") or self.spec.get("memory_reservation_mb")
         if not cpu_r or not mem_r:
             raise store.ComponentError(
                 f"{self.name} has no CPU or memory reservation. Every component "
@@ -632,8 +664,8 @@ class Component:
                 "autoscaler measures capacity with."
             )
         out = {"reservations": {"cpus": str(cpu_r), "memory": f"{mem_r}M"}}
-        cpu_l = live.get("cpu_limit") or self.spec.get("cpu_limit")
-        mem_l = live.get("memory_limit_mb") or self.spec.get("memory_limit_mb")
+        cpu_l = owned("cpu_limit") or self.spec.get("cpu_limit")
+        mem_l = owned("memory_limit_mb") or self.spec.get("memory_limit_mb")
         if cpu_l or mem_l:
             limits = {}
             if cpu_l:
@@ -767,6 +799,10 @@ class Component:
         save — and undoing it means re-reserving a third of a core for something
         that needs a fortieth, which is what kept a worker alive against no
         traffic (docker/cli#2235 is the same trap, one field over).
+
+        This reports what IS; `resources()` decides which of it may win, per
+        field, from `Field.managed`. On a type where nothing re-sizes the
+        reservation, letting it win would make the settings form a no-op.
         """
         out = docker_out([
             "service", "inspect", service or self.service, "--format",

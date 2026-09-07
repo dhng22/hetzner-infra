@@ -184,6 +184,33 @@ class ComponentTest(ComponentCase):
         self.assertEqual(service["deploy"]["replicas"], 7)
         self.assertEqual(service["image"], "ghcr.io/you/app:sha-newer")
 
+    def test_live_reservations_win_only_where_something_owns_them(self):
+        """
+        THE EDIT THAT WENT NOWHERE.
+
+        An app's reservations carry `managed="autoscaler"`, are not offered on
+        the settings form, and must survive an unrelated save — so the live
+        value wins. A database's do not: they are ordinary inputs somebody
+        typed, and nothing re-sizes them afterwards. Letting the live value win
+        there made the form a no-op that reported success — a Redis went on
+        reserving the 640MB its old 512MB cache default implied while the spec
+        on disk said 90, and no amount of re-saving could move it.
+        """
+        live = {"cpu_reservation": 0.21, "memory_reservation_mb": 640}
+
+        app = self.make_app(cpu_reservation=0.5, memory_reservation_mb=384)
+        app.live_resources = lambda service=None: dict(live)
+        self.assertEqual(
+            app.render()["services"]["app"]["deploy"]["resources"]["reservations"],
+            {"cpus": "0.21", "memory": "640M"})
+
+        cache = self.make_redis(maxmemory_mb=60, memory_reservation_mb=90,
+                                cpu_reservation=0.05)
+        cache.live_resources = lambda service=None: dict(live)
+        self.assertEqual(
+            cache.render()["services"]["redis-1"]["deploy"]["resources"]["reservations"],
+            {"cpus": "0.05", "memory": "90M"})
+
     def test_fixed_app_is_still_discoverable_and_pinnable(self):
         labels = self.make_app().render()["services"]["app"]["deploy"]["labels"]
         self.assertEqual(labels["infra.workload"], "app")
