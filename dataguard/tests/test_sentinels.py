@@ -252,6 +252,53 @@ class EngineTest(unittest.TestCase):
             redis.sentinel.Sentinel = real
         self.assertEqual(captured["hosts"], [("cache_sentinel-1", 26379)])
 
+    def engine_reporting(self, info):
+        import engines
+
+        class FakeMaster:
+            def info(self, section):
+                assert section == "persistence"
+                return info
+
+        class FakeSentinel:
+            def master_for(self, name):
+                return FakeMaster()
+
+        return engines.RedisEngine(lambda: FakeSentinel(), "cache")
+
+    def test_a_redis_reports_what_it_holds_on_disk(self):
+        """
+        THE NUMBER THAT WAS NEVER THERE. `collection_stats` existed only on
+        MongoEngine, and the loop guards on `hasattr` — so every Mongo published
+        `dataguard_data_bytes` and every Redis published nothing, silently. The
+        panel prints that gauge in a database's header and `plan.refusals` moves
+        a set on it, so a Redis had neither.
+
+        The APPEND-ONLY FILE, not `used_memory`: the dataset in RAM and the file
+        on disk are different sizes, and it is the file that has to fit on the
+        machine somebody is thinking of moving this to.
+        """
+        engine = self.engine_reporting({"aof_enabled": 1,
+                                        "aof_current_size": 78643200,
+                                        "aof_base_size": 41943040})
+        self.assertEqual(engine.collection_stats(), (78643200, 78643200))
+
+    def test_a_redis_with_no_aof_has_nothing_on_disk_to_report(self):
+        # Not zero: zero is a claim that the file is empty. With AOF off there
+        # is no file, which is the same reason the component has nothing to back
+        # up either.
+        engine = self.engine_reporting({"aof_enabled": 0})
+        self.assertEqual(engine.collection_stats(), (None, None))
+
+    def test_an_unreachable_primary_reports_nothing_rather_than_zero(self):
+        import engines
+
+        def boom():
+            raise RuntimeError("no master")
+
+        engine = engines.RedisEngine(boom, "cache")
+        self.assertEqual(engine.collection_stats(), (None, None))
+
 
 if __name__ == "__main__":
     unittest.main()

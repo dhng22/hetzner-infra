@@ -150,11 +150,20 @@ def service_usage():
     """
     mb = 1024 * 1024
     return {
-        "api_app":         {"cpu": 1.45, "mem": 1180 * mb, "disk": 2400 * mb},
-        "api-staging_app": {"cpu": 0.08, "mem": 190 * mb,  "disk": 320 * mb},
-        "cache_redis-1":   {"cpu": 0.01, "mem": 41 * mb,   "disk": 90 * mb},
-        "documents_mongo-1": {"cpu": 0.22, "mem": 610 * mb, "disk": 18400 * mb},
+        "api_app":         {"cpu": 1.45, "mem": 1180 * mb},
+        "api-staging_app": {"cpu": 0.08, "mem": 190 * mb},
+        "cache_redis-1":   {"cpu": 0.01, "mem": 41 * mb},
+        "documents_mongo-1": {"cpu": 0.22, "mem": 610 * mb},
     }
+
+
+def component_data_bytes():
+    """
+    What dataguard reports each DATABASE holds. The applications are absent on
+    purpose: an app owns no data directory, and a card that showed them a disk
+    bar would be inventing one.
+    """
+    return {"cache": 75 * 1024 * 1024, "documents": 743 * 1024 * 1024}
 
 
 def component_views():
@@ -163,7 +172,8 @@ def component_views():
     # come from `topology()` for the same reason they do live: it is the only
     # one of the two that knows how big the disks are.
     return shape.with_cluster_share(shape.component_views(service),
-                                    topology()["nodes"], service_usage())
+                                    topology()["nodes"], service_usage(),
+                                    component_data_bytes())
 
 
 def system_view():

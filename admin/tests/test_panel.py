@@ -3276,7 +3276,7 @@ class ComponentCapacityTest(unittest.TestCase):
              {"cpus": 4, "memory_gb": 8.0, "disk_total_gb": 100.0}]
     MB = 1024 * 1024
 
-    def views(self, usage):
+    def views(self, usage, data_bytes=None):
         import shape
         view = {
             "name": "cache",
@@ -3286,7 +3286,8 @@ class ComponentCapacityTest(unittest.TestCase):
                           "resources": {"cpu_res": 0.01, "mem_res": 24}}],
         }
         view["reserved"] = shape.component_reserved(view["services"])
-        return shape.with_cluster_share([view], self.NODES, usage)[0]
+        return shape.with_cluster_share([view], self.NODES, usage,
+                                       {"cache": data_bytes})[0]
 
     def test_used_and_reserved_end_up_on_one_scale(self):
         """
@@ -3295,9 +3296,9 @@ class ComponentCapacityTest(unittest.TestCase):
         which one you are in.
         """
         view = self.views({
-            "cache_redis-1":   {"cpu": 0.01, "mem": 41 * self.MB, "disk": 90 * self.MB},
-            "cache_sentinel-1": {"cpu": 0.002, "mem": 8 * self.MB, "disk": 4 * self.MB},
-        })
+            "cache_redis-1":    {"cpu": 0.01, "mem": 41 * self.MB},
+            "cache_sentinel-1": {"cpu": 0.002, "mem": 8 * self.MB},
+        }, data_bytes=94 * self.MB)
         # 0.21 of 8 vCPU; 664 of 16384 MB.
         self.assertAlmostEqual(view["reserved"]["cpu_pct"], 2.6, places=1)
         self.assertAlmostEqual(view["reserved"]["mem_pct"], 4.1, places=1)
@@ -3314,10 +3315,23 @@ class ComponentCapacityTest(unittest.TestCase):
         no tick and NOT a reason to leave the resource out — it is the one that
         shedding load cannot recover.
         """
-        view = self.views({"cache_redis-1": {"cpu": 0, "mem": 0,
-                                             "disk": 20480 * self.MB}})
+        view = self.views({}, data_bytes=20480 * self.MB)
         self.assertAlmostEqual(view["used"]["disk_pct"], 10.0, places=1)
         self.assertNotIn("disk_pct", view["reserved"])
+
+    def test_disk_does_not_come_from_the_container_runtime(self):
+        """
+        THE NUMBER THE PANEL ALREADY TRUSTED. A container's writable layer is
+        4kB for the Redis whose data volume holds 75MB, so summing the runtime's
+        per-container figure would draw a bar that is right about nothing.
+        `dataguard_data_bytes` is the database's own account of its files — the
+        same figure the component header prints and `plan.refusals` moves a set
+        on — so that is what the band draws, whatever the runtime says.
+        """
+        view = self.views({"cache_redis-1": {"cpu": 0, "mem": 0,
+                                             "disk": 4 * self.MB}},
+                          data_bytes=75 * self.MB)
+        self.assertEqual(view["used"]["disk_mb"], 75)
 
     def test_a_component_nothing_is_scraping_reads_as_zero_not_missing(self):
         # A template reaching for `used.cpu_pct` must never find nothing there;
@@ -3329,21 +3343,18 @@ class ComponentCapacityTest(unittest.TestCase):
 
     def test_unmeasured_disk_is_not_reported_as_no_disk(self):
         """
-        `container_fs_usage_bytes` arrives with every container label blank on
-        both live clusters — cadvisor v0.55 under Docker 29's `overlayfs` driver
-        resolves cgroups and not filesystem layers — so the whole query comes
-        back empty. An empty bar then means two opposite things, and the card
-        has to be able to say which.
+        An application keeps no data directory, so no engine reports a size for
+        it and there is nothing to draw. That is not the same as a database
+        holding nothing, and an empty bar would say both.
         """
-        blind = self.views({"cache_redis-1": {"cpu": 0.01, "mem": 41 * self.MB,
-                                              "disk": None}})
+        blind = self.views({"cache_redis-1": {"cpu": 0.01, "mem": 41 * self.MB}})
         self.assertIsNone(blind["used"]["disk_mb"])
         self.assertEqual(blind["used"]["disk_pct"], 0)
         # Memory still arrives, so one missing resource does not blank the card.
         self.assertEqual(blind["used"]["mem_mb"], 41)
 
-        idle = self.views({"cache_redis-1": {"cpu": 0.01, "mem": 41 * self.MB,
-                                             "disk": 0}})
+        idle = self.views({"cache_redis-1": {"cpu": 0.01, "mem": 41 * self.MB}},
+                          data_bytes=0)
         self.assertEqual(idle["used"]["disk_mb"], 0)
 
     def test_a_broken_spec_carries_the_same_keys_as_a_working_one(self):

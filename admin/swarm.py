@@ -1164,7 +1164,7 @@ def component_map(services, component=None):
 
 def component_data_gb(component):
     """How much this database holds, in GB, or None if nothing measured it."""
-    value = vm_query(f'dataguard_data_bytes{{component="{component}"}}')
+    value = component_data_bytes().get(component)
     return round(value / 1024 ** 3, 1) if value else None
 
 
@@ -1218,28 +1218,33 @@ def service_usage():
     mem = vm_query_by(f'sum by ({SERVICE_LABEL}) '
                       f'(container_memory_working_set_bytes'
                       f'{{{SERVICE_LABEL}!=""}})', label=SERVICE_LABEL)
-    # `max` per TASK first, then summed: cadvisor reports one series per
-    # filesystem a container can see and several are views of the same root
-    # device, so summing them counts the same bytes repeatedly. Same reasoning
-    # as the per-task disk figure on the map, one grouping level out.
-    disk = vm_query_by(f'sum by ({SERVICE_LABEL}) '
-                       f'(max by ({SERVICE_LABEL}, {TASK_LABEL}) '
-                       f'(container_fs_usage_bytes{{{SERVICE_LABEL}!=""}}))',
-                       label=SERVICE_LABEL)
-    # PER-CONTAINER DISK IS NOT ALWAYS THERE, and the difference between "this
-    # component is using no disk" and "nothing on this cluster measures disk per
-    # container" is the difference between a fact and an empty bar. cadvisor
-    # v0.55 under Docker 29's `overlayfs` driver resolves cgroups — so CPU and
-    # memory arrive fully labelled — and still emits `container_fs_usage_bytes`
-    # for the machine root only, with every `container_label_*` blank. When the
-    # whole query comes back empty that is what has happened, and it is a
-    # property of the cluster rather than of any one service, so it is answered
-    # once here with None and said in words further up.
-    measured = bool(disk)
-    return {name: {"cpu": cpu.get(name) or 0.0,
-                   "mem": mem.get(name) or 0.0,
-                   "disk": (disk.get(name) or 0.0) if measured else None}
-            for name in set(cpu) | set(mem) | set(disk)}
+    # NO DISK QUESTION HERE. cadvisor cannot answer it under Docker 29 — see the
+    # note beside the service in `stacks/monitoring.yml` — and if it could, the
+    # answer would be the container's writable layer: 4kB for a Redis whose data
+    # volume holds 75MB. `component_data_bytes` is where disk comes from, from
+    # the database engine that owns the files.
+    return {name: {"cpu": cpu.get(name) or 0.0, "mem": mem.get(name) or 0.0}
+            for name in set(cpu) | set(mem)}
+
+
+@memo(PANEL_MEMO_SECONDS)
+def component_data_bytes():
+    """
+    {component: bytes it holds on disk}, for every database that reports one.
+
+    Measured by the SERVER, not by the container runtime: dataguard asks Mongo
+    for `listDatabases.sizeOnDisk` and Redis for `aof_current_size` and
+    publishes `dataguard_data_bytes`. That is the number this panel already
+    prints in a database's header, and the number `plan.refusals` uses to decide
+    whether a set can move to a given machine — so it is the one a card should
+    draw rather than anything cadvisor has.
+
+    Absent for an application, which owns no data directory and has nothing here
+    to measure. Absent, not zero: an app is not a database with nothing in it.
+    """
+    return {name: bytes_ for name, bytes_
+            in vm_query_by("dataguard_data_bytes", label="component").items()
+            if bytes_ is not None}
 
 
 @memo(PANEL_MEMO_SECONDS)
@@ -1257,7 +1262,8 @@ def component_views():
     # the filesystem — so the totals a share is taken against all live there.
     # It is memoised for the same two seconds and the Overview asks for it
     # anyway, so this costs that page nothing.
-    return shape.with_cluster_share(views, topology()["nodes"], service_usage())
+    return shape.with_cluster_share(views, topology()["nodes"], service_usage(),
+                                    component_data_bytes())
 
 
 def autoscaler_state():

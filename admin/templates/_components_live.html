@@ -84,11 +84,19 @@
            Of the CLUSTER and not of a node, because the replicas are on
            different machines and no single node's total would be true of them.
            Disk carries no mark for the reason it carries none anywhere else:
-           Swarm has no disk reservation to put one at. #}
+           Swarm has no disk reservation to put one at.
+
+           And disk comes from a different place than the other two — from the
+           database engine, through `dataguard_data_bytes`, which is what this
+           component's own header prints and what dataguard refuses a move on.
+           The container runtime's per-container figure would be the writable
+           layer: 4kB for a Redis whose data volume holds 75MB. An application
+           reports nothing here and gets no bar, because it keeps no data
+           directory. #}
         <div class="card-foot subtle">
           <span class="muted">used · reserved, of cluster</span>
           <span class="card-res"
-                data-tip="{{ v.name }} across {{ v.desired }} replica(s)&#10;&#10;• cpu — {{ v.used.cpu_pct }}% used ({{ v.used.cpu }} vCPU), {{ v.reserved.cpu_pct }}% reserved ({{ v.reserved.cpu }} vCPU)&#10;• memory — {{ v.used.mem_pct }}% used ({{ v.used.mem_mb }} MB), {{ v.reserved.mem_pct }}% reserved ({{ v.reserved.mem_mb }} MB)&#10;• disk — {% if v.used.disk_mb is none %}not measured: this cluster&#39;s cadvisor reports filesystem usage for the machine only, not per container{% else %}{{ v.used.disk_pct }}% used ({{ v.used.disk_mb }} MB), and no reservation to make — Swarm has none to ask for{% endif %}&#10;&#10;every figure is a share of the whole cluster">
+                data-tip="{{ v.name }} across {{ v.desired }} replica(s)&#10;&#10;• cpu — {{ v.used.cpu_pct }}% used ({{ v.used.cpu }} vCPU), {{ v.reserved.cpu_pct }}% reserved ({{ v.reserved.cpu }} vCPU)&#10;• memory — {{ v.used.mem_pct }}% used ({{ v.used.mem_mb }} MB), {{ v.reserved.mem_pct }}% reserved ({{ v.reserved.mem_mb }} MB)&#10;• disk — {% if v.used.disk_mb is none %}nothing to measure: only a database keeps a data directory, and this is not one{% else %}{{ v.used.disk_pct }}% held ({{ v.used.disk_mb }} MB), as the database itself reports it, and no reservation to make — Swarm has none to ask for{% endif %}&#10;&#10;every figure is a share of the whole cluster">
             <i class="slot-chart" aria-hidden="true"
                style="--cpu:{{ v.reserved.cpu_pct }};--mem:{{ v.reserved.mem_pct }};--cpu-use:{{ v.used.cpu_pct }};--mem-use:{{ v.used.mem_pct }};--disk-use:{{ v.used.disk_pct }}"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
           </span>

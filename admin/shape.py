@@ -337,32 +337,36 @@ def broken_view(name, problem):
     }
 
 
-def component_used(services, usage):
+def component_used(services, usage, data_bytes=None):
     """
     What this component is ACTUALLY using across all of its services, in the
     same units its reservation is quoted in.
 
-    Disk is here and has no counterpart above: Swarm has no disk reservation to
-    ask for, which does not make the number less worth seeing — it is the one
-    resource that shedding load cannot recover.
+    `data_bytes` is this ONE component's on-disk size, or None.
+
+    CPU and memory come from the container runtime, summed over the replicas.
+    DISK COMES FROM SOMEWHERE ELSE ENTIRELY and that is not an inconsistency:
+    the runtime's per-container figure is the writable layer, which for a
+    database is a few kilobytes of nothing, while the files that fill a machine
+    are in a volume. So disk is what the database engine says it holds —
+    `dataguard_data_bytes` — which is the same number the component's own header
+    prints and the same one dataguard refuses a move on.
+
+    None when nobody reports it, which is every application: an app owns no data
+    directory, and that is different from owning an empty one. Disk also has no
+    reservation counterpart, because Swarm has none to ask for.
     """
-    cpu = mem = disk = 0.0
-    # None, not zero, when nothing measured it at all — see `swarm.service_usage`.
-    # A component using no disk and a cluster that cannot see per-container disk
-    # both draw an empty bar, and only one of them is a fact.
-    measured = False
+    cpu = mem = 0.0
     for svc in services:
         row = usage.get(svc.get("name")) or {}
         cpu += row.get("cpu") or 0.0
         mem += (row.get("mem") or 0.0) / (1024 * 1024)
-        if row.get("disk") is not None:
-            measured = True
-            disk += row["disk"] / (1024 * 1024)
     return {"cpu": round(cpu, 3), "mem_mb": int(mem),
-            "disk_mb": int(disk) if measured else None}
+            "disk_mb": (int(data_bytes / (1024 * 1024))
+                        if data_bytes is not None else None)}
 
 
-def with_cluster_share(views, nodes, usage=None):
+def with_cluster_share(views, nodes, usage=None, data_bytes=None):
     """
     Add each component's reservation AND its usage as a percentage of total
     cluster capacity.
@@ -391,7 +395,8 @@ def with_cluster_share(views, nodes, usage=None):
 
     for view in views:
         reserved = view.get("reserved") or {}
-        used = component_used(view.get("services") or [], usage)
+        used = component_used(view.get("services") or [], usage,
+                              (data_bytes or {}).get(view["name"]))
         view["reserved"] = {
             **reserved,
             "cpu_pct": pct(reserved.get("cpu") or 0, total_cpu),

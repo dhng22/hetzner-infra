@@ -2092,9 +2092,9 @@ details.ca .conn pre { margin: 0; overflow-x: auto; font-size: 11px; line-height
         <div class="card-foot subtle">
           <span class="muted">used · reserved, of cluster</span>
           <span class="card-res"
-                data-tip="api across 6 replica(s)&#10;&#10;• cpu — 11.2% used (1.45 vCPU), 23.1% reserved (3.0 vCPU)&#10;• memory — 6.1% used (1180 MB), 11.8% reserved (2304 MB)&#10;• disk — 0.6% used (2400 MB), and no reservation to make — Swarm has none to ask for&#10;&#10;every figure is a share of the whole cluster">
+                data-tip="api across 6 replica(s)&#10;&#10;• cpu — 11.2% used (1.45 vCPU), 23.1% reserved (3.0 vCPU)&#10;• memory — 6.1% used (1180 MB), 11.8% reserved (2304 MB)&#10;• disk — nothing to measure: only a database keeps a data directory, and this is not one&#10;&#10;every figure is a share of the whole cluster">
             <i class="slot-chart" aria-hidden="true"
-               style="--cpu:23.1;--mem:11.8;--cpu-use:11.2;--mem-use:6.1;--disk-use:0.6"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
+               style="--cpu:23.1;--mem:11.8;--cpu-use:11.2;--mem-use:6.1;--disk-use:0"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
           </span>
         </div>
         
@@ -2117,9 +2117,9 @@ details.ca .conn pre { margin: 0; overflow-x: auto; font-size: 11px; line-height
         <div class="card-foot subtle">
           <span class="muted">used · reserved, of cluster</span>
           <span class="card-res"
-                data-tip="api-staging across 1 replica(s)&#10;&#10;• cpu — 0.6% used (0.08 vCPU), 0.8% reserved (0.1 vCPU)&#10;• memory — 1.0% used (190 MB), 0.7% reserved (128 MB)&#10;• disk — 0.1% used (320 MB), and no reservation to make — Swarm has none to ask for&#10;&#10;every figure is a share of the whole cluster">
+                data-tip="api-staging across 1 replica(s)&#10;&#10;• cpu — 0.6% used (0.08 vCPU), 0.8% reserved (0.1 vCPU)&#10;• memory — 1.0% used (190 MB), 0.7% reserved (128 MB)&#10;• disk — nothing to measure: only a database keeps a data directory, and this is not one&#10;&#10;every figure is a share of the whole cluster">
             <i class="slot-chart" aria-hidden="true"
-               style="--cpu:0.8;--mem:0.7;--cpu-use:0.6;--mem-use:1.0;--disk-use:0.1"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
+               style="--cpu:0.8;--mem:0.7;--cpu-use:0.6;--mem-use:1.0;--disk-use:0"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
           </span>
         </div>
         
@@ -2155,7 +2155,7 @@ details.ca .conn pre { margin: 0; overflow-x: auto; font-size: 11px; line-height
         <div class="card-foot subtle">
           <span class="muted">used · reserved, of cluster</span>
           <span class="card-res"
-                data-tip="cache across 1 replica(s)&#10;&#10;• cpu — 0.1% used (0.01 vCPU), 2.2% reserved (0.28 vCPU)&#10;• memory — 0.2% used (41 MB), 3.8% reserved (744 MB)&#10;• disk — 0.0% used (90 MB), and no reservation to make — Swarm has none to ask for&#10;&#10;every figure is a share of the whole cluster">
+                data-tip="cache across 1 replica(s)&#10;&#10;• cpu — 0.1% used (0.01 vCPU), 2.2% reserved (0.28 vCPU)&#10;• memory — 0.2% used (41 MB), 3.8% reserved (744 MB)&#10;• disk — 0.0% held (75 MB), as the database itself reports it, and no reservation to make — Swarm has none to ask for&#10;&#10;every figure is a share of the whole cluster">
             <i class="slot-chart" aria-hidden="true"
                style="--cpu:2.2;--mem:3.8;--cpu-use:0.1;--mem-use:0.2;--disk-use:0.0"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
           </span>
@@ -2180,9 +2180,9 @@ details.ca .conn pre { margin: 0; overflow-x: auto; font-size: 11px; line-height
         <div class="card-foot subtle">
           <span class="muted">used · reserved, of cluster</span>
           <span class="card-res"
-                data-tip="documents across 1 replica(s)&#10;&#10;• cpu — 1.7% used (0.22 vCPU), 5.2% reserved (0.67 vCPU)&#10;• memory — 3.1% used (610 MB), 8.5% reserved (1648 MB)&#10;• disk — 4.5% used (18400 MB), and no reservation to make — Swarm has none to ask for&#10;&#10;every figure is a share of the whole cluster">
+                data-tip="documents across 1 replica(s)&#10;&#10;• cpu — 1.7% used (0.22 vCPU), 5.2% reserved (0.67 vCPU)&#10;• memory — 3.1% used (610 MB), 8.5% reserved (1648 MB)&#10;• disk — 0.2% held (743 MB), as the database itself reports it, and no reservation to make — Swarm has none to ask for&#10;&#10;every figure is a share of the whole cluster">
             <i class="slot-chart" aria-hidden="true"
-               style="--cpu:5.2;--mem:8.5;--cpu-use:1.7;--mem-use:3.1;--disk-use:4.5"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
+               style="--cpu:5.2;--mem:8.5;--cpu-use:1.7;--mem-use:3.1;--disk-use:0.2"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
           </span>
         </div>
         
@@ -2623,7 +2623,7 @@ details.ca .conn pre { margin: 0; overflow-x: auto; font-size: 11px; line-height
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-07T07:33:17Z" data-localtime>2026-09-07T07:33:17Z</time>
+          <time datetime="2026-09-08T03:26:38Z" data-localtime>2026-09-08T03:26:38Z</time>
           
         </div>
       </div>
@@ -4047,7 +4047,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-07T07:33:17Z" data-localtime>2026-09-07T07:33:17Z</time>
+          <time datetime="2026-09-08T03:26:38Z" data-localtime>2026-09-08T03:26:38Z</time>
           
         </div>
       </div>
@@ -5379,7 +5379,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-07T07:33:17Z" data-localtime>2026-09-07T07:33:17Z</time>
+          <time datetime="2026-09-08T03:26:38Z" data-localtime>2026-09-08T03:26:38Z</time>
           
         </div>
       </div>
@@ -5611,9 +5611,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis+sentinel://default:b2fc3e300b70a5b87250b7982f883c1544ff1f6946843d7c@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
+              <code>redis+sentinel://default:42bd6dc5b2a38df541055a6141177af79e806db13a73d860@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis+sentinel://default:b2fc3e300b70a5b87250b7982f883c1544ff1f6946843d7c@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
+                      data-copy-text="redis+sentinel://default:42bd6dc5b2a38df541055a6141177af79e806db13a73d860@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -5624,7 +5624,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="b2fc3e300b70a5b87250b7982f883c1544ff1f6946843d7c">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="42bd6dc5b2a38df541055a6141177af79e806db13a73d860">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -5690,9 +5690,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
             <div class="eyebrow">3 &middot; Point your application at this</div>
             
             <div class="conn">
-              <code>redis://default:b2fc3e300b70a5b87250b7982f883c1544ff1f6946843d7c@127.0.0.1:6379</code>
+              <code>redis://default:42bd6dc5b2a38df541055a6141177af79e806db13a73d860@127.0.0.1:6379</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis://default:b2fc3e300b70a5b87250b7982f883c1544ff1f6946843d7c@127.0.0.1:6379">Copy</button>
+                      data-copy-text="redis://default:42bd6dc5b2a38df541055a6141177af79e806db13a73d860@127.0.0.1:6379">Copy</button>
             </div>
             
             <p class="hint">Your application talks to the helper from step 2, which is running beside it and listening on this port; the helper carries the traffic through the tunnel. That is why this is a local address and not the hostname.</p>
@@ -6563,7 +6563,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-07T07:33:17Z" data-localtime>2026-09-07T07:33:17Z</time>
+          <time datetime="2026-09-08T03:26:38Z" data-localtime>2026-09-08T03:26:38Z</time>
           
         </div>
       </div>
@@ -6783,9 +6783,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>mongodb://root:7bb593e08a2992831034dafdeb0d7cde15493ac9001c9618@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
+              <code>mongodb://root:cec0ebbb55eeb188f871387e3afc7ad6e7228937ef8f16cc@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:7bb593e08a2992831034dafdeb0d7cde15493ac9001c9618@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
+                      data-copy-text="mongodb://root:cec0ebbb55eeb188f871387e3afc7ad6e7228937ef8f16cc@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -6796,7 +6796,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="7bb593e08a2992831034dafdeb0d7cde15493ac9001c9618">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="cec0ebbb55eeb188f871387e3afc7ad6e7228937ef8f16cc">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -6868,9 +6868,9 @@ Without that, a user can save a row and not see it on the next page load, and no
             <div class="eyebrow">3 &middot; Point your application at this</div>
             
             <div class="conn">
-              <code>mongodb://root:7bb593e08a2992831034dafdeb0d7cde15493ac9001c9618@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority</code>
+              <code>mongodb://root:cec0ebbb55eeb188f871387e3afc7ad6e7228937ef8f16cc@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:7bb593e08a2992831034dafdeb0d7cde15493ac9001c9618@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority">Copy</button>
+                      data-copy-text="mongodb://root:cec0ebbb55eeb188f871387e3afc7ad6e7228937ef8f16cc@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority">Copy</button>
             </div>
             
             <p class="hint">Your application talks to the helper from step 2, which is running beside it and listening on this port; the helper carries the traffic through the tunnel. That is why this is a local address and not the hostname.</p>
@@ -11044,7 +11044,7 @@ Without that, a user can save a row and not see it on the next page load, and no
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788762797.99743" data-localtime-epoch>1788762797</time>
+              <time datetime="1788834398.971381" data-localtime-epoch>1788834398</time>
             
           </td>
           <td>
@@ -11736,7 +11736,7 @@ Without that, a user can save a row and not see it on the next page load, and no
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788762797.99743" data-localtime-epoch>1788762797</time>
+              <time datetime="1788834398.971381" data-localtime-epoch>1788834398</time>
             
           </td>
           <td>

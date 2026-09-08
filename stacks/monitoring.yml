@@ -338,16 +338,23 @@ services:
     # reported `filesystem: null` for every container before being removed.
     # `/dev/disk` was mounted for that test and changed nothing.
     #
-    # It is also not worth chasing. The metric is the container's WRITABLE
+    # It is also the wrong number. The metric is the container's WRITABLE
     # LAYER, and measured here that is 4kB for the Redis whose data volume
     # holds 75MB and 1MB for the panel itself. What fills a disk on this
-    # cluster is volumes — mongo 743MB, vmdata 311MB — and nothing scrapes
-    # those. The node's own disk figure, which comes from node-exporter and
-    # works, is what the alerts and the autoscaler read.
+    # cluster is volumes — mongo 743MB, vmdata 311MB — which this metric has
+    # never described and never would.
     #
-    # So the panel says "not measured" where it would otherwise draw a bar at
-    # the floor forever: `swarm.service_usage` and `swarm.topology` return None
-    # rather than 0 when the whole query comes back empty.
+    # THE DISK NUMBERS THIS PANEL SHOWS COME FROM ELSEWHERE, and both work.
+    # Per machine it is node-exporter, which is what the alerts and the
+    # autoscaler read. Per database it is `dataguard_data_bytes`: dataguard
+    # asks Mongo for `listDatabases.sizeOnDisk` and Redis for
+    # `aof_current_size`, so the size is reported by the server that owns the
+    # files. Nothing here needs cadvisor for disk.
+    #
+    # What is left without an answer is disk per TASK, on the cluster map,
+    # because a per-component figure cannot be split across replicas. That band
+    # says "not measured" rather than sitting at the floor: `swarm.topology`
+    # returns None instead of 0 when the whole query comes back empty.
     image: gcr.io/cadvisor/cadvisor:v0.55.1
     command: ["--docker_only=true", "--housekeeping_interval=15s"]
     volumes:
