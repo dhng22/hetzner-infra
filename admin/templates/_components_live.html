@@ -96,7 +96,7 @@
         <div class="card-foot subtle">
           <span class="muted">used · reserved, of cluster</span>
           <span class="card-res"
-                data-tip="{{ v.name }} across {{ v.desired }} replica(s)&#10;&#10;• cpu — {{ v.used.cpu_pct }}% used ({{ v.used.cpu }} vCPU), {{ v.reserved.cpu_pct }}% reserved ({{ v.reserved.cpu }} vCPU)&#10;• memory — {{ v.used.mem_pct }}% used ({{ v.used.mem_mb }} MB), {{ v.reserved.mem_pct }}% reserved ({{ v.reserved.mem_mb }} MB)&#10;• disk — {% if v.used.disk_mb is none %}nothing to measure: only a database keeps a data directory, and this is not one{% else %}{{ v.used.disk_pct }}% held ({{ v.used.disk_mb }} MB), as the database itself reports it, and no reservation to make — Swarm has none to ask for{% endif %}&#10;&#10;every figure is a share of the whole cluster">
+                data-tip="{{ v.name }} across {{ v.desired }} replica(s)&#10;&#10;• cpu — {{ v.used.cpu_pct }}% used ({{ v.used.cpu }} vCPU), {{ v.reserved.cpu_pct }}% reserved ({{ v.reserved.cpu }} vCPU)&#10;• memory — {{ v.used.mem_pct }}% used ({{ v.used.mem_mb }} MB), {{ v.reserved.mem_pct }}% reserved ({{ v.reserved.mem_mb }} MB)&#10;• disk — {% if v.used.disk_mb is none %}nothing to measure: only a database keeps a data directory, and this is not one{% else %}{{ v.used.disk_pct }}% held ({{ v.used.disk_mb }} MB){% endif %}&#10;&#10;every figure is a share of the whole cluster">
             <i class="slot-chart" aria-hidden="true"
                style="--cpu:{{ v.reserved.cpu_pct }};--mem:{{ v.reserved.mem_pct }};--cpu-use:{{ v.used.cpu_pct }};--mem-use:{{ v.used.mem_pct }};--disk-use:{{ v.used.disk_pct }}"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
           </span>
