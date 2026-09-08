@@ -672,8 +672,15 @@
     if (!svg || !card || !slots) { return; }
     var box = branch.getBoundingClientRect();
     var head = card.getBoundingClientRect();
+    // THE CARD'S CENTRE, both ways — not the middle of its bottom edge. The
+    // card sits above the lines and paints its own background, so the part of
+    // each line inside it is hidden and what shows is a fan leaving the card's
+    // lower edge at the angle it would have if it started at the middle. From
+    // the bottom edge every line left the same point; from the centre they
+    // leave spread across the edge, which is what makes it read as a fan
+    // rather than as a bundle of wires tied at one knot.
     var x0 = head.left + head.width / 2 - box.left;
-    var y0 = head.bottom - box.top;
+    var y0 = head.top + head.height / 2 - box.top;
     var next = document.createDocumentFragment();
     var chips = slots.children;
     for (var i = 0; i < chips.length; i++) {

@@ -790,11 +790,13 @@ a.tnode.is-link:focus-visible { outline: 2px solid var(--accent); outline-offset
    of children, so a bus with a tick per child draws it. The tasks do not: they
    wrap onto several rows, and a bus per row made a ladder of stubs that joined
    each row to the one above rather than any of them to the card.
-   Straight lines from the middle of the card to the middle of each chip say the
-   one true thing — these all belong to that machine — and they say it the same
-   way however the chips wrap. They are drawn UNDER the chips, which have their
-   own background, so a line to a chip four rows down disappears beneath the
-   rows it crosses instead of ruling through them.
+   Straight lines from the CENTRE of the card — both ways, not the middle of its
+   bottom edge — to the middle of each chip say the one true thing: these all
+   belong to that machine, and they say it the same way however the chips wrap.
+   They are drawn UNDER the card and under the chips, both of which paint their
+   own background, so the part of a line inside the card is hidden and a line to
+   a chip four rows down disappears beneath the rows it crosses instead of
+   ruling through them.
    The geometry only exists after layout, so `app.js` measures and draws it; see
    the note in the template about what is lost with JS off. */
 .slot-links { position: absolute; inset: 0; width: 100%; height: 100%;
@@ -2667,7 +2669,7 @@ The bar below is therefore shares of the measured call time, not of this service
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-08T04:13:42Z" data-localtime>2026-09-08T04:13:42Z</time>
+          <time datetime="2026-09-08T04:16:51Z" data-localtime>2026-09-08T04:16:51Z</time>
           
         </div>
       </div>
@@ -4099,7 +4101,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-08T04:13:42Z" data-localtime>2026-09-08T04:13:42Z</time>
+          <time datetime="2026-09-08T04:16:51Z" data-localtime>2026-09-08T04:16:51Z</time>
           
         </div>
       </div>
@@ -5439,7 +5441,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-08T04:13:42Z" data-localtime>2026-09-08T04:13:42Z</time>
+          <time datetime="2026-09-08T04:16:51Z" data-localtime>2026-09-08T04:16:51Z</time>
           
         </div>
       </div>
@@ -5671,9 +5673,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis+sentinel://default:ad19c5a4fe6a1ba8fe86536f65d40d028a78cc236ebd6b91@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
+              <code>redis+sentinel://default:66c16d8f422366cac53b94beb6d0b6869739276732d4b2ea@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis+sentinel://default:ad19c5a4fe6a1ba8fe86536f65d40d028a78cc236ebd6b91@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
+                      data-copy-text="redis+sentinel://default:66c16d8f422366cac53b94beb6d0b6869739276732d4b2ea@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -5684,7 +5686,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="ad19c5a4fe6a1ba8fe86536f65d40d028a78cc236ebd6b91">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="66c16d8f422366cac53b94beb6d0b6869739276732d4b2ea">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -5750,9 +5752,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
             <div class="eyebrow">3 &middot; Point your application at this</div>
             
             <div class="conn">
-              <code>redis://default:ad19c5a4fe6a1ba8fe86536f65d40d028a78cc236ebd6b91@127.0.0.1:6379</code>
+              <code>redis://default:66c16d8f422366cac53b94beb6d0b6869739276732d4b2ea@127.0.0.1:6379</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis://default:ad19c5a4fe6a1ba8fe86536f65d40d028a78cc236ebd6b91@127.0.0.1:6379">Copy</button>
+                      data-copy-text="redis://default:66c16d8f422366cac53b94beb6d0b6869739276732d4b2ea@127.0.0.1:6379">Copy</button>
             </div>
             
             <p class="hint">Your application talks to the helper from step 2, which is running beside it and listening on this port; the helper carries the traffic through the tunnel. That is why this is a local address and not the hostname.</p>
@@ -6631,7 +6633,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-08T04:13:42Z" data-localtime>2026-09-08T04:13:42Z</time>
+          <time datetime="2026-09-08T04:16:51Z" data-localtime>2026-09-08T04:16:51Z</time>
           
         </div>
       </div>
@@ -6851,9 +6853,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>mongodb://root:29bb85fedad6147e46b45e5c548a10c407c67efb892eb260@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
+              <code>mongodb://root:c0e3931fba420ec2da973c01b508513017c54dda992abdf6@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:29bb85fedad6147e46b45e5c548a10c407c67efb892eb260@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
+                      data-copy-text="mongodb://root:c0e3931fba420ec2da973c01b508513017c54dda992abdf6@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -6864,7 +6866,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="29bb85fedad6147e46b45e5c548a10c407c67efb892eb260">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="c0e3931fba420ec2da973c01b508513017c54dda992abdf6">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -6936,9 +6938,9 @@ Without that, a user can save a row and not see it on the next page load, and no
             <div class="eyebrow">3 &middot; Point your application at this</div>
             
             <div class="conn">
-              <code>mongodb://root:29bb85fedad6147e46b45e5c548a10c407c67efb892eb260@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority</code>
+              <code>mongodb://root:c0e3931fba420ec2da973c01b508513017c54dda992abdf6@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:29bb85fedad6147e46b45e5c548a10c407c67efb892eb260@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority">Copy</button>
+                      data-copy-text="mongodb://root:c0e3931fba420ec2da973c01b508513017c54dda992abdf6@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority">Copy</button>
             </div>
             
             <p class="hint">Your application talks to the helper from step 2, which is running beside it and listening on this port; the helper carries the traffic through the tunnel. That is why this is a local address and not the hostname.</p>
@@ -11120,7 +11122,7 @@ Without that, a user can save a row and not see it on the next page load, and no
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788837222.252476" data-localtime-epoch>1788837222</time>
+              <time datetime="1788837411.433829" data-localtime-epoch>1788837411</time>
             
           </td>
           <td>
@@ -11812,7 +11814,7 @@ Without that, a user can save a row and not see it on the next page load, and no
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788837222.252476" data-localtime-epoch>1788837222</time>
+              <time datetime="1788837411.433829" data-localtime-epoch>1788837411</time>
             
           </td>
           <td>
@@ -13520,8 +13522,15 @@ Without that, a user can save a row and not see it on the next page load, and no
     if (!svg || !card || !slots) { return; }
     var box = branch.getBoundingClientRect();
     var head = card.getBoundingClientRect();
+    // THE CARD'S CENTRE, both ways — not the middle of its bottom edge. The
+    // card sits above the lines and paints its own background, so the part of
+    // each line inside it is hidden and what shows is a fan leaving the card's
+    // lower edge at the angle it would have if it started at the middle. From
+    // the bottom edge every line left the same point; from the centre they
+    // leave spread across the edge, which is what makes it read as a fan
+    // rather than as a bundle of wires tied at one knot.
     var x0 = head.left + head.width / 2 - box.left;
-    var y0 = head.bottom - box.top;
+    var y0 = head.top + head.height / 2 - box.top;
     var next = document.createDocumentFragment();
     var chips = slots.children;
     for (var i = 0; i < chips.length; i++) {

@@ -750,11 +750,13 @@ a.tnode.is-link:focus-visible { outline: 2px solid var(--accent); outline-offset
    of children, so a bus with a tick per child draws it. The tasks do not: they
    wrap onto several rows, and a bus per row made a ladder of stubs that joined
    each row to the one above rather than any of them to the card.
-   Straight lines from the middle of the card to the middle of each chip say the
-   one true thing — these all belong to that machine — and they say it the same
-   way however the chips wrap. They are drawn UNDER the chips, which have their
-   own background, so a line to a chip four rows down disappears beneath the
-   rows it crosses instead of ruling through them.
+   Straight lines from the CENTRE of the card — both ways, not the middle of its
+   bottom edge — to the middle of each chip say the one true thing: these all
+   belong to that machine, and they say it the same way however the chips wrap.
+   They are drawn UNDER the card and under the chips, both of which paint their
+   own background, so the part of a line inside the card is hidden and a line to
+   a chip four rows down disappears beneath the rows it crosses instead of
+   ruling through them.
    The geometry only exists after layout, so `app.js` measures and draws it; see
    the note in the template about what is lost with JS off. */
 .slot-links { position: absolute; inset: 0; width: 100%; height: 100%;
