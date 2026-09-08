@@ -1051,13 +1051,7 @@ def observability(vm_range, vm_query, charts):
         # segments say where 1200ms goes, the summary underneath says which
         # services are over the line.
         _card("Latency",
-              "where a slow request's time goes. A service whose timed calls "
-              "all happen inside its requests is one bar cut into them, and "
-              "`unmeasured` is whatever no timer accounted for, including the "
-              "service's own work. One whose calls do not — a cache refresh, a "
-              "prefetch, calls made side by side — cannot be cut up at all, so "
-              "it is drawn as what a call costs and how often a request makes "
-              "one",
+              "",
               charts.divided(composition, "ms",
                              empty="no service is publishing a timer yet"),
               _window(LATEST_SPAN, Q_LATENCY, Q_REQUEST_MS),

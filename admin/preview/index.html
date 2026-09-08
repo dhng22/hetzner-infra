@@ -1982,7 +1982,6 @@ details.ca .conn pre { margin: 0; overflow-x: auto; font-size: 11px; line-height
             
             <span class="obs-window">latest sample</span>
           </div>
-          <p class="obs-note">where a slow request&#39;s time goes. A service whose timed calls all happen inside its requests is one bar cut into them, and `unmeasured` is whatever no timer accounted for, including the service&#39;s own work. One whose calls do not — a cache refresh, a prefetch, calls made side by side — cannot be cut up at all, so it is drawn as what a call costs and how often a request makes one</p>
           <figure class="chart-wrap is-plain"><div class="split-bars"><div class="split-row"><div class="split-head"><span class="split-name" title="api_app">api_app</span><span class="split-total">279ms</span></div><div class="split-bar"><i style="width:68%;background:var(--s-prod)" data-tip="media.example.net: 68% of api_app’s 279ms — 190ms
 127ms a call, on 1 request in 1
 • /user/image/thumb — 117ms
