@@ -440,6 +440,34 @@ G_REQUEST_MS = Gauge("overseer_service_request_ms",
 G_REQUEST_PATH_MS = Gauge("overseer_service_request_path_ms",
                           "Milliseconds of the average request spent on one path",
                           _SVC + ["target", "path"])
+#: THE WHOLE THE PARTS WERE MEASURED AGAINST, so the panel can check them.
+#:
+#: `G_REQUEST_MS` is milliseconds per request served; the end-to-end mean is the
+#: number those parts are supposed to fit inside. Without it published, a
+#: breakdown whose parts EXCEED the request is indistinguishable from one that
+#: fits exactly — the remainder is floored at zero either way, and the surviving
+#: part is then drawn as the whole request.
+#:
+#: That is not hypothetical. Measured on a live cluster: a service serving 12.5
+#: req/s at a 38ms mean, calling one host 0.145 times per request at 360ms a
+#: call — 44ms of dependency time attributed to a 38ms request. The panel drew
+#: "media.tikdrama.asia: 100% of api_app's 373ms", which is false twice over:
+#: 86% of requests never touch that host at all.
+G_REQUEST_TOTAL_MS = Gauge("overseer_service_request_total_ms",
+                           "Milliseconds of the average request, end to end",
+                           _SVC)
+#: HOW OFTEN, beside how long. `G_REQUEST_MS` is the product of the two, and the
+#: product alone cannot tell "every request waits 44ms on this host" from "one
+#: request in seven waits 360ms on it" — which are different problems with
+#: different fixes, and only the second is what a working cache looks like.
+#:
+#: It is also the number that says whether the breakdown can be a breakdown at
+#: all: a dependency called more often than the service is called, or called at
+#: a cost the mean request cannot contain, is being called from somewhere other
+#: than inside a served request.
+G_CALLS_PER_REQUEST = Gauge("overseer_service_calls_per_request",
+                            "Calls to this dependency per request served",
+                            _SVC + ["cause", "target"])
 G_CLAIMS = Gauge("overseer_claimed_causes", "Causes some service claims", ["cause"])
 G_LOOP = Gauge("overseer_last_loop_timestamp_seconds", "Unix time of the last loop")
 G_SERVICES = Gauge("overseer_watched_services", "Application services being watched")
@@ -924,7 +952,8 @@ UNMEASURED = "unmeasured"
 
 def request_composition(services, dependencies):
     """
-    {service: [(cause, target, ms of the average request)]}, biggest first.
+    `({service: [(cause, target, ms per request, calls per request)]}, paths,
+      {service: end-to-end mean ms})`, parts biggest first.
 
     The end-to-end mean, split into where it goes. Every part is measured the
     same way — total time in that place over the requests it was spent on — so
@@ -935,6 +964,13 @@ def request_composition(services, dependencies):
     200ms calls in parallel cost one request 200ms of wall-clock and 400ms of
     dependency time. Floored rather than hidden, and the card says so, because
     the alternative is a picture that silently rescales itself.
+
+    THE MEAN IS RETURNED TOO, because a floor hides the one case worth seeing.
+    When the parts exceed the whole the remainder is dropped, and a reader with
+    only the parts cannot tell that from a breakdown that fits exactly — the
+    biggest part is drawn as the entire request either way. Publishing the whole
+    lets the panel say "these do not fit inside this" instead of asserting a
+    share nobody can check.
 
     Queries are deduplicated by expression, as everywhere else here: one for
     each distinct request timer, one for each distinct dependency timer.
@@ -957,15 +993,22 @@ def request_composition(services, dependencies):
         rows = []
         for cause, _p95_expr, base, target, path in dependencies.get(svc, ()):
             by = f"service, {target}" if target else "service"
+            labels = ("service", target) if target else "service"
             expr = expressions.per_request_expr(
                 base, expressions.unit_of(base), request_base, by=by)
             if expr not in answers:
-                labels = ("service", target) if target else "service"
                 answers[expr] = query.vm_query_map(expr, label=labels)
+            # HOW OFTEN, beside how long. Same grouping, same denominator, so a
+            # row's ms and its call count describe the same calls.
+            rate_expr = expressions.calls_per_request_expr(base, request_base,
+                                                           by=by)
+            if rate_expr not in answers:
+                answers[rate_expr] = query.vm_query_map(rate_expr, label=labels)
             for found, value in answers[expr].items():
                 name, target_name = _split(found, target, base)
                 if name == svc and value:
-                    rows.append((cause, target_name, value))
+                    rows.append((cause, target_name, value,
+                                 answers[rate_expr].get(found)))
             if target and path:
                 paths.extend(_paths_under(svc, base, request_base, target, path,
                                           answers))
@@ -975,11 +1018,16 @@ def request_composition(services, dependencies):
         # which draws as one layer the height of its own latency — the plain
         # chart it had before, reached by the same path rather than by a
         # special case in the panel.
+        #
+        # The remainder is still floored, because a negative slice cannot be
+        # drawn. What changed is that the floor is no longer the only record of
+        # the overflow: `totals` goes out beside the rows, and the panel
+        # compares the two rather than trusting that they fit.
         remainder = totals[svc] - sum(row[2] for row in rows)
         if remainder > 0:
-            rows.append((classify.CAUSE_LOCAL, UNMEASURED, remainder))
+            rows.append((classify.CAUSE_LOCAL, UNMEASURED, remainder, None))
         out[svc] = rows
-    return out, paths
+    return out, paths, {s: totals[s] for s in out}
 
 
 def _paths_under(svc, base, request_base, target, path, answers):
@@ -1014,7 +1062,7 @@ def _paths_under(svc, base, request_base, target, path, answers):
     return rows
 
 
-def publish_composition(composition, paths=()):
+def publish_composition(composition, paths=(), means=None):
     """
     The average request and its parts, for every service, so the panel can draw
     an end-to-end latency that adds up.
@@ -1025,15 +1073,32 @@ def publish_composition(composition, paths=()):
     off — leaves its last reading behind looking current, and the panel draws a
     third party inside a request nobody makes any more.
     """
-    live = set()
+    live, called = set(), set()
     for name, rows in composition.items():
-        for cause, target, value in rows:
+        for cause, target, value, calls in rows:
             live.add((name, cause, str(target)))
             G_REQUEST_MS.labels(service=name, cause=cause,
                                 target=str(target)).set(value)
+            # `unmeasured` is a remainder, not a call, and has no rate. Absent
+            # rather than zero: zero would read as a dependency nobody calls.
+            if calls is not None:
+                called.add((name, cause, str(target)))
+                G_CALLS_PER_REQUEST.labels(service=name, cause=cause,
+                                           target=str(target)).set(calls)
     for labels in [l for l in list(G_REQUEST_MS._metrics)
                    if l and tuple(l) not in live]:
         G_REQUEST_MS.remove(*labels)
+    for labels in [l for l in list(G_CALLS_PER_REQUEST._metrics)
+                   if l and tuple(l) not in called]:
+        G_CALLS_PER_REQUEST.remove(*labels)
+
+    whole = set()
+    for name, value in (means or {}).items():
+        whole.add((name,))
+        G_REQUEST_TOTAL_MS.labels(service=name).set(value)
+    for labels in [l for l in list(G_REQUEST_TOTAL_MS._metrics)
+                   if l and tuple(l) not in whole]:
+        G_REQUEST_TOTAL_MS.remove(*labels)
 
     # The per-path detail, level-triggered on the same terms. A path that stops
     # being called must stop being listed under its host, or the hover names an

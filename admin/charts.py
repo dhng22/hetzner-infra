@@ -562,6 +562,30 @@ def _percentages(values):
     return out
 
 
+def _overrun_tip(group, unit):
+    """
+    Why this bar is not a breakdown, in the words the reader needs.
+
+    Two causes, and the call rate tells them apart: calls made CONCURRENTLY
+    overlap in wall-clock, so their time is counted twice inside one request;
+    calls made OUTSIDE a served request — a cache refresh, a prefetch, a
+    scheduled job — are counted against a request that never waited for them.
+    Both are named, because this process cannot tell which without reading the
+    application.
+    """
+    return (f'{fmt(group.get("measured") or 0.0, unit)} of timed calls is '
+            f'attributed to a {fmt(group.get("mean") or 0.0, unit)} average '
+            f'request, so these are NOT slices of it.\n\n'
+            f'Time is counted per request served. That is a share of a request '
+            f'only when the call happens inside one — calls made in parallel '
+            f'are counted twice over, and calls made outside a request at all '
+            f'(a cache refresh, a prefetch, a scheduled job) are counted '
+            f'against requests that never waited for them.\n\n'
+            f'The bar below is therefore shares of the measured call time, not '
+            f'of this service’s {fmt(group.get("total") or 0.0, unit)} '
+            f'latency. Hover a segment for how often it is actually called.')
+
+
 def divided(groups, unit="", empty="nothing is instrumented yet"):
     """
     One bar per service, cut into the parts its latency is made of.
@@ -583,7 +607,22 @@ def divided(groups, unit="", empty="nothing is instrumented yet"):
     the same rounded number its tooltip prints — so nothing is visibly wider
     than the figure written on it.
 
-    `groups` is `[{"name", "total", "parts": [{"name", "value", "note"?}]}]`.
+    WHEN THE PARTS DO NOT FIT, SAY SO. Time is attributed per request served,
+    which is a share of a request only when the calls happen inside one — a
+    background refresh or a prefetch is counted and waited for by nobody. The
+    overseer floors the negative remainder because a negative slice cannot be
+    drawn, and the surviving dependency then fills the bar and reads as a
+    confident 100%. Measured live: 44ms of one host attributed to a 38ms mean
+    request, drawn as "media.tikdrama.asia: 100% of api_app's 373ms" while 86%
+    of that service's requests never called that host at all.
+
+    So a group carrying `over` is drawn as a bar that does not claim to be the
+    request: it is hatched, the shares are shares OF THE MEASURED TIME rather
+    than of the latency, and every tooltip says which. Nothing is hidden and
+    nothing is rescaled behind the reader's back.
+
+    `groups` is `[{"name", "total", "parts": [{"name", "value", "note"?,
+    "calls"?}], "mean"?, "measured"?, "over"?}]`.
     """
     groups = [g for g in (groups or [])
               if g.get("total") and sum(p["value"] for p in g.get("parts") or []) > 0]
@@ -593,18 +632,52 @@ def divided(groups, unit="", empty="nothing is instrumented yet"):
     out = ['<div class="split-bars">']
     for group in groups:
         parts, total = group["parts"], group["total"]
+        over = bool(group.get("over"))
+        # What a share is a share OF. Normally the service's own latency, which
+        # is what makes the segments comparable with the Duration chart. When
+        # the parts overrun the request, the only thing they are shares of is
+        # each other, and the bar says that rather than borrowing the latency's
+        # authority for an answer that cannot be one.
+        basis = group.get("measured") if over else total
         shares = _percentages([part["value"] for part in parts])
+        head = (f'<span class="split-total" '
+                f'data-tip="{_esc(_overrun_tip(group, unit))}">'
+                f'{fmt(group.get("measured") or 0.0, unit)} measured · '
+                f'{fmt(group.get("mean") or 0.0, unit)} request</span>'
+                if over else
+                f'<span class="split-total">{fmt(total, unit)}</span>')
         out.append('<div class="split-row">'
                    f'<div class="split-head">'
                    f'<span class="split-name" title="{_esc(group["name"])}">'
                    f'{_esc(group["name"])}</span>'
-                   f'<span class="split-total">{fmt(total, unit)}</span>'
-                   '</div><div class="split-bar">')
+                   f'{head}'
+                   f'</div><div class="split-bar{" is-over" if over else ""}">')
         for index, (part, share) in enumerate(zip(parts, shares)):
             note = f' ({part["note"]})' if part.get("note") else ""
-            worth = total * share / 100.0
-            tip = (f'{part["name"]}{note}: {share}% of {group["name"]}’s '
-                   f'{fmt(total, unit)} — {fmt(worth, unit)}')
+            worth = basis * share / 100.0
+            tip = (f'{part["name"]}{note}: {share}% of '
+                   f'{group["name"]}’s {fmt(basis, unit)} '
+                   f'{"of measured call time" if over else "latency"} — '
+                   f'{fmt(worth, unit)}')
+            # HOW OFTEN, under how long. The segment is the product of the two
+            # and the product hides which one is large: 44ms per request is
+            # "every request waits 44ms here" or "one request in seven waits
+            # 360ms here", and only the second is what a working cache looks
+            # like.
+            #
+            # Below one, said as "1 request in 7" as well as as a rate. "0.14
+            # calls per request" is arithmetic; "1 request in 7" is the fact,
+            # and on a cached path it is the whole answer.
+            calls = part.get("calls")
+            if calls:
+                how_often = f"{calls:.2f} calls per request"
+                # Only where it says something: at 0.87 calls per request the
+                # rounding gives "1 request in 1", which is both wrong and
+                # noisier than the rate it was meant to explain.
+                if calls <= 0.5:
+                    how_often += f" — about 1 request in {round(1 / calls)}"
+                tip += (f'\n{how_often}, '
+                        f'{fmt((part.get("value") or 0.0) / calls, unit)} each')
             # The calls behind this segment, ON HOVER AND NOWHERE ELSE. The bar
             # and the key stay at the level of the host — that is what the
             # alert names and what `autoscale.mute_causes` accepts — and "which

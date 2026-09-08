@@ -396,6 +396,25 @@ class TaskChipTest(unittest.TestCase):
         self.assertIn("justify-content: safe center", CSS.read_text())
 
 
+class DividedBarTest(unittest.TestCase):
+    def test_the_overrun_hatch_is_an_overlay_and_not_on_the_segments(self):
+        """
+        Each segment carries its colour as a `background:` SHORTHAND in an
+        inline style, which resets `background-image` at a specificity no
+        stylesheet rule can reach. A hatch declared on `.split-bar.is-over > i`
+        is therefore discarded in silence and the bar renders as an ordinary
+        one — which is exactly the reading it exists to contradict.
+        """
+        css = CSS.read_text()
+        self.assertIn(".split-bar.is-over::after", css)
+        self.assertNotIn(".split-bar.is-over > i", css)
+        block = re.search(r"\.split-bar\.is-over::after \{(.*?)\}", css, re.S)
+        self.assertIsNotNone(block)
+        # It covers the segments, so it must not swallow their tooltips.
+        self.assertIn("pointer-events: none", block.group(1))
+        self.assertIn("repeating-linear-gradient", block.group(1))
+
+
 class ServiceRowTest(unittest.TestCase):
     """
     `.row` is shared by five templates that put different things in it, so it

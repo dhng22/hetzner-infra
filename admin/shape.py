@@ -681,6 +681,15 @@ Q_REQUEST_MS = 'max by (service, target) (overseer_service_request_ms)'
 #: at a segment. Empty unless the application tags its outbound calls.
 Q_REQUEST_PATH = ('max by (service, target, path) '
                   '(overseer_service_request_path_ms)')
+#: THE WHOLE THOSE LAYERS WERE MEASURED AGAINST — the end-to-end MEAN, not the
+#: percentile `Q_LATENCY` draws. Without it the bar cannot be checked: parts
+#: that overrun the request are floored away upstream, and the biggest survivor
+#: is then drawn as the entire request with nothing to contradict it.
+Q_REQUEST_TOTAL = 'max by (service) (overseer_service_request_total_ms)'
+#: HOW OFTEN each dependency is called per request served. `Q_REQUEST_MS` is
+#: this times the cost of a call, and the product cannot tell "every request
+#: waits here" from "one request in seven waits a long time here".
+Q_CALLS = 'max by (service, target) (overseer_service_calls_per_request)'
 #: WHICH STATISTIC Q_LATENCY currently is. Not decorative — see `_latency_note`.
 Q_LATENCY_KIND = ('max by (kind) (overseer_service_latency_signal) == 1')
 
@@ -840,9 +849,10 @@ def _paths_for(paths, service, host):
     return sorted(found, key=lambda row: -row[1])
 
 
-def _composition(series, latency, paths=None):
+def _composition(series, latency, paths=None, means=None, calls=None):
     """
-    `[{name, total, parts}]` — each service's latency, cut into what it waits on.
+    `[{name, total, parts, mean, over}]` — each service's latency, cut into what
+    it waits on.
 
     TWO SOURCES FOR ONE BAR. `total` is the service's own latency, the same
     number the Duration chart in RED draws, so the two cards cannot disagree
@@ -864,6 +874,23 @@ def _composition(series, latency, paths=None):
     part it belongs to and read by nothing but the tooltip: the segments, the
     legend and the summary stay at the level of the host, because that is what
     the alert names and what `autoscale.mute_causes` accepts.
+
+    `over` IS THE HONESTY OF THE WHOLE CARD. The parts are time attributed per
+    request served, which is only a share of a request when the calls happen
+    INSIDE one. A background refresh, a prefetch or a scheduled job is counted
+    and waited for by nobody, and then the parts add up to more than the request
+    they are drawn inside. The overseer floors that remainder — a negative slice
+    cannot be drawn — so without the mean beside the parts the bar shows the
+    surviving dependency at 100% and looks like a confident answer.
+
+    Measured on a live cluster: a service at 12.5 req/s and a 38ms mean request,
+    calling one host 0.145 times per request at 360ms a call. 44ms of
+    dependency time inside a 38ms request; the card said "media.tikdrama.asia:
+    100% of api_app's 373ms" while 86% of requests never touched that host.
+    `over` is true there, and the card says what it means instead.
+
+    `calls` is calls per request per part, which is what tells the two readings
+    apart and is printed on the segment's tooltip.
     """
     latest = {}
     for (service, target), points in (series or {}).items():
@@ -879,12 +906,20 @@ def _composition(series, latency, paths=None):
             continue
         rows.sort(key=lambda row: (row[0] == UNMEASURED, -row[1]))
         parts = [{"name": name, "value": value,
+                   "calls": (calls or {}).get((service, name)),
                    "detail": _paths_for(paths, service, name)}
                   for name, value in rows[:PARTS_MAX]]
         rest = sum(value for _name, value in rows[PARTS_MAX:])
         if rest:
             parts.append({"name": "other", "value": rest})
-        out.append({"name": service, "total": points[-1][1], "parts": parts})
+        mean = (means or {}).get(service)
+        measured = sum(value for _name, value in rows)
+        out.append({"name": service, "total": points[-1][1], "parts": parts,
+                    "mean": mean,
+                    # A whole percent of slack, so a bar that adds up exactly is
+                    # not called broken by a rounding error in the last digit.
+                    "over": bool(mean) and measured > mean * 1.01,
+                    "measured": measured})
     return out
 
 
@@ -916,7 +951,9 @@ def observability(vm_range, vm_query, charts):
     # it, and the two cannot be told apart by either label alone.
     composition = _composition(
         rng(Q_REQUEST_MS, ("service", "target")), latency,
-        _latest_of(rng(Q_REQUEST_PATH, ("service", "target", "path"))))
+        _latest_of(rng(Q_REQUEST_PATH, ("service", "target", "path"))),
+        _latest_of(rng(Q_REQUEST_TOTAL, "service")),
+        _latest_of(rng(Q_CALLS, ("service", "target"))))
 
     red = [
         _card("Duration", latency_note,
@@ -956,6 +993,14 @@ def observability(vm_range, vm_query, charts):
     else:
         latency_summary = (f"all {len(latency)} services under the "
                            f"{charts.fmt(slo, 'ms')} SLO")
+    # Named in the summary as well as drawn, because the hatch is only visible
+    # to somebody already looking at that bar and this is the one condition
+    # under which the card's own numbers do not mean what they appear to.
+    overrun = sorted(g["name"] for g in composition if g.get("over"))
+    if overrun:
+        latency_summary = ((latency_summary + " · ") if latency_summary else "") + (
+            f"timed calls exceed the request they are counted against on "
+            + ", ".join(overrun))
 
     traffic_now = traffic[-1][1] if traffic else None
     traffic_peak = max((v for _, v in traffic), default=0.0)
@@ -1009,7 +1054,9 @@ def observability(vm_range, vm_query, charts):
         _card("Latency",
               "the same latency RED draws, cut into what the request waits on "
               "— `unmeasured` is whatever no timer accounted for, including "
-              "the service's own work",
+              "the service's own work. A hatched bar is one whose timed calls "
+              "add up to more than the request they were counted against, so "
+              "they are not slices of it; hover the figure beside it",
               charts.divided(composition, "ms",
                              empty="no service is publishing a timer yet"),
               _window(LATEST_SPAN, Q_LATENCY, Q_REQUEST_MS),

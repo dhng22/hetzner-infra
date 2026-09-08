@@ -507,7 +507,63 @@ class ColumnTest(unittest.TestCase):
         self.assertIn("1.2kms", body)                # the total beside the bar
         # The share is what was measured; the millisecond figure is that share
         # of the bar, so the two can never disagree.
-        self.assertIn("tikdrama: 67% of api_app’s 1.2kms — 804ms", body)
+        self.assertIn("tikdrama: 67% of api_app’s 1.2kms latency — 804ms", body)
+        # "latency" is not decoration: the same sentence with "of measured call
+        # time" in its place is what an overrun bar prints, and the two bars
+        # look identical without it.
+        self.assertNotIn("is-over", body)
+
+    def test_calls_that_overrun_the_request_stop_claiming_to_be_shares_of_it(self):
+        """
+        THE 100% THAT WAS AN ARTEFACT.
+
+        Time is attributed per REQUEST SERVED, which is a share of a request
+        only when the call happens inside one. Live shape on drama: 12.5 req/s
+        at a 38.2ms mean, calling media.tikdrama.asia 0.145 times per request at
+        360ms a call — 43.8ms of dependency time attributed to a 38.2ms request.
+        The overseer floors the negative remainder, and the surviving segment
+        then filled the bar: "media.tikdrama.asia: 100% of api_app's 373ms",
+        while 86% of that service's requests never called that host.
+
+        Nothing about the measurement was wrong. What was wrong was drawing it
+        against a latency it cannot be a part of, with no way to see that.
+        """
+        groups = shape._composition(
+            {("api_app", "media.tikdrama.asia"): series(43.8)},
+            {"api_app": series(372.8)},
+            None,
+            {"api_app": 38.2},
+            {("api_app", "media.tikdrama.asia"): 0.145})
+        self.assertTrue(groups[0]["over"])
+        body = charts.divided(groups, "ms")
+        # Marked before anything is hovered.
+        self.assertIn("is-over", body)
+        # The head prints both numbers rather than the latency alone.
+        self.assertIn("43.8ms measured · 38.2ms request", body)
+        tip = re.search(r'data-tip="([^"]*)"', body).group(1)
+        self.assertIn("NOT slices of it", tip)
+        # And the segment is a share of the measured time, not of the latency.
+        segment = re.findall(r'data-tip="([^"]*)"', body)[1]
+        self.assertIn("of measured call time", segment)
+        self.assertNotIn("373ms", segment)
+        # How often, which is what shows the cache working.
+        self.assertIn("0.14 calls per request", segment)
+        # The fact, not just the arithmetic: this is the sentence that
+        # answers "is my cache working".
+        self.assertIn("about 1 request in 7", segment)
+        self.assertIn("302ms each", segment)
+
+    def test_a_breakdown_that_fits_is_left_alone(self):
+        # The overrun treatment must not fire on an ordinary bar, or every card
+        # grows a warning and the warning stops meaning anything.
+        groups = shape._composition(
+            {("api_app", "media.example"): series(120.0),
+             ("api_app", "unmeasured"): series(80.0)},
+            {"api_app": series(600.0)},
+            None,
+            {"api_app": 200.0})
+        self.assertFalse(groups[0]["over"])
+        self.assertNotIn("is-over", charts.divided(groups, "ms"))
 
     def test_the_bar_is_the_latency_red_draws_not_the_sum_of_the_parts(self):
         """

@@ -284,11 +284,16 @@ class RequestCompositionTest(unittest.TestCase):
         self.answer({"ktor_http_server_requests_seconds_sum": {"api_app": 200.0},
                      "http_client_requests_seconds_sum":
                          {("api_app", "media.example"): 120.0}})
-        rows, _paths = D.request_composition([D.Watched(service())], self.deps())
+        rows, _paths, means = D.request_composition([D.Watched(service())],
+                                                    self.deps())
         rows = rows["api_app"]
-        self.assertEqual(rows, [(classify.CAUSE_UPSTREAM, "media.example", 120.0),
-                                (classify.CAUSE_LOCAL, D.UNMEASURED, 80.0)])
+        self.assertEqual(rows,
+                         [(classify.CAUSE_UPSTREAM, "media.example", 120.0, None),
+                          (classify.CAUSE_LOCAL, D.UNMEASURED, 80.0, None)])
         self.assertEqual(sum(row[2] for row in rows), 200.0)
+        # The whole goes out beside the parts, so the panel can check them
+        # rather than trust that they fit.
+        self.assertEqual(means, {"api_app": 200.0})
 
     def test_a_service_with_no_outbound_timer_is_all_unmeasured(self):
         # It draws as one layer the height of its own latency — the plain chart
@@ -296,9 +301,9 @@ class RequestCompositionTest(unittest.TestCase):
         # in the panel.
         self.latency()
         self.answer({"ktor_http_server_requests_seconds_sum": {"api_app": 200.0}})
-        rows, _paths = D.request_composition([D.Watched(service())], {})
+        rows, _paths, _means = D.request_composition([D.Watched(service())], {})
         self.assertEqual(rows["api_app"],
-                         [(classify.CAUSE_LOCAL, D.UNMEASURED, 200.0)])
+                         [(classify.CAUSE_LOCAL, D.UNMEASURED, 200.0, None)])
 
     def test_calls_that_overrun_the_request_leave_no_remainder(self):
         """
@@ -313,10 +318,16 @@ class RequestCompositionTest(unittest.TestCase):
         self.answer({"ktor_http_server_requests_seconds_sum": {"api_app": 200.0},
                      "http_client_requests_seconds_sum":
                          {("api_app", "a.example"): 400.0}})
-        rows, _paths = D.request_composition([D.Watched(service())], self.deps())
+        rows, _paths, means = D.request_composition([D.Watched(service())],
+                                                    self.deps())
         self.assertEqual(rows["api_app"],
-                         [(classify.CAUSE_UPSTREAM, "a.example", 400.0)])
+                         [(classify.CAUSE_UPSTREAM, "a.example", 400.0, None)])
         self.assertNotIn(D.UNMEASURED, [r[1] for r in rows["api_app"]])
+        # AND THE OVERFLOW IS STILL RECORDED. The floor is what makes the bar
+        # drawable; publishing the whole beside it is what stops the surviving
+        # part being read as the entire request. 400 of a 200ms request is the
+        # finding, and without this number nothing downstream can see it.
+        self.assertEqual(means, {"api_app": 200.0})
 
     def test_a_service_with_no_end_to_end_number_is_not_broken_down(self):
         # A stack whose parts are known and whose whole is not is not a
@@ -325,7 +336,7 @@ class RequestCompositionTest(unittest.TestCase):
         self.answer({"http_client_requests_seconds_sum":
                      {("api_app", "a.example"): 90.0}})
         self.assertEqual(D.request_composition([D.Watched(service())], self.deps()),
-                         ({}, []))
+                         ({}, [], {}))
 
     def test_paths_are_detail_under_a_host_and_never_replace_it(self):
         """
@@ -342,8 +353,8 @@ class RequestCompositionTest(unittest.TestCase):
                          ("api_app", "static.example", "/v1/upload"): 40.0},
                      "http_client_requests_seconds_sum":
                          {("api_app", "static.example"): 160.0}})
-        rows, paths = D.request_composition([D.Watched(service())],
-                                            self.deps(path="path"))
+        rows, paths, _means = D.request_composition([D.Watched(service())],
+                                                    self.deps(path="path"))
         # One segment, named by the host, exactly as before.
         self.assertEqual([(r[1], r[2]) for r in rows["api_app"]],
                          [("static.example", 160.0), (D.UNMEASURED, 140.0)])
@@ -359,7 +370,8 @@ class RequestCompositionTest(unittest.TestCase):
         self.answer({"ktor_http_server_requests_seconds_sum": {"api_app": 9000.0},
                      "http_client_requests_seconds_sum":
                          {("api_app", f"h{i}"): float(i) for i in range(40)}})
-        rows, _paths = D.request_composition([D.Watched(service())], self.deps())
+        rows, _paths, _means = D.request_composition([D.Watched(service())],
+                                                     self.deps())
         rows = rows["api_app"]
         self.assertEqual(len(rows), D.DEPENDENCY_ROWS_MAX + 1)     # + unmeasured
         self.assertEqual(rows[-1][1], D.UNMEASURED)
@@ -373,23 +385,62 @@ class PublishCompositionTest(unittest.TestCase):
     def tearDown(self):
         D.publish_composition({})
 
+    def calls(self):
+        return {labels: D.G_CALLS_PER_REQUEST.labels(*labels)._value.get()
+                for labels in list(D.G_CALLS_PER_REQUEST._metrics)}
+
+    def totals(self):
+        return {labels: D.G_REQUEST_TOTAL_MS.labels(*labels)._value.get()
+                for labels in list(D.G_REQUEST_TOTAL_MS._metrics)}
+
     def test_the_whole_composition_is_published_not_only_the_blamed_part(self):
         D.publish_composition({"api_app": [
-            (classify.CAUSE_UPSTREAM, "vendor.example", 120.0),
-            (classify.CAUSE_LOCAL, D.UNMEASURED, 80.0)]})
+            (classify.CAUSE_UPSTREAM, "vendor.example", 120.0, 0.4),
+            (classify.CAUSE_LOCAL, D.UNMEASURED, 80.0, None)]},
+            means={"api_app": 200.0})
         self.assertEqual(self.rows(), {
             ("api_app", "upstream", "vendor.example"): 120.0,
             ("api_app", "local", D.UNMEASURED): 80.0})
+        self.assertEqual(self.totals(), {("api_app",): 200.0})
+        # `unmeasured` is a remainder, not a call: absent rather than zero,
+        # because zero reads as a dependency nobody calls.
+        self.assertEqual(self.calls(),
+                         {("api_app", "upstream", "vendor.example"): 0.4})
+
+    def test_how_often_is_published_beside_how_long(self):
+        """
+        THE NUMBER THAT SHOWS A CACHE WORKING.
+
+        120ms per request against one host is the same figure whether every
+        request waits 120ms on it or one request in seven waits 840ms — and
+        those are different problems. Live shape: 0.145 calls per request at
+        360ms a call, on a service whose mean request is 38ms. The product said
+        the host was the entire request; the pair says 86% of requests never
+        touch it, and that the calls cannot all be happening inside one.
+        """
+        D.publish_composition({"api_app": [
+            (classify.CAUSE_UPSTREAM, "media.example", 43.8, 0.145)]},
+            means={"api_app": 38.2})
+        self.assertEqual(self.calls(),
+                         {("api_app", "upstream", "media.example"): 0.145})
+        self.assertEqual(self.totals(), {("api_app",): 38.2})
 
     def test_a_place_that_stops_being_called_stops_being_drawn(self):
         # Level-triggered. A stale layer looks exactly like a current one, and
         # the chart would draw a retired third party inside the request.
         D.publish_composition({"api_app": [
-            (classify.CAUSE_UPSTREAM, "old.example", 900.0)]})
+            (classify.CAUSE_UPSTREAM, "old.example", 900.0, 2.0)]},
+            means={"api_app": 950.0})
         D.publish_composition({"api_app": [
-            (classify.CAUSE_UPSTREAM, "new.example", 120.0)]})
+            (classify.CAUSE_UPSTREAM, "new.example", 120.0, 0.5)]},
+            means={"api_app": 200.0})
         self.assertEqual(self.rows(),
                          {("api_app", "upstream", "new.example"): 120.0})
+        self.assertEqual(self.calls(),
+                         {("api_app", "upstream", "new.example"): 0.5})
+        # And a service that stops being watched stops having a whole, too.
+        D.publish_composition({})
+        self.assertEqual(self.totals(), {})
 
 
 class DependencyNameTest(unittest.TestCase):

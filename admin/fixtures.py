@@ -693,10 +693,29 @@ _RANGES = {
         ("api_app", "media.example.net"): _wave(121, 40),
         ("api_app", "documents"): _wave(18, 6, phase=1),
         ("api_app", "unmeasured"): _wave(44, 12, phase=2),
-        # No `unmeasured` on this one on purpose: its timed calls already
-        # account for everything measured, which is an ordinary shape and the
-        # one a preview showing only tidy cases would hide.
+        # No `unmeasured` on this one on purpose, AND its timed calls overrun
+        # the request they are attributed to — 96ms against a 71ms mean. That
+        # is the live shape the honesty check exists for: a dependency called
+        # from outside a served request, or called concurrently, whose time
+        # cannot be a slice of the request and was drawn as 100% of it until
+        # the bar started checking. A preview showing only tidy cases hides the
+        # one reading somebody has to be able to recognise.
         ("web_app", "queue.vendor.example"): _wave(96, 20),
+    },
+    # The whole each breakdown was measured against — the end-to-end MEAN, not
+    # the percentile the bar is drawn at. `api_app`'s parts fit inside it;
+    # `web_app`'s do not.
+    shape.Q_REQUEST_TOTAL: {
+        "api_app": _wave(183, 30),
+        "web_app": _wave(71, 12),
+    },
+    # How often, beside how long. `media.example.net` is called on most
+    # requests; `queue.vendor.example` on one in six, which is why 96ms of it
+    # cannot be sitting inside a 71ms request.
+    shape.Q_CALLS: {
+        ("api_app", "media.example.net"): _wave(0.9, 0.1),
+        ("api_app", "documents"): _wave(1.8, 0.2),
+        ("web_app", "queue.vendor.example"): _wave(0.17, 0.03),
     },
 }
 for _name, _expr in shape.Q_UTILISATION:

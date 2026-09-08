@@ -68,6 +68,28 @@ def per_request_expr(dep_base, dep_unit, request_base, by="service"):
             f"sum by (service) (rate({request_base}_count[2m]))) * {scale}")
 
 
+def calls_per_request_expr(dep_base, request_base, by="service"):
+    """
+    How many `dep_base` calls are made per request served, grouped by `by`.
+
+    The other half of `per_request_expr`, which is this multiplied by the mean
+    cost of a call. The product on its own cannot tell "every request waits
+    44ms here" from "one request in seven waits 360ms here", and those are
+    different problems: the second is what an application with a working cache
+    looks like, and reading it as the first sends somebody to optimise a call
+    that 86% of requests never make.
+
+    It is also the check on whether the breakdown is a breakdown. Time
+    attributed per request is only a share of a request if the calls happen
+    INSIDE one; a background refresh, a prefetch or a scheduled job is counted
+    here and waited for by nobody. When the attributed time exceeds the mean
+    request that is what has happened, and this number is what tells you so.
+    """
+    return (f"sum by ({by}) (rate({dep_base}_count[2m])) "
+            f"/ on (service) group_left () "
+            f"sum by (service) (rate({request_base}_count[2m]))")
+
+
 def mean_expr(base, unit, by="service"):
     """
     Mean latency, in milliseconds, grouped by `by`.
