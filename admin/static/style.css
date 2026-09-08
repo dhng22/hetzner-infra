@@ -1157,19 +1157,36 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
    different kind of statement before the reader has hovered anything; the
    figure beside it prints both numbers, and the tooltip explains which of
    concurrency or out-of-request calls could be doing it. */
-/* ON TOP OF THE SEGMENTS, not on them. Each segment carries its colour as a
-   `background:` shorthand in an inline style, which resets `background-image`
-   at a specificity no stylesheet rule can reach — so a hatch declared on the
-   segments is silently discarded, and the bar renders as an ordinary one.
-   An overlay takes no clicks, so the segments keep their tooltips. */
-.split-bar { position: relative; }
-.split-bar.is-over::after {
-  content: ""; position: absolute; inset: 0; pointer-events: none;
-  border-radius: 3px; box-shadow: inset 0 0 0 1px var(--warn);
-  background-image: repeating-linear-gradient(
-    -45deg, rgb(0 0 0 / .32) 0 3px, transparent 3px 6px);
+/* WHAT A CALL COSTS, AND HOW OFTEN — the other shape this card can take, for a
+   service whose timed calls do not sit inside its requests and therefore
+   cannot be stacked into them. One row per dependency: name, a bar on the
+   service's own latency scale, and the two figures. See `charts._cost_rows`.
+   A hatched stack was tried here first and was worse than useless: it looked
+   like the ordinary chart, so the reader had a picture of shares plus a
+   paragraph saying the shares were not shares. */
+.split-costs { display: flex; flex-direction: column; gap: var(--s-2); }
+.split-cost { cursor: help; }
+.split-cost-head { display: flex; align-items: baseline; gap: var(--s-2);
+                   margin-bottom: 4px; font-size: var(--t-xs); }
+.split-cost-name { overflow: hidden; text-overflow: ellipsis;
+                   white-space: nowrap; font-weight: var(--w-bold); }
+.split-cost-bar { display: block; position: relative; height: 8px;
+                  border-radius: 3px; background: var(--surface-2); }
+.split-cost-bar > i { display: block; height: 100%; min-width: 2px;
+                      border-radius: 3px; }
+/* THE SERVICE'S OWN LATENCY, marked on every bar — the same idea a task chip's
+   reservation tick uses, and for the same reason: a length is only a fact when
+   there is something to read it against. A call whose bar runs past the mark
+   costs more on its own than a typical request to this service takes, which is
+   the whole finding on a dependency that is called out of band. */
+.split-cost-bar::after {
+  content: ""; position: absolute; top: -2px; bottom: -2px;
+  left: calc(var(--at, 100) * 1%); width: 2px; border-radius: 1px;
+  background: color-mix(in srgb, var(--text) 70%, transparent);
 }
-.split-head .split-total[data-tip] { color: var(--warn); cursor: help; }
+.split-cost-fig { font: 400 11px var(--mono); color: var(--text-mute);
+                  margin-left: auto; white-space: nowrap; }
+.split-note { margin: 6px 0 0; font-size: var(--t-xs); color: var(--text-mute); }
 /* The key itself is `.chart-legend`, shared with every chart in the column, so
    it cannot end up a different size from theirs. Only the gap above it is
    local: there is no x-axis here for it to sit under. */

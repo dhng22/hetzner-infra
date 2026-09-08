@@ -1197,19 +1197,36 @@ fieldset.bare.is-locked { opacity: .45; cursor: not-allowed; }
    different kind of statement before the reader has hovered anything; the
    figure beside it prints both numbers, and the tooltip explains which of
    concurrency or out-of-request calls could be doing it. */
-/* ON TOP OF THE SEGMENTS, not on them. Each segment carries its colour as a
-   `background:` shorthand in an inline style, which resets `background-image`
-   at a specificity no stylesheet rule can reach — so a hatch declared on the
-   segments is silently discarded, and the bar renders as an ordinary one.
-   An overlay takes no clicks, so the segments keep their tooltips. */
-.split-bar { position: relative; }
-.split-bar.is-over::after {
-  content: ""; position: absolute; inset: 0; pointer-events: none;
-  border-radius: 3px; box-shadow: inset 0 0 0 1px var(--warn);
-  background-image: repeating-linear-gradient(
-    -45deg, rgb(0 0 0 / .32) 0 3px, transparent 3px 6px);
+/* WHAT A CALL COSTS, AND HOW OFTEN — the other shape this card can take, for a
+   service whose timed calls do not sit inside its requests and therefore
+   cannot be stacked into them. One row per dependency: name, a bar on the
+   service's own latency scale, and the two figures. See `charts._cost_rows`.
+   A hatched stack was tried here first and was worse than useless: it looked
+   like the ordinary chart, so the reader had a picture of shares plus a
+   paragraph saying the shares were not shares. */
+.split-costs { display: flex; flex-direction: column; gap: var(--s-2); }
+.split-cost { cursor: help; }
+.split-cost-head { display: flex; align-items: baseline; gap: var(--s-2);
+                   margin-bottom: 4px; font-size: var(--t-xs); }
+.split-cost-name { overflow: hidden; text-overflow: ellipsis;
+                   white-space: nowrap; font-weight: var(--w-bold); }
+.split-cost-bar { display: block; position: relative; height: 8px;
+                  border-radius: 3px; background: var(--surface-2); }
+.split-cost-bar > i { display: block; height: 100%; min-width: 2px;
+                      border-radius: 3px; }
+/* THE SERVICE'S OWN LATENCY, marked on every bar — the same idea a task chip's
+   reservation tick uses, and for the same reason: a length is only a fact when
+   there is something to read it against. A call whose bar runs past the mark
+   costs more on its own than a typical request to this service takes, which is
+   the whole finding on a dependency that is called out of band. */
+.split-cost-bar::after {
+  content: ""; position: absolute; top: -2px; bottom: -2px;
+  left: calc(var(--at, 100) * 1%); width: 2px; border-radius: 1px;
+  background: color-mix(in srgb, var(--text) 70%, transparent);
 }
-.split-head .split-total[data-tip] { color: var(--warn); cursor: help; }
+.split-cost-fig { font: 400 11px var(--mono); color: var(--text-mute);
+                  margin-left: auto; white-space: nowrap; }
+.split-note { margin: 6px 0 0; font-size: var(--t-xs); color: var(--text-mute); }
 /* The key itself is `.chart-legend`, shared with every chart in the column, so
    it cannot end up a different size from theirs. Only the gap above it is
    local: there is no x-axis here for it to sit under. */
@@ -1965,21 +1982,17 @@ details.ca .conn pre { margin: 0; overflow-x: auto; font-size: 11px; line-height
             
             <span class="obs-window">latest sample</span>
           </div>
-          <p class="obs-note">the same latency RED draws, cut into what the request waits on — `unmeasured` is whatever no timer accounted for, including the service&#39;s own work. A hatched bar is one whose timed calls add up to more than the request they were counted against, so they are not slices of it; hover the figure beside it</p>
-          <figure class="chart-wrap is-plain"><div class="split-bars"><div class="split-row"><div class="split-head"><span class="split-name" title="api_app">api_app</span><span class="split-total">279ms</span></div><div class="split-bar"><i style="width:68%;background:var(--s-prod)" data-tip="media.example.net: 68% of api_app’s 279ms latency — 190ms
-0.87 calls per request, 127ms each
+          <p class="obs-note">where a slow request&#39;s time goes. A service whose timed calls all happen inside its requests is one bar cut into them, and `unmeasured` is whatever no timer accounted for, including the service&#39;s own work. One whose calls do not — a cache refresh, a prefetch, calls made side by side — cannot be cut up at all, so it is drawn as what a call costs and how often a request makes one</p>
+          <figure class="chart-wrap is-plain"><div class="split-bars"><div class="split-row"><div class="split-head"><span class="split-name" title="api_app">api_app</span><span class="split-total">279ms</span></div><div class="split-bar"><i style="width:68%;background:var(--s-prod)" data-tip="media.example.net: 68% of api_app’s 279ms — 190ms
+127ms a call, on 1 request in 1
 • /user/image/thumb — 117ms
 • /user/avatar — 49.2ms
-• /v1/upload — 25.2ms"></i><i style="width:9%;background:var(--s-staging)" data-tip="documents: 9% of api_app’s 279ms latency — 25.1ms
-1.75 calls per request, 8.0ms each"></i><i style="width:23%;background:var(--s-data)" data-tip="unmeasured: 23% of api_app’s 279ms latency — 64.2ms"></i></div><div class="chart-legend"><span class="chart-key"><i style="background:var(--s-prod)"></i>media.example.net</span><span class="chart-key"><i style="background:var(--s-staging)"></i>documents</span><span class="chart-key"><i style="background:var(--s-data)"></i>unmeasured</span></div></div><div class="split-row"><div class="split-head"><span class="split-name" title="web_app">web_app</span><span class="split-total" data-tip="90.8ms of timed calls is attributed to a 67.9ms average request, so these are NOT slices of it.
-
-Time is counted per request served. That is a share of a request only when the call happens inside one — calls made in parallel are counted twice over, and calls made outside a request at all (a cache refresh, a prefetch, a scheduled job) are counted against requests that never waited for them.
-
-The bar below is therefore shares of the measured call time, not of this service’s 121ms latency. Hover a segment for how often it is actually called.">90.8ms measured · 67.9ms request</span></div><div class="split-bar is-over"><i style="width:100%;background:var(--s-prod)" data-tip="queue.vendor.example: 100% of web_app’s 90.8ms of measured call time — 90.8ms
-0.16 calls per request — about 1 request in 6, 560ms each"></i></div><div class="chart-legend"><span class="chart-key"><i style="background:var(--s-prod)"></i>queue.vendor.example</span></div></div></div></figure>
+• /v1/upload — 25.2ms"></i><i style="width:9%;background:var(--s-staging)" data-tip="documents: 9% of api_app’s 279ms — 25.1ms
+8.0ms a call, on 1.7 calls a request"></i><i style="width:23%;background:var(--s-data)" data-tip="unmeasured: 23% of api_app’s 279ms — 64.2ms"></i></div><div class="chart-legend"><span class="chart-key"><i style="background:var(--s-prod)"></i>media.example.net</span><span class="chart-key"><i style="background:var(--s-staging)"></i>documents</span><span class="chart-key"><i style="background:var(--s-data)"></i>unmeasured</span></div></div><div class="split-row"><div class="split-head"><span class="split-name" title="web_app">web_app</span><span class="split-total">121ms</span></div><div class="split-costs"><div class="split-cost" data-tip="queue.vendor.example: 560ms a call, on 1 request in 6.
+90.8ms of call time per request served, against web_app’s 121ms latency — the mark on the bar."><div class="split-cost-head"><span class="split-cost-name">queue.vendor.example</span><span class="split-cost-fig">560ms a call · 1 request in 6</span></div><span class="split-cost-bar" style="--at:21.6"><i style="width:100%;background:var(--s-prod)"></i></span></div></div><p class="split-note">90.8ms of call time per request served, against a 67.9ms average request — so these run outside the request, or beside each other</p></div></div></figure>
           
           
-            <p class="obs-summary">all 2 services under the 500ms SLO · timed calls exceed the request they are counted against on web_app</p>
+            <p class="obs-summary">all 2 services under the 500ms SLO · web_app calls out of band, shown per call</p>
           
         </div>
       
@@ -2669,7 +2682,7 @@ The bar below is therefore shares of the measured call time, not of this service
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-08T04:16:51Z" data-localtime>2026-09-08T04:16:51Z</time>
+          <time datetime="2026-09-08T04:48:21Z" data-localtime>2026-09-08T04:48:21Z</time>
           
         </div>
       </div>
@@ -4101,7 +4114,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-08T04:16:51Z" data-localtime>2026-09-08T04:16:51Z</time>
+          <time datetime="2026-09-08T04:48:21Z" data-localtime>2026-09-08T04:48:21Z</time>
           
         </div>
       </div>
@@ -5441,7 +5454,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-08T04:16:51Z" data-localtime>2026-09-08T04:16:51Z</time>
+          <time datetime="2026-09-08T04:48:21Z" data-localtime>2026-09-08T04:48:21Z</time>
           
         </div>
       </div>
@@ -5673,9 +5686,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>redis+sentinel://default:66c16d8f422366cac53b94beb6d0b6869739276732d4b2ea@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
+              <code>redis+sentinel://default:48243d6a964954940b53e22cf73d6adc9730b528ad147f6f@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis+sentinel://default:66c16d8f422366cac53b94beb6d0b6869739276732d4b2ea@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
+                      data-copy-text="redis+sentinel://default:48243d6a964954940b53e22cf73d6adc9730b528ad147f6f@cache_sentinel-1:26379,cache_sentinel-2:26379,cache_sentinel-3:26379/cache/0">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -5686,7 +5699,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="66c16d8f422366cac53b94beb6d0b6869739276732d4b2ea">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="48243d6a964954940b53e22cf73d6adc9730b528ad147f6f">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -5752,9 +5765,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
             <div class="eyebrow">3 &middot; Point your application at this</div>
             
             <div class="conn">
-              <code>redis://default:66c16d8f422366cac53b94beb6d0b6869739276732d4b2ea@127.0.0.1:6379</code>
+              <code>redis://default:48243d6a964954940b53e22cf73d6adc9730b528ad147f6f@127.0.0.1:6379</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="redis://default:66c16d8f422366cac53b94beb6d0b6869739276732d4b2ea@127.0.0.1:6379">Copy</button>
+                      data-copy-text="redis://default:48243d6a964954940b53e22cf73d6adc9730b528ad147f6f@127.0.0.1:6379">Copy</button>
             </div>
             
             <p class="hint">Your application talks to the helper from step 2, which is running beside it and listening on this port; the helper carries the traffic through the tunnel. That is why this is a local address and not the hostname.</p>
@@ -6633,7 +6646,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
         <div class="eyebrow">Created</div>
         <div class="v small mono">
           
-          <time datetime="2026-09-08T04:16:51Z" data-localtime>2026-09-08T04:16:51Z</time>
+          <time datetime="2026-09-08T04:48:21Z" data-localtime>2026-09-08T04:48:21Z</time>
           
         </div>
       </div>
@@ -6853,9 +6866,9 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
           <div>
             <div class="eyebrow">Connection URL</div>
             <div class="conn">
-              <code>mongodb://root:c0e3931fba420ec2da973c01b508513017c54dda992abdf6@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
+              <code>mongodb://root:607106803f9daf616f1ddefa9aa35960e6456fd6e0c3b821@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:c0e3931fba420ec2da973c01b508513017c54dda992abdf6@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
+                      data-copy-text="mongodb://root:607106803f9daf616f1ddefa9aa35960e6456fd6e0c3b821@documents-mongo:27017/?replicaSet=documents&amp;authSource=admin&amp;tls=true&amp;tlsCAFile=/run/secrets/documents-ca.crt&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority&amp;readPreference=secondaryPreferred&amp;maxStalenessSeconds=90">Copy</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -6866,7 +6879,7 @@ curl -fsS https://admin-aichat.acme.dev/hooks/deploy/api-staging/status \
                 <tr>
                   <th>Password</th>
                   <td class="secret-val">
-                    <code class="masked mono" data-secret-text="c0e3931fba420ec2da973c01b508513017c54dda992abdf6">••••••••••••</code>
+                    <code class="masked mono" data-secret-text="607106803f9daf616f1ddefa9aa35960e6456fd6e0c3b821">••••••••••••</code>
                     <button class="btn btn-sm" type="button" data-reveal>Reveal</button>
                   </td>
                 </tr>
@@ -6938,9 +6951,9 @@ Without that, a user can save a row and not see it on the next page load, and no
             <div class="eyebrow">3 &middot; Point your application at this</div>
             
             <div class="conn">
-              <code>mongodb://root:c0e3931fba420ec2da973c01b508513017c54dda992abdf6@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority</code>
+              <code>mongodb://root:607106803f9daf616f1ddefa9aa35960e6456fd6e0c3b821@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority</code>
               <button class="btn btn-sm" type="button" data-copy
-                      data-copy-text="mongodb://root:c0e3931fba420ec2da973c01b508513017c54dda992abdf6@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority">Copy</button>
+                      data-copy-text="mongodb://root:607106803f9daf616f1ddefa9aa35960e6456fd6e0c3b821@127.0.0.1:27017/?directConnection=true&amp;authSource=admin&amp;retryWrites=true&amp;w=majority&amp;readConcernLevel=majority">Copy</button>
             </div>
             
             <p class="hint">Your application talks to the helper from step 2, which is running beside it and listening on this port; the helper carries the traffic through the tunnel. That is why this is a local address and not the hostname.</p>
@@ -11122,7 +11135,7 @@ Without that, a user can save a row and not see it on the next page load, and no
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788837411.433829" data-localtime-epoch>1788837411</time>
+              <time datetime="1788839301.910739" data-localtime-epoch>1788839301</time>
             
           </td>
           <td>
@@ -11814,7 +11827,7 @@ Without that, a user can save a row and not see it on the next page load, and no
           <td class="mono">0.4s</td>
           <td class="mono">
             
-              <time datetime="1788837411.433829" data-localtime-epoch>1788837411</time>
+              <time datetime="1788839301.910739" data-localtime-epoch>1788839301</time>
             
           </td>
           <td>

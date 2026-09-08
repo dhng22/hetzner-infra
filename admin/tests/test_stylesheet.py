@@ -88,14 +88,15 @@ class StylesheetTest(unittest.TestCase):
         renders at whatever it inherited.
 
         Set ANYWHERE the panel sets one, not only in the stylesheet. The chart's
-        five properties are supplied per element — inline by the templates, and
-        by `app.js` on every repaint — because their whole job is to differ per
-        node and per task. Reading the templates and the script too keeps the
-        typo check and adds one: a property the stylesheet draws with and
-        nothing anywhere fills in still fails.
+        five properties are supplied per element — inline by the templates, by
+        `charts.py` where the drawing is server-rendered, and by `app.js` on
+        every repaint — because their whole job is to differ per element.
+        Reading those too keeps the typo check and adds one: a property the
+        stylesheet draws with and nothing anywhere fills in still fails.
         """
         # Not anchored to the line start: tokens are declared several to a line.
-        sources = [self.code, (ADMIN / "static" / "app.js").read_text()]
+        sources = [self.code, (ADMIN / "static" / "app.js").read_text(),
+                   (ADMIN / "charts.py").read_text()]
         sources += [p.read_text() for p in TEMPLATES.glob("*.html")]
         defined = set()
         for text in sources:
@@ -397,22 +398,31 @@ class TaskChipTest(unittest.TestCase):
 
 
 class DividedBarTest(unittest.TestCase):
-    def test_the_overrun_hatch_is_an_overlay_and_not_on_the_segments(self):
+    def test_a_bar_that_cannot_be_stacked_is_drawn_as_something_else(self):
         """
-        Each segment carries its colour as a `background:` SHORTHAND in an
-        inline style, which resets `background-image` at a specificity no
-        stylesheet rule can reach. A hatch declared on `.split-bar.is-over > i`
-        is therefore discarded in silence and the bar renders as an ordinary
-        one — which is exactly the reading it exists to contradict.
+        THE HATCH THAT EXPLAINED NOTHING.
+
+        The first attempt drew the same stacked bar with a hatch over it and a
+        paragraph saying the shares were not shares — a picture of a
+        decomposition beside a sentence denying it, which left the reader with
+        no way to answer the only question the card exists for: which cause,
+        and how big. The rows are cost-per-call now, on the service's own
+        latency scale, so the hatch has nothing left to mark.
         """
         css = CSS.read_text()
-        self.assertIn(".split-bar.is-over::after", css)
-        self.assertNotIn(".split-bar.is-over > i", css)
-        block = re.search(r"\.split-bar\.is-over::after \{(.*?)\}", css, re.S)
-        self.assertIsNotNone(block)
-        # It covers the segments, so it must not swallow their tooltips.
-        self.assertIn("pointer-events: none", block.group(1))
-        self.assertIn("repeating-linear-gradient", block.group(1))
+        self.assertNotIn("is-over", css)
+        self.assertIn(".split-cost", css)
+        # A head and a full-width bar under it — the same two-line shape a
+        # stacked row has, so the two forms of this card read as siblings. Side
+        # by side in one grid the bar was squeezed to a stub between a
+        # truncated hostname and the figures.
+        self.assertIn(".split-cost-head", css)
+        head = re.search(r"\.split-cost-head \{(.*?)\}", css, re.S)
+        self.assertIsNotNone(head)
+        self.assertIn("display: flex", head.group(1))
+        bar = re.search(r"\.split-cost-bar \{(.*?)\}", css, re.S)
+        self.assertIsNotNone(bar)
+        self.assertIn("display: block", bar.group(1))
 
 
 class ServiceRowTest(unittest.TestCase):

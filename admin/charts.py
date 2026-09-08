@@ -562,28 +562,66 @@ def _percentages(values):
     return out
 
 
-def _overrun_tip(group, unit):
-    """
-    Why this bar is not a breakdown, in the words the reader needs.
+def _how_often(calls):
+    """`0.145` as something a person pictures."""
+    if calls >= 1:
+        return f"{calls:.1f} calls a request"
+    return f"1 request in {round(1 / calls)}"
 
-    Two causes, and the call rate tells them apart: calls made CONCURRENTLY
-    overlap in wall-clock, so their time is counted twice inside one request;
-    calls made OUTSIDE a served request — a cache refresh, a prefetch, a
-    scheduled job — are counted against a request that never waited for them.
-    Both are named, because this process cannot tell which without reading the
-    application.
+
+def _cost_rows(group, unit):
     """
-    return (f'{fmt(group.get("measured") or 0.0, unit)} of timed calls is '
-            f'attributed to a {fmt(group.get("mean") or 0.0, unit)} average '
-            f'request, so these are NOT slices of it.\n\n'
-            f'Time is counted per request served. That is a share of a request '
-            f'only when the call happens inside one — calls made in parallel '
-            f'are counted twice over, and calls made outside a request at all '
-            f'(a cache refresh, a prefetch, a scheduled job) are counted '
-            f'against requests that never waited for them.\n\n'
-            f'The bar below is therefore shares of the measured call time, not '
-            f'of this service’s {fmt(group.get("total") or 0.0, unit)} '
-            f'latency. Hover a segment for how often it is actually called.')
+    WHAT EACH CALL COSTS AND HOW OFTEN — the shape for a service whose calls do
+    not sit inside its requests.
+
+    A stacked bar answers "where does this request's time go", which is a real
+    question with a real answer whenever every timed call happens inside a
+    timed request. When they do not — a cache refresh, a prefetch, calls made
+    in parallel — there is nothing to stack: the parts are not parts. Drawing
+    them as shares anyway is how one dependency ended up labelled "100% of
+    api_app's 373ms" on a service where 86% of requests never called it.
+
+    The question does not go away, so it is answered differently: how much a
+    call to this place costs, and how often a request makes one. Both bars are
+    on the service's own latency scale, so "360ms a call against a 365ms p95"
+    reads as what it is — when this call happens, it IS the request — and "1
+    request in 7" says how much of the traffic that is. That is the same
+    "which cause, and how big" the stacked bar gives, in the only terms
+    available here.
+    """
+    rows = [p for p in group["parts"] if p.get("value")]
+    scale = max([group.get("total") or 0.0]
+                + [(p["value"] / p["calls"]) if p.get("calls") else p["value"]
+                   for p in rows]) or 1.0
+    out = ['<div class="split-costs">']
+    for index, part in enumerate(rows):
+        calls = part.get("calls")
+        cost = part["value"] / calls if calls else part["value"]
+        often = _how_often(calls) if calls else "per request served"
+        tip = (f'{part["name"]}: {fmt(cost, unit)} a call, on {often}.\n'
+               f'{fmt(part["value"], unit)} of call time per request served, '
+               f'against {group["name"]}’s {fmt(group.get("total") or 0.0, unit)} '
+               f'latency — the mark on the bar.')
+        for name, value in part.get("detail") or ():
+            share = value / part["value"] if part["value"] else 0.0
+            tip += f'\n• {name} — {fmt(cost * share, unit)} a call'
+        # Same two-line shape as a stacked row — a head, then a full-width bar
+        # — so the two forms of this card read as siblings rather than as two
+        # different charts. Side by side in one grid the bar was squeezed to a
+        # stub between a truncated hostname and the figures.
+        out.append(
+            '<div class="split-cost" data-tip="' + _esc(tip) + '">'
+            '<div class="split-cost-head">'
+            f'<span class="split-cost-name">{_esc(part["name"])}</span>'
+            f'<span class="split-cost-fig">{fmt(cost, unit)} a call · '
+            f'{_esc(often)}</span></div>'
+            f'<span class="split-cost-bar" style="--at:'
+            f'{min(100.0, (group.get("total") or 0.0) / scale * 100):.1f}">'
+            f'<i style="width:{min(100.0, cost / scale * 100):.0f}%;'
+            f'background:var({series_var(index)})"></i></span>'
+            '</div>')
+    out.append('</div>')
+    return "".join(out)
 
 
 def divided(groups, unit="", empty="nothing is instrumented yet"):
@@ -632,52 +670,50 @@ def divided(groups, unit="", empty="nothing is instrumented yet"):
     out = ['<div class="split-bars">']
     for group in groups:
         parts, total = group["parts"], group["total"]
-        over = bool(group.get("over"))
-        # What a share is a share OF. Normally the service's own latency, which
-        # is what makes the segments comparable with the Duration chart. When
-        # the parts overrun the request, the only thing they are shares of is
-        # each other, and the bar says that rather than borrowing the latency's
-        # authority for an answer that cannot be one.
-        basis = group.get("measured") if over else total
-        shares = _percentages([part["value"] for part in parts])
-        head = (f'<span class="split-total" '
-                f'data-tip="{_esc(_overrun_tip(group, unit))}">'
-                f'{fmt(group.get("measured") or 0.0, unit)} measured · '
-                f'{fmt(group.get("mean") or 0.0, unit)} request</span>'
-                if over else
-                f'<span class="split-total">{fmt(total, unit)}</span>')
         out.append('<div class="split-row">'
                    f'<div class="split-head">'
                    f'<span class="split-name" title="{_esc(group["name"])}">'
                    f'{_esc(group["name"])}</span>'
-                   f'{head}'
-                   f'</div><div class="split-bar{" is-over" if over else ""}">')
+                   f'<span class="split-total">{fmt(total, unit)}</span>'
+                   '</div>')
+        # TWO SHAPES, ONE QUESTION. Stacked shares whenever the timed calls fit
+        # inside the request — that is the picture worth having, and it is the
+        # common case. When they do not fit there is nothing to stack, so the
+        # same question is answered as cost per call and how often. See
+        # `_cost_rows`; the alternative is a percentage of a whole these parts
+        # are not parts of, which is what said "100% of 373ms" about a host 86%
+        # of requests never call.
+        if group.get("over"):
+            out.append(_cost_rows(group, unit))
+            out.append(
+                '<p class="split-note">'
+                f'{fmt(group.get("measured") or 0.0, unit)} of call time per '
+                f'request served, against a '
+                f'{fmt(group.get("mean") or 0.0, unit)} average request — so '
+                'these run outside the request, or beside each other</p>'
+                '</div>')
+            # No legend: every row is already labelled with the name a key
+            # would carry, and a key repeating what is written beside the bar
+            # is how the stacked version ended up wider than its own chart.
+            continue
+        basis = total
+        shares = _percentages([part["value"] for part in parts])
+        out.append('<div class="split-bar">')
         for index, (part, share) in enumerate(zip(parts, shares)):
             note = f' ({part["note"]})' if part.get("note") else ""
             worth = basis * share / 100.0
-            tip = (f'{part["name"]}{note}: {share}% of '
-                   f'{group["name"]}’s {fmt(basis, unit)} '
-                   f'{"of measured call time" if over else "latency"} — '
-                   f'{fmt(worth, unit)}')
+            tip = (f'{part["name"]}{note}: {share}% of {group["name"]}’s '
+                   f'{fmt(basis, unit)} — {fmt(worth, unit)}')
             # HOW OFTEN, under how long. The segment is the product of the two
             # and the product hides which one is large: 44ms per request is
             # "every request waits 44ms here" or "one request in seven waits
             # 360ms here", and only the second is what a working cache looks
-            # like.
-            #
-            # Below one, said as "1 request in 7" as well as as a rate. "0.14
-            # calls per request" is arithmetic; "1 request in 7" is the fact,
-            # and on a cached path it is the whole answer.
+            # like. Same sentence the overrun rows print, so a reader who has
+            # seen one card understands the other.
             calls = part.get("calls")
             if calls:
-                how_often = f"{calls:.2f} calls per request"
-                # Only where it says something: at 0.87 calls per request the
-                # rounding gives "1 request in 1", which is both wrong and
-                # noisier than the rate it was meant to explain.
-                if calls <= 0.5:
-                    how_often += f" — about 1 request in {round(1 / calls)}"
-                tip += (f'\n{how_often}, '
-                        f'{fmt((part.get("value") or 0.0) / calls, unit)} each')
+                tip += (f'\n{fmt(part["value"] / calls, unit)} a call, '
+                        f'on {_how_often(calls)}')
             # The calls behind this segment, ON HOVER AND NOWHERE ELSE. The bar
             # and the key stay at the level of the host — that is what the
             # alert names and what `autoscale.mute_causes` accepts — and "which

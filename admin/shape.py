@@ -999,8 +999,7 @@ def observability(vm_range, vm_query, charts):
     overrun = sorted(g["name"] for g in composition if g.get("over"))
     if overrun:
         latency_summary = ((latency_summary + " · ") if latency_summary else "") + (
-            f"timed calls exceed the request they are counted against on "
-            + ", ".join(overrun))
+            ", ".join(overrun) + " calls out of band, shown per call")
 
     traffic_now = traffic[-1][1] if traffic else None
     traffic_peak = max((v for _, v in traffic), default=0.0)
@@ -1052,11 +1051,13 @@ def observability(vm_range, vm_query, charts):
         # segments say where 1200ms goes, the summary underneath says which
         # services are over the line.
         _card("Latency",
-              "the same latency RED draws, cut into what the request waits on "
-              "— `unmeasured` is whatever no timer accounted for, including "
-              "the service's own work. A hatched bar is one whose timed calls "
-              "add up to more than the request they were counted against, so "
-              "they are not slices of it; hover the figure beside it",
+              "where a slow request's time goes. A service whose timed calls "
+              "all happen inside its requests is one bar cut into them, and "
+              "`unmeasured` is whatever no timer accounted for, including the "
+              "service's own work. One whose calls do not — a cache refresh, a "
+              "prefetch, calls made side by side — cannot be cut up at all, so "
+              "it is drawn as what a call costs and how often a request makes "
+              "one",
               charts.divided(composition, "ms",
                              empty="no service is publishing a timer yet"),
               _window(LATEST_SPAN, Q_LATENCY, Q_REQUEST_MS),

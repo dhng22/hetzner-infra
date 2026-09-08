@@ -507,11 +507,7 @@ class ColumnTest(unittest.TestCase):
         self.assertIn("1.2kms", body)                # the total beside the bar
         # The share is what was measured; the millisecond figure is that share
         # of the bar, so the two can never disagree.
-        self.assertIn("tikdrama: 67% of api_app’s 1.2kms latency — 804ms", body)
-        # "latency" is not decoration: the same sentence with "of measured call
-        # time" in its place is what an overrun bar prints, and the two bars
-        # look identical without it.
-        self.assertNotIn("is-over", body)
+        self.assertIn("tikdrama: 67% of api_app’s 1.2kms — 804ms", body)
 
     def test_calls_that_overrun_the_request_stop_claiming_to_be_shares_of_it(self):
         """
@@ -536,34 +532,45 @@ class ColumnTest(unittest.TestCase):
             {("api_app", "media.tikdrama.asia"): 0.145})
         self.assertTrue(groups[0]["over"])
         body = charts.divided(groups, "ms")
-        # Marked before anything is hovered.
-        self.assertIn("is-over", body)
-        # The head prints both numbers rather than the latency alone.
-        self.assertIn("43.8ms measured · 38.2ms request", body)
-        tip = re.search(r'data-tip="([^"]*)"', body).group(1)
-        self.assertIn("NOT slices of it", tip)
-        # And the segment is a share of the measured time, not of the latency.
-        segment = re.findall(r'data-tip="([^"]*)"', body)[1]
-        self.assertIn("of measured call time", segment)
-        self.assertNotIn("373ms", segment)
-        # How often, which is what shows the cache working.
-        self.assertIn("0.14 calls per request", segment)
-        # The fact, not just the arithmetic: this is the sentence that
-        # answers "is my cache working".
-        self.assertIn("about 1 request in 7", segment)
-        self.assertIn("302ms each", segment)
+        # NOT a stack. There is nothing to stack: the parts are not parts.
+        self.assertNotIn('class="split-bar"', body)
+        self.assertIn("split-costs", body)
+        # No percentage of anything anywhere on the row.
+        self.assertNotIn("%\"", body.replace('width:81%"', ""))
+        # The two figures that answer "which cause, and how big": what a call
+        # costs, and how much of the traffic makes one. 43.8 / 0.145 = 302.
+        self.assertIn("302ms a call · 1 request in 7", body)
+        # The bar is on the service's OWN latency scale, so "302 against 373"
+        # reads as "when this call happens it is most of the request".
+        self.assertIn("width:81%", body)
+        # And the service's latency is still the number in the head, the same
+        # one the Duration chart draws.
+        self.assertIn('class="split-total">373ms', body)
+        # One line saying why it is drawn this way, not a paragraph.
+        note = re.search(r'<p class="split-note">(.*?)</p>', body).group(1)
+        self.assertIn("43.8ms of call time per request served", note)
+        self.assertIn("38.2ms average request", note)
+        self.assertLess(len(note), 220)
 
-    def test_a_breakdown_that_fits_is_left_alone(self):
-        # The overrun treatment must not fire on an ordinary bar, or every card
-        # grows a warning and the warning stops meaning anything.
+    def test_a_breakdown_that_fits_is_still_a_stack(self):
+        # The overrun shape must not fire on an ordinary bar: the stack is the
+        # better picture whenever the arithmetic supports it, and it is the
+        # common case.
         groups = shape._composition(
             {("api_app", "media.example"): series(120.0),
              ("api_app", "unmeasured"): series(80.0)},
             {"api_app": series(600.0)},
             None,
-            {"api_app": 200.0})
+            {"api_app": 200.0},
+            {("api_app", "media.example"): 2.0})
         self.assertFalse(groups[0]["over"])
-        self.assertNotIn("is-over", charts.divided(groups, "ms"))
+        body = charts.divided(groups, "ms")
+        self.assertIn('class="split-bar"', body)
+        self.assertNotIn("split-costs", body)
+        self.assertNotIn("split-note", body)
+        # Same two figures on the hover, so one card teaches the other.
+        self.assertIn("60.0ms a call, on 2.0 calls a request",
+                      re.search(r'data-tip="([^"]*)"', body).group(1))
 
     def test_the_bar_is_the_latency_red_draws_not_the_sum_of_the_parts(self):
         """
