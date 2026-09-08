@@ -1051,7 +1051,7 @@ def observability(vm_range, vm_query, charts):
         # segments say where 1200ms goes, the summary underneath says which
         # services are over the line.
         _card("Latency",
-              "",
+              "where a slow request's time goes",
               charts.divided(composition, "ms",
                              empty="no service is publishing a timer yet"),
               _window(LATEST_SPAN, Q_LATENCY, Q_REQUEST_MS),
