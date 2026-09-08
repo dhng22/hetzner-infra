@@ -928,6 +928,11 @@ def topology():
             continue
         full = svc_names.get(t.get("ServiceID"), "unknown")
         band, key = _band_of(full, categories)
+        # The COMPONENT this task belongs to, or None for the infrastructure
+        # stacks. Read from the same catalog the band comes from, so a chip that
+        # is coloured as a component is a chip that links to one — there is no
+        # second list to keep in step.
+        stack = full.split("_", 1)[0] if "_" in full else ""
         # What this task RESERVES, which is the number placement is decided on.
         # Utilisation says how busy a box is; reservation says whether another
         # replica can go on it at all, and the two routinely disagree by an
@@ -946,6 +951,7 @@ def topology():
             "tag": shape.image_tag(image),
             "band": band,
             "key": key,
+            "component": stack if stack in categories else None,
             "state": state,
             "tone": _TASK_TONES.get(state, "mute"),
             "cpu_res": int(reservations.get("NanoCPUs", 0) or 0),

@@ -319,21 +319,62 @@ class TaskChipTest(unittest.TestCase):
 
     def test_the_tasks_hang_off_the_card_they_run_on(self):
         """
-        The left-hand spine was the last piece of the single column: it ran down
-        the outside of a block that no longer has one edge to hang off, and it
-        left the chips pinned left under a card that is centred. Now every rank
-        of the tree is joined the same way — a drop from the middle, a bus, a
-        tick into each child — which is one idea rather than two.
+        A FAN, AND NOTHING PSEUDO-ELEMENTS CAN DRAW.
+
+        Every other rank of this tree is one parent over a row of children, so a
+        bus with a tick per child draws it in CSS. The tasks wrap onto several
+        rows, and a bus per row produced a ladder of stubs joining each row to
+        the one above rather than any of them to the card. Straight lines from
+        the middle of the card to the middle of each chip need measured
+        positions, so the markup carries an empty `<svg>` and `app.js` fills it.
         """
         css = CSS.read_text()
         block = re.search(r"\.slots \{(.*?)\}", css, re.S).group(1)
         self.assertIn("justify-content: center", block)
         self.assertNotIn("padding-left", block)
-        self.assertIn(".slots::after", css)                  # the drop
-        self.assertIn(".slots > .slot::before, .slots > .slot::after", css)
-        # The outer halves are trimmed, or the bus runs off into space.
-        self.assertIn(".slots > .slot:first-child::before", css)
-        self.assertIn(".slots > .slot:last-child::after", css)
+        # The comb is gone; nothing draws a connector out of a chip any more.
+        self.assertNotIn(".slots > .slot::before", css)
+        self.assertNotIn(".slots::after", css)
+        # Under the chips, and taking no clicks — a chip is a link now.
+        links = re.search(r"\.slot-links \{(.*?)\}", css, re.S).group(1)
+        self.assertIn("z-index: 0", links)
+        self.assertIn("pointer-events: none", links)
+        self.assertIn(".tree-branch > .tnode, .tree-branch > .slots "
+                      "{ position: relative; z-index: 1; }", css)
+        for path in self.chip_templates():
+            with self.subTest(template=path.name):
+                self.assertIn("data-links", path.read_text())
+        js = self.JS.read_text()
+        self.assertIn("function drawLinks", js)
+        # Re-measured whenever the chips can have moved, or the lines point at
+        # where they used to be.
+        for trigger in ('window.addEventListener("resize", redrawLinks)',
+                        "document.fonts.ready.then(redrawLinks)"):
+            self.assertIn(trigger, js)
+        paint = re.search(r"function paintTopology\(data\) \{(.*?)\n  \}",
+                          js, re.S)
+        self.assertIsNotNone(paint)
+        self.assertIn("redrawLinks()", paint.group(1),
+                      "the chips are rebuilt and the lines are not redrawn")
+
+    def test_a_task_chip_is_a_link_and_builds_no_url_of_its_own(self):
+        """
+        A task was the one thing on the map you could point at and not open.
+        A component's chip goes to its page; the infrastructure stacks have no
+        page, so theirs go to the list that describes them.
+
+        `app.js` composes neither URL. Both are rendered by the same helpers the
+        server-side chips use and handed over on the map's own element, which is
+        the rule the templates already follow.
+        """
+        body = (TEMPLATES / "_overview.html").read_text()
+        self.assertIn("component_href(t.component) if t.component "
+                      "else components_href()", body)
+        self.assertIn('data-href-component="{{ component_href(\'__NAME__\') }}"', body)
+        self.assertIn('data-href-components="{{ components_href() }}"', body)
+        js = self.JS.read_text()
+        self.assertIn('document.createElement("a")', js)
+        self.assertNotIn("/components/", js, "app.js is building a URL by hand")
 
     def test_a_node_card_says_nothing_the_bars_already_say(self):
         """

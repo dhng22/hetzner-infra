@@ -293,6 +293,11 @@ _IMAGE_OF = {
 }
 
 
+#: The stacks the preview seeds a component spec for. `preview_build` creates
+#: exactly these, so a chip pointing at one resolves to a page in the bundle.
+_COMPONENT_STACKS = {"api", "api-staging", "cache", "documents"}
+
+
 def _tasks(spec):
     """spec: [(short_name, replica_count), ...] -> flat per-task list."""
     rank = {b: i for i, (b, _) in enumerate(_BANDS)}
@@ -326,8 +331,14 @@ def _tasks(spec):
             image = _IMAGE_OF.get(name, f"{name}:v1.0.0")
             if name == "api" and i == 0:
                 image = "ghcr.io/acme/aichat-api:sha-c40e8b7"
+            # Same rule the live map uses: the stack is a component only if a
+            # spec exists for it, so `cloudflared` and `cadvisor` carry None and
+            # their chips link to the list rather than to a page that is not
+            # there.
+            stack = full.split("_", 1)[0] if "_" in full else ""
             out.append({"id": f"{name[:6]}{i}kd93jf01"[:12], "name": name,
                         "service": full, "band": band, "key": key,
+                        "component": stack if stack in _COMPONENT_STACKS else None,
                         "image": image, "tag": shape.image_tag(image),
                         "state": state,
                         "tone": {"running": "ok", "starting": "warn",

@@ -42,7 +42,12 @@
       <!-- A wide fleet scrolls inside this box rather than making the page scroll
            sideways. -->
       <div class="tree-scroll">
-        <div class="tree" data-topo-rows>
+        {# The two URLs the poller needs when it rebuilds a chip, built by the
+           same helpers the server-rendered chips use — `app.js` constructs no
+           URLs of its own, which is the rule the templates already follow. #}
+        <div class="tree" data-topo-rows
+             data-href-component="{{ component_href('__NAME__') }}"
+             data-href-components="{{ components_href() }}">
           <div class="tree-top">
             <div class="tnode tnode-root">
               <span class="tnode-title">{{ cluster_name }}</span>
@@ -85,21 +90,33 @@
 
                 <!-- data-sig matches the signature the poller computes, so the first
                      tick on an unchanged cluster rebuilds nothing at all. -->
+                {# The fan, drawn behind the chips. Empty here on purpose: it
+                   needs measured positions, which only the browser has. Losing
+                   it with JS off costs the connectors and nothing else — the
+                   card and its tasks still read as a group by proximity. #}
+                <svg class="slot-links" data-links aria-hidden="true"></svg>
+
                 <div class="slots" data-slots
                      data-sig="{% for t in n.tasks %}{{ t.name }}|{{ t.key }}|{{ t.tone }}|{{ t.cpu_share }}|{{ t.mem_share }}|{{ t.cpu_used }}|{{ t.mem_used }}|{{ t.disk_used }};{% endfor %}">
                   {% for t in n.tasks %}
-                    {# The chip's own colour already says WHAT this is, so the dot
+                    {# EVERY CHIP IS A LINK. A task is the only thing on this page
+                       you can point at and not open, and "what is that and why
+                       is it there" is the question the map creates. A component
+                       goes to its own page; the infrastructure stacks have none,
+                       so they go to the list that describes them.
+
+                       The chip's own colour already says WHAT this is, so the dot
                        is spent on what it is DOING. After the name stands a chart
                        of three bars — cpu, memory, disk — where the fill is what
                        this task is USING and the mark across it is what it
                        RESERVED, both as shares of this machine. One scale per bar
                        is what makes "the fill is past the mark" mean something on
                        sight. #}
-                    <span class="slot slot-{{ t.key }}" tabindex="0"
+                    <a class="slot slot-{{ t.key }}" href="{{ component_href(t.component) if t.component else components_href() }}"
                           style="--cpu:{{ t.cpu_share }};--mem:{{ t.mem_share }};--cpu-use:{{ t.cpu_used }};--mem-use:{{ t.mem_used }};--disk-use:{{ t.disk_used or 0 }}"
                           data-tip="{{ t.service }} — task {{ t.id }} on {{ n.hostname }}&#10;state: {{ t.state }}&#10;&#10;• cpu — {{ t.cpu_used }}% used, {{ t.cpu_share }}% reserved&#10;• memory — {{ t.mem_used }}% used, {{ t.mem_share }}% reserved&#10;• disk — {% if t.disk_used is none %}not measured: this cluster&#39;s cadvisor reports filesystem usage for the machine only, not per container{% else %}{{ t.disk_used }}% used{% endif %}&#10;&#10;every figure is a share of {{ n.hostname }}">
                       <i class="dot dot-{{ t.tone }}" aria-hidden="true"></i>{{ t.name }}<i class="slot-chart" aria-hidden="true"><b class="band band-cpu"></b><b class="band band-mem"></b><b class="band band-disk"></b></i>
-                    </span>
+                    </a>
                   {% else %}
                     <span class="slot is-empty">no running tasks</span>
                   {% endfor %}

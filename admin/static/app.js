@@ -589,10 +589,22 @@
     return s;
   }
 
+  //: Where a chip points. Filled from the map's own data attributes, which the
+  //: server writes with the same URL helpers the template uses — this file
+  //: builds no URLs of its own, the same rule the templates follow.
+  var HREF = {component: "", list: ""};
+
+  function slotHref(t) {
+    if (t.component && HREF.component) {
+      return HREF.component.replace("__NAME__", encodeURIComponent(t.component));
+    }
+    return HREF.list || "#";
+  }
+
   function buildSlot(t) {
-    var el = document.createElement("span");
+    var el = document.createElement("a");
     el.className = "slot slot-" + t.key;
-    el.tabIndex = 0;
+    el.href = slotHref(t);        // an anchor is focusable; no tabIndex needed
     // Five numbers, all shares of THIS node, all set as custom properties so
     // the drawing stays entirely in the stylesheet — same contract the server
     // renders `_map.html` under, so the first paint and every repaint after it
@@ -645,9 +657,59 @@
     return el;
   }
 
+  // --- the fan from a card to its tasks -------------------------------------
+  // Straight lines from the middle of a host card to the middle of every chip
+  // hanging off it. It has to be measured rather than declared: the chips wrap,
+  // so where they land is only known once the browser has laid them out. Drawn
+  // under the chips — see the note in the stylesheet — so a line to a chip four
+  // rows down passes beneath the rows it crosses.
+  var SVG_NS = "http://www.w3.org/2000/svg";
+
+  function drawLinks(branch) {
+    var svg = branch.querySelector("[data-links]");
+    var card = branch.querySelector(".tnode");
+    var slots = branch.querySelector(".slots");
+    if (!svg || !card || !slots) { return; }
+    var box = branch.getBoundingClientRect();
+    var head = card.getBoundingClientRect();
+    var x0 = head.left + head.width / 2 - box.left;
+    var y0 = head.bottom - box.top;
+    var next = document.createDocumentFragment();
+    var chips = slots.children;
+    for (var i = 0; i < chips.length; i++) {
+      var r = chips[i].getBoundingClientRect();
+      if (!r.width) { continue; }                  // hidden, nothing to point at
+      var line = document.createElementNS(SVG_NS, "line");
+      line.setAttribute("x1", x0);
+      line.setAttribute("y1", y0);
+      line.setAttribute("x2", r.left + r.width / 2 - box.left);
+      line.setAttribute("y2", r.top + r.height / 2 - box.top);
+      next.appendChild(line);
+    }
+    svg.replaceChildren(next);
+  }
+
+  function drawAllLinks() {
+    var branches = document.querySelectorAll(".tree-branch");
+    for (var i = 0; i < branches.length; i++) { drawLinks(branches[i]); }
+  }
+
+  // After layout, not during it: a chip measured mid-reflow reports the size it
+  // is about to stop having.
+  function redrawLinks() { requestAnimationFrame(drawAllLinks); }
+
+  redrawLinks();
+  window.addEventListener("resize", redrawLinks);
+  // Web fonts land after first paint and move every chip a few pixels with them.
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(redrawLinks);
+  }
+
   function paintTopology(data) {
     var host = document.querySelector("[data-topo-rows]");
     if (!host || !data || !data.nodes) { return; }
+    HREF.component = host.getAttribute("data-href-component") || "";
+    HREF.list = host.getAttribute("data-href-components") || "";
 
     var rows = host.querySelectorAll(".tree-branch");
     if (rows.length !== data.nodes.length) { location.reload(); return; }
@@ -716,6 +778,8 @@
       }
       slots.replaceChildren(frag);
     }
+    // The chips moved, so the lines pointing at them have to be re-measured.
+    redrawLinks();
   }
 
   // The indicator belongs to the panel it reports on. It used to be looked up

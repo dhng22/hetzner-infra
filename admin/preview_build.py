@@ -264,6 +264,7 @@ def main():
             system_access=panel.system_access,
             section_href=lambda item: f"#view-{item['key']}",
             component_href=lambda name, tab=None: f"#view-component-{name}",
+            components_href=lambda: "#view-components",
             new_href=lambda type_name: f"#view-new-{type_name}",
             # Every mutating URL is a dead anchor in the preview. All of them,
             # not most: two were missed last time and the generated file shipped

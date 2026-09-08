@@ -234,6 +234,10 @@ def _globals():
         "system_access": system_access,
         "section_href": _section_href,
         "component_href": _component_href,
+        # The list, for a chip on the map whose stack is not a component — the
+        # infrastructure stacks have no page of their own, and the Components
+        # tab is where they are described.
+        "components_href": lambda: url_for("components_index"),
         "action_href": lambda name: url_for("component_action", name=name),
         "env_href": lambda name: url_for("save_component_env", name=name),
         "spec_href": lambda name: url_for("save_component_spec", name=name),
